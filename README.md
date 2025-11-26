@@ -1,7 +1,7 @@
 # Ts-Music
 *Aplikasi pemutar album musik native yang dibangun dengan framework tauri + Vue*
 
-    <h2><b>Tech Stack:</b></h2>
+<h2><b>Tech Stack:</b></h2>
 
 ![Tauri](https://img.shields.io/badge/%7BTAURI%7D-%7BColor%7D?style=for-the-badge&logo=Tauri&logoColor=white)
 ![Vue](https://img.shields.io/badge/Vue.js-35495E?style=for-the-badge&logo=vuedotjs&logoColor=4FC08D)
