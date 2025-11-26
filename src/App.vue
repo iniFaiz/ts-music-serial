@@ -1,160 +1,47 @@
 <script setup>
-import { ref } from "vue";
-import { invoke } from "@tauri-apps/api/core";
-
-const greetMsg = ref("");
-const name = ref("");
-
-async function greet() {
-  // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-  greetMsg.value = await invoke("greet", { name: name.value });
-}
+import { store } from './store';
 </script>
 
 <template>
-  <main class="container">
-    <h1>Welcome to Tauri + Vue</h1>
+  <div class="flex flex-col h-screen bg-gray-900 text-gray-100 font-sans overflow-hidden">
+    <!-- Header -->
+    <header class="bg-gray-800 px-4 py-3 flex justify-between items-center shrink-0 shadow-md z-20">
+      <div class="flex items-center gap-3">
+        <span class="font-bold text-blue-400 tracking-wide">Ts-Music</span>
+      </div>
+      <div class="flex items-center gap-4">
+        <span class="text-xs text-gray-500">{{ store.statusMessage }}</span>
+        <button 
+          @click="store.selectAndScan()" 
+          :disabled="store.loading"
+          class="bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:cursor-wait text-white text-xs px-3 py-1.5 rounded font-medium transition-colors"
+        >
+          {{ store.loading ? 'Scanning...' : 'Change Folder' }}
+        </button>
+      </div>
+    </header>
 
-    <div class="row">
-      <a href="https://vite.dev" target="_blank">
-        <img src="/vite.svg" class="logo vite" alt="Vite logo" />
-      </a>
-      <a href="https://tauri.app" target="_blank">
-        <img src="/tauri.svg" class="logo tauri" alt="Tauri logo" />
-      </a>
-      <a href="https://vuejs.org/" target="_blank">
-        <img src="./assets/vue.svg" class="logo vue" alt="Vue logo" />
-      </a>
+    <!-- Layout -->
+    <div class="flex flex-1 overflow-hidden">
+      <!-- Sidebar -->
+      <nav class="w-48 bg-gray-900 border-r border-gray-800 flex flex-col shrink-0">
+        <div class="p-4 space-y-1">
+          <router-link to="/songs" active-class="bg-gray-800 text-blue-400" class="block px-3 py-2 rounded text-sm font-medium text-gray-400 hover:text-gray-200 hover:bg-gray-800 transition-colors">
+            Songs
+          </router-link>
+          <router-link to="/albums" active-class="bg-gray-800 text-blue-400" class="block px-3 py-2 rounded text-sm font-medium text-gray-400 hover:text-gray-200 hover:bg-gray-800 transition-colors">
+            Albums
+          </router-link>
+          <router-link to="/artists" active-class="bg-gray-800 text-blue-400" class="block px-3 py-2 rounded text-sm font-medium text-gray-400 hover:text-gray-200 hover:bg-gray-800 transition-colors">
+            Artists
+          </router-link>
+        </div>
+      </nav>
+
+      <!-- Content -->
+      <main class="flex-1 relative bg-gray-900">
+        <router-view></router-view>
+      </main>
     </div>
-    <p>Click on the Tauri, Vite, and Vue logos to learn more.</p>
-
-    <form class="row" @submit.prevent="greet">
-      <input id="greet-input" v-model="name" placeholder="Enter a name..." />
-      <button type="submit">Greet</button>
-    </form>
-    <p>{{ greetMsg }}</p>
-  </main>
+  </div>
 </template>
-
-<style scoped>
-.logo.vite:hover {
-  filter: drop-shadow(0 0 2em #747bff);
-}
-
-.logo.vue:hover {
-  filter: drop-shadow(0 0 2em #249b73);
-}
-
-</style>
-<style>
-:root {
-  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
-  font-size: 16px;
-  line-height: 24px;
-  font-weight: 400;
-
-  color: #0f0f0f;
-  background-color: #f6f6f6;
-
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  -webkit-text-size-adjust: 100%;
-}
-
-.container {
-  margin: 0;
-  padding-top: 10vh;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  text-align: center;
-}
-
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: 0.75s;
-}
-
-.logo.tauri:hover {
-  filter: drop-shadow(0 0 2em #24c8db);
-}
-
-.row {
-  display: flex;
-  justify-content: center;
-}
-
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
-}
-
-a:hover {
-  color: #535bf2;
-}
-
-h1 {
-  text-align: center;
-}
-
-input,
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  color: #0f0f0f;
-  background-color: #ffffff;
-  transition: border-color 0.25s;
-  box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
-}
-
-button {
-  cursor: pointer;
-}
-
-button:hover {
-  border-color: #396cd8;
-}
-button:active {
-  border-color: #396cd8;
-  background-color: #e8e8e8;
-}
-
-input,
-button {
-  outline: none;
-}
-
-#greet-input {
-  margin-right: 5px;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    color: #f6f6f6;
-    background-color: #2f2f2f;
-  }
-
-  a:hover {
-    color: #24c8db;
-  }
-
-  input,
-  button {
-    color: #ffffff;
-    background-color: #0f0f0f98;
-  }
-  button:active {
-    background-color: #0f0f0f69;
-  }
-}
-
-</style>
