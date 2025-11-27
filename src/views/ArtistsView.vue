@@ -2,6 +2,7 @@
 import { computed } from 'vue';
 import { store } from '../store';
 import { useRouter } from 'vue-router';
+import CoverImage from '../components/CoverImage.vue';
 
 const router = useRouter();
 
@@ -9,7 +10,12 @@ const artists = computed(() => {
   const map = new Map();
   store.songs.forEach(song => {
     if (!map.has(song.artist)) {
-      map.set(song.artist, { name: song.artist, count: 0, albums: new Set() });
+      map.set(song.artist, { 
+        name: song.artist, 
+        count: 0, 
+        albums: new Set(),
+        coverPath: song.path
+      });
     }
     const entry = map.get(song.artist);
     entry.count++;
@@ -24,20 +30,25 @@ function openArtist(artistName) {
 </script>
 
 <template>
-  <div class="h-full overflow-auto p-6">
-    <h2 class="text-xl font-bold mb-4 text-gray-300">Artists ({{ artists.length }})</h2>
-    <div class="flex flex-col gap-2">
+  <div class="h-full overflow-auto px-8 pt-8 pb-12">
+    <h1 class="text-3xl font-bold tracking-tight text-white mb-6">Artists</h1>
+    
+    <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-x-6 gap-y-10">
       <div 
         v-for="artist in artists" 
         :key="artist.name"
         @click="openArtist(artist.name)"
-        class="bg-gray-800 hover:bg-gray-750 p-3 rounded flex justify-between items-center cursor-pointer border-l-4 border-transparent hover:border-blue-500 transition-colors"
+        class="cursor-pointer group text-center"
       >
-        <div class="font-medium text-gray-200">{{ artist.name }}</div>
-        <div class="text-xs text-gray-500 flex gap-3">
-          <span>{{ artist.albums.size }} Albums</span>
-          <span>{{ artist.count }} Songs</span>
+        <!-- Artist Image -->
+        <div class="w-full aspect-square mb-4 mx-auto max-w-[200px] relative">
+           <CoverImage 
+            :path="artist.coverPath" 
+            className="w-full h-full rounded-full shadow-lg object-cover bg-[#282828] group-hover:scale-[1.02] transition-transform duration-200"
+          />
         </div>
+        
+        <h3 class="text-[15px] font-medium text-white truncate">{{ artist.name }}</h3>
       </div>
     </div>
   </div>

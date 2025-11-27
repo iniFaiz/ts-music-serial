@@ -2,21 +2,34 @@
 @tailwind components;
 @tailwind utilities;
 
-body {
-  @apply bg-gray-900 text-white;
-  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
+:root {
+  --app-bg: #1e1e1e;
+  --sidebar-bg: #181818;
+  --accent-color: #fa2d48;
+  --text-primary: #ffffff;
+  --text-secondary: #a1a1a1;
+  --border-color: #333333;
 }
 
-/* Custom Scrollbar for webkit */
+body {
+  @apply bg-[var(--app-bg)] text-[var(--text-primary)];
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+  -webkit-font-smoothing: antialiased;
+}
+
 ::-webkit-scrollbar {
-  width: 8px;
+  width: 10px;
+  background: transparent;
 }
+
 ::-webkit-scrollbar-track {
-  @apply bg-gray-800;
+  background: transparent;
 }
+
 ::-webkit-scrollbar-thumb {
-  @apply bg-gray-600 rounded;
+  @apply bg-gray-600/50 rounded-full border-4 border-solid border-transparent bg-clip-content;
 }
+
 ::-webkit-scrollbar-thumb:hover {
-  @apply bg-gray-500;
+  @apply bg-gray-500/80;
 }

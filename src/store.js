@@ -3,12 +3,14 @@ import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 
 export const store = reactive({
+  // State
   songs: [],
   loading: false,
   statusMessage: "Ready to scan",
   selectedPath: "",
+  searchQuery: "",
 
-  // Open folder and scan
+  // Actions
   async selectAndScan() {
     try {
       const selected = await open({
@@ -27,7 +29,7 @@ export const store = reactive({
     }
   },
 
-  // Call Rust to scan
+  // Call rust ro scan
   async scanMusic(path) {
     this.loading = true;
     this.statusMessage = "Scanning...";
@@ -48,5 +50,16 @@ export const store = reactive({
     } finally {
       this.loading = false;
     }
+  },
+
+  get filteredSongs() {
+    if (!this.searchQuery) return this.songs;
+    
+    const lower = this.searchQuery.toLowerCase();
+    return this.songs.filter(song => 
+      (song.title && song.title.toLowerCase().includes(lower)) ||
+      (song.artist && song.artist.toLowerCase().includes(lower)) ||
+      (song.album && song.album.toLowerCase().includes(lower))
+    );
   }
 });

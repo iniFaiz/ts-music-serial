@@ -9,7 +9,7 @@ use lofty::prelude::*;
 use lofty::picture::MimeType;
 use base64::{Engine as _, engine::general_purpose};
 
-// Data structure sent to Frontend
+// Data to frontend
 #[derive(Serialize, Clone, Debug)]
 struct MusicTrack {
     path: String,
@@ -17,10 +17,11 @@ struct MusicTrack {
     artist: String,
     album: String,
     duration_secs: u64,
-    date_added: u64, 
+    date_added: u64,
+    year: Option<u32>,
 }
 
-// Filter supported audio extensions
+// Filter supported audio files
 fn is_audio_file(path: &Path) -> bool {
     match path.extension() {
         Some(ext) => {
@@ -31,11 +32,11 @@ fn is_audio_file(path: &Path) -> bool {
     }
 }
 
-// Extract metadata from a single file
+// Extract metadata
 fn parse_metadata(path: &Path) -> Option<MusicTrack> {
     let path_str = path.to_string_lossy().to_string();
     
-    // 1. Get File Creation Time (OS Metadata)
+    // 1. Get File Creation Time
     let date_added = fs::metadata(path)
         .and_then(|m| m.created().or(m.modified()))
         .ok()
@@ -43,8 +44,7 @@ fn parse_metadata(path: &Path) -> Option<MusicTrack> {
         .map(|d| d.as_secs())
         .unwrap_or(0);
 
-    // 2. Parse Audio Tags (Lofty)
-    // Probe the file to handle different formats transparently
+    // 2. Parse Audio Tags
     let tagged_file = match Probe::open(path) {
         Ok(probe) => match probe.read() {
             Ok(tf) => tf,
@@ -56,12 +56,13 @@ fn parse_metadata(path: &Path) -> Option<MusicTrack> {
     let tag = tagged_file.primary_tag().or_else(|| tagged_file.first_tag());
     let properties = tagged_file.properties();
 
-    // Extract fields with fallbacks
+    // Extract fields
     let title = tag.and_then(|t| t.title().map(|s| s.to_string())).unwrap_or_else(|| 
         path.file_stem().unwrap_or_default().to_string_lossy().to_string()
     );
     let artist = tag.and_then(|t| t.artist().map(|s| s.to_string())).unwrap_or("Unknown Artist".to_string());
     let album = tag.and_then(|t| t.album().map(|s| s.to_string())).unwrap_or("Unknown Album".to_string());
+    let year = tag.and_then(|t| t.year()); 
     let duration_secs = properties.duration().as_secs();
 
     Some(MusicTrack {
@@ -71,16 +72,17 @@ fn parse_metadata(path: &Path) -> Option<MusicTrack> {
         album,
         duration_secs,
         date_added,
+        year,
     })
 }
 
-// COMMAND: Scan a directory recursively
+// Scan directory
 #[tauri::command]
 async fn scan_music_folder(path: String) -> Result<Vec<MusicTrack>, String> {
     println!("Starting scan for: {}", path);
     let start_time = Instant::now();
 
-    // 1. Collect paths (Synchronous IO)
+    // Get path
     let walker = WalkDir::new(&path).into_iter();
     
     let entries: Vec<_> = walker
@@ -91,7 +93,7 @@ async fn scan_music_folder(path: String) -> Result<Vec<MusicTrack>, String> {
 
     println!("Found {} files. Processing metadata...", entries.len());
 
-    // 2. Parse metadata in parallel (CPU Bound)
+    // Process metadata in parallel
     let tracks: Vec<MusicTrack> = entries
         .par_iter()
         .filter(|path| is_audio_file(path))
@@ -103,18 +105,18 @@ async fn scan_music_folder(path: String) -> Result<Vec<MusicTrack>, String> {
     Ok(tracks)
 }
 
-// COMMAND: Extract cover art on demand (Lazy Loading)
+// Get cover art
 #[tauri::command]
 async fn get_track_cover(path: String) -> Result<Option<String>, String> {
     let path_buf = PathBuf::from(path);
 
-    // Offload to thread to prevent blocking async runtime
+    // Run in separate thread to avoid blocking
     let result = std::thread::spawn(move || {
         if let Ok(probe) = Probe::open(&path_buf) {
             if let Ok(tagged_file) = probe.read() {
                 if let Some(tag) = tagged_file.primary_tag().or_else(|| tagged_file.first_tag()) {
                     if let Some(picture) = tag.pictures().first() {
-                        // Convert to Base64 Data URI
+                        // Convert to base64
                         let b64 = general_purpose::STANDARD.encode(picture.data());
                         let mime_str = match picture.mime_type() {
                             Some(MimeType::Png) => "image/png",

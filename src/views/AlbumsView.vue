@@ -28,26 +28,31 @@ function openAlbum(albumName) {
 </script>
 
 <template>
-  <div class="h-full overflow-auto p-6 relative">
-    <h2 class="text-xl font-bold mb-4 text-gray-300 bg-gray-900 z-10 py-2">
-      Albums ({{ albums.length }})
-    </h2>
+  <div class="h-full overflow-auto px-8 pt-8 pb-12">
+    <h1 class="text-3xl font-bold tracking-tight text-white mb-6">Albums</h1>
     
-    <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
+    <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-x-6 gap-y-10">
       <div 
         v-for="album in albums" 
         :key="album.name"
         @click="openAlbum(album.name)"
-        class="bg-gray-800 hover:bg-gray-700 p-4 rounded-xl cursor-pointer transition-all hover:scale-105 group shadow-lg border border-gray-700 hover:border-gray-600"
+        class="cursor-pointer group"
       >
-        <CoverImage 
-          :path="album.coverPath" 
-          className="w-full aspect-square bg-gray-900 rounded-lg mb-3 shadow-md group-hover:shadow-xl transition-shadow"
-        />
+        <!-- Album Art -->
+        <div class="w-full aspect-square mb-3 relative shadow-lg group-hover:scale-[1.02] transition-transform duration-200 ease-out">
+           <CoverImage 
+            :path="album.coverPath" 
+            className="w-full h-full rounded-md bg-[#282828]"
+          />
+          <div class="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity rounded-md flex items-end p-3">
+             <div class="bg-[var(--accent-color)] text-white rounded-full p-3 shadow-lg translate-y-2 opacity-0 group-hover:translate-y-0 group-hover:opacity-100 transition-all duration-300">
+               <svg xmlns="[http://www.w3.org/2000/svg](http://www.w3.org/2000/svg)" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+             </div>
+          </div>
+        </div>
         
-        <h3 class="font-bold text-gray-200 truncate">{{ album.name }}</h3>
-        <p class="text-xs text-gray-400 truncate">{{ album.artist }}</p>
-        <p class="text-xs text-gray-500 mt-1">{{ album.count }} songs</p>
+        <h3 class="text-[13px] font-medium text-white truncate pr-2 leading-snug">{{ album.name }}</h3>
+        <p class="text-[13px] text-[var(--text-secondary)] truncate">{{ album.artist }}</p>
       </div>
     </div>
   </div>
