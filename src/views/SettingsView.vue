@@ -8,7 +8,7 @@
       <div class="space-y-4">
         <ToggleInt 
           :modelValue="store.useParallelism"
-          @update:modelValue="store.setParallelism"
+          @update:modelValue="(val) => store.setParallelism(val)"
           label="Use Parallel Processing (Faster)" 
         />
         
