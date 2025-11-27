@@ -4,6 +4,7 @@ import AlbumsView from '../views/AlbumsView.vue';
 import AlbumDetail from '../views/AlbumDetail.vue';
 import ArtistsView from '../views/ArtistsView.vue';
 import ArtistDetail from '../views/ArtistDetail.vue';
+import SettingsView from '../views/SettingsView.vue';
 
 const routes = [
   { path: '/', redirect: '/songs' },
@@ -12,6 +13,7 @@ const routes = [
   { path: '/albums/:name', name: 'AlbumDetail', component: AlbumDetail },
   { path: '/artists', component: ArtistsView },
   { path: '/artists/:name', name: 'ArtistDetail', component: ArtistDetail },
+  { path: '/settings', component: SettingsView },
 ];
 
 const router = createRouter({

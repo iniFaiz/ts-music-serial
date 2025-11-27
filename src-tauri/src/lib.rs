@@ -19,6 +19,7 @@ struct MusicTrack {
     duration_secs: u64,
     date_added: u64,
     year: Option<u32>,
+    track_number: Option<u32>,
 }
 
 // Filter supported audio files
@@ -63,6 +64,7 @@ fn parse_metadata(path: &Path) -> Option<MusicTrack> {
     let artist = tag.and_then(|t| t.artist().map(|s| s.to_string())).unwrap_or("Unknown Artist".to_string());
     let album = tag.and_then(|t| t.album().map(|s| s.to_string())).unwrap_or("Unknown Album".to_string());
     let year = tag.and_then(|t| t.year()); 
+    let track_number = tag.and_then(|t| t.track());
     let duration_secs = properties.duration().as_secs();
 
     Some(MusicTrack {
@@ -73,13 +75,14 @@ fn parse_metadata(path: &Path) -> Option<MusicTrack> {
         duration_secs,
         date_added,
         year,
+        track_number,
     })
 }
 
 // Scan directory
 #[tauri::command]
-async fn scan_music_folder(path: String) -> Result<Vec<MusicTrack>, String> {
-    println!("Starting scan for: {}", path);
+async fn scan_music_folder(path: String, use_parallelism: bool) -> Result<Vec<MusicTrack>, String> {
+    println!("Starting scan for: {} (Parallel: {})", path, use_parallelism);
     let start_time = Instant::now();
 
     // Get path
@@ -93,12 +96,20 @@ async fn scan_music_folder(path: String) -> Result<Vec<MusicTrack>, String> {
 
     println!("Found {} files. Processing metadata...", entries.len());
 
-    // Process metadata in parallel
-    let tracks: Vec<MusicTrack> = entries
-        .par_iter()
-        .filter(|path| is_audio_file(path))
-        .filter_map(|path| parse_metadata(path))
-        .collect();
+    // Process metadata
+    let tracks: Vec<MusicTrack> = if use_parallelism {
+        entries
+            .par_iter()
+            .filter(|path| is_audio_file(path))
+            .filter_map(|path| parse_metadata(path))
+            .collect()
+    } else {
+        entries
+            .iter()
+            .filter(|path| is_audio_file(path))
+            .filter_map(|path| parse_metadata(path))
+            .collect()
+    };
 
     println!("Scanned {} tracks in {:?}", tracks.len(), start_time.elapsed());
     
@@ -142,6 +153,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         .invoke_handler(tauri::generate_handler![scan_music_folder, get_track_cover])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,5 +1,6 @@
 <script setup>
 import { computed, ref } from 'vue';
+import { store } from '../store';
 import CoverImage from './CoverImage.vue';
 
 const props = defineProps({
@@ -39,6 +40,14 @@ const sortedSongs = computed(() => {
     return 0;
   });
 });
+
+const playSong = (song) => {
+  store.playSong(song, sortedSongs.value);
+};
+
+const isCurrentSong = (song) => {
+  return store.currentSong && store.currentSong.path === song.path;
+};
 
 const formatDuration = (seconds) => {
   const m = Math.floor(seconds / 60);
@@ -80,18 +89,28 @@ const getSortIcon = (key) => {
       <div 
         v-for="(song, index) in sortedSongs" 
         :key="song.path" 
-        class="grid gap-4 py-2 px-2 rounded-md hover:bg-[#2a2a2a] group items-center transition-colors cursor-default
+        @click="playSong(song)"
+        class="grid gap-4 py-2 px-2 rounded-md hover:bg-[#2a2a2a] group items-center transition-colors cursor-pointer
                grid-cols-[20px_3fr_2fr_2fr_60px]
                2xl:grid-cols-[40px_4fr_3fr_3fr_80px]
                2xl:py-3"
+        :class="{ 'bg-[#2a2a2a]': isCurrentSong(song) }"
       >
-        <div class="text-xs 2xl:text-sm text-gray-500 text-center">{{ index + 1 }}</div>
+        <div class="text-xs 2xl:text-sm text-gray-500 text-center">
+          <span v-if="isCurrentSong(song) && store.isPlaying" class="text-[var(--accent-color)]">▶</span>
+          <span v-else>{{ index + 1 }}</span>
+        </div>
 
         <!-- Title & Cover -->
         <div class="flex items-center gap-3 2xl:gap-5 overflow-hidden">
           <CoverImage :path="song.path" className="h-10 w-10 2xl:h-14 2xl:w-14 rounded-[4px] shadow-sm shrink-0 bg-[#333]" />
           <div class="truncate">
-            <div class="text-[13px] 2xl:text-[16px] font-medium text-white truncate leading-tight">{{ song.title }}</div>
+            <div 
+              class="text-[13px] 2xl:text-[16px] font-medium text-white truncate leading-tight"
+              :class="{ 'text-[var(--accent-color)]': isCurrentSong(song) }"
+            >
+              {{ song.title }}
+            </div>
           </div>
         </div>
         
