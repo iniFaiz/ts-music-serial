@@ -3,7 +3,6 @@ import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 
 export const store = reactive({
-  // State
   songs: [],
   loading: false,
   statusMessage: "Ready to scan",
@@ -14,7 +13,6 @@ export const store = reactive({
   scanDuration: "0",
   scanCount: 0,
 
-  // Player State
   currentSong: null,
   isPlaying: false,
   volume: 1.0,
@@ -24,15 +22,13 @@ export const store = reactive({
   loopMode: 0, 
   shuffleMode: false,
   
-  // Actions
   loadLibrary() {
     const saved = localStorage.getItem('music_library');
     if (saved) {
       try {
         this.songs = JSON.parse(saved);
-        this.sortLibrary();
         this.scanCount = this.songs.length;
-        this.statusMessage = `Loaded ${this.songs.length} songs from storage`;
+        this.statusMessage = `Loaded ${this.songs.length} songs`;
         this.scanComplete = true;
       } catch (e) {
         console.error("Failed to load library", e);
@@ -85,9 +81,8 @@ export const store = reactive({
       
       const existingPaths = new Set(this.songs.map(s => s.path));
       const newSongs = result.filter(s => !existingPaths.has(s.path));
+      
       this.songs = [...this.songs, ...newSongs];
-
-      this.sortLibrary();
 
       localStorage.setItem('music_library', JSON.stringify(this.songs));
       
@@ -104,32 +99,6 @@ export const store = reactive({
     }
   },
 
-  sortLibrary() {
-    this.songs.sort((a, b) => {
-      const artistA = (a.artist || "Unknown Artist").toLowerCase();
-      const artistB = (b.artist || "Unknown Artist").toLowerCase();
-      if (artistA < artistB) return -1;
-      if (artistA > artistB) return 1;
-
-      const albumA = (a.album || "Unknown Album").toLowerCase();
-      const albumB = (b.album || "Unknown Album").toLowerCase();
-      if (albumA < albumB) return -1;
-      if (albumA > albumB) return 1;
-
-      const trackA = a.track_number || 0;
-      const trackB = b.track_number || 0;
-      if (trackA < trackB) return -1;
-      if (trackA > trackB) return 1;
-
-      const titleA = (a.title || "").toLowerCase();
-      const titleB = (b.title || "").toLowerCase();
-      if (titleA < titleB) return -1;
-      if (titleA > titleB) return 1;
-
-      return 0;
-    });
-  },
-
   closePopup() {
     this.scanComplete = false;
   },
@@ -140,7 +109,6 @@ export const store = reactive({
     } else if (this.queue.length === 0) {
         this.queue = [...this.songs];
     }
-    
     this.currentSong = song;
     this.isPlaying = true;
   },
@@ -161,8 +129,7 @@ export const store = reactive({
     if (!this.currentSong || this.queue.length === 0) return;
 
     if (this.loopMode === 2 && !userTriggered) {
-      this.currentTime = 0;
-      if (!userTriggered) return; 
+      return; 
     }
     
     let nextIndex;
@@ -205,7 +172,7 @@ export const store = reactive({
     }
 
     if (prevIndex < 0) {
-       if (this.loopMode === 1) {
+       if (this.loopMode === 1) { 
          prevIndex = this.queue.length - 1;
        } else {
          prevIndex = 0;

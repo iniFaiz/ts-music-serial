@@ -7,19 +7,16 @@ const props = defineProps({
   songs: { type: Array, required: true }
 });
 
-const defaultSortKey = 'date_added';
-const defaultSortOrder = 'desc';
-
-const sortKey = ref(defaultSortKey);
-const sortOrder = ref(defaultSortOrder);
+const sortKey = ref(null);
+const sortOrder = ref('asc');
 
 const toggleSort = (key) => {
   if (sortKey.value === key) {
     if (sortOrder.value === 'asc') {
       sortOrder.value = 'desc';
     } else {
-      sortKey.value = defaultSortKey;
-      sortOrder.value = defaultSortOrder;
+      sortKey.value = null;
+      sortOrder.value = 'asc';
     }
   } else {
     sortKey.value = key;
@@ -29,17 +26,22 @@ const toggleSort = (key) => {
 
 const sortedSongs = computed(() => {
   let items = [...props.songs];
-  
-  if (sortKey.value === 'date_added' && sortOrder.value === 'desc') {
-      return items;
+
+  if (!sortKey.value) {
+    return items;
   }
 
   return items.sort((a, b) => {
     const modifier = sortOrder.value === 'asc' ? 1 : -1;
     let valA = a[sortKey.value];
     let valB = b[sortKey.value];
+    
     if (typeof valA === 'string') valA = valA.toLowerCase();
     if (typeof valB === 'string') valB = valB.toLowerCase();
+    
+    if (valA === undefined || valA === null) valA = 0;
+    if (valB === undefined || valB === null) valB = 0;
+
     if (valA < valB) return -1 * modifier;
     if (valA > valB) return 1 * modifier;
     return 0;
