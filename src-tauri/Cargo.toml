@@ -27,4 +27,5 @@ rayon = "1.10" #parallelism
 walkdir = "2.5" #directory traversal
 lofty = "0.21" #audio metadata parsing
 base64 = "0.22" #images encoding
+tauri-plugin-fs = "2.4.4"
 

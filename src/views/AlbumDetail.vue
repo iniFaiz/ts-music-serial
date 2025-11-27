@@ -29,14 +29,28 @@ const albumInfo = computed(() => {
     coverPath: first.path
   };
 });
+
+const playAlbum = () => {
+  if (albumSongs.value.length > 0) {
+    store.playSong(albumSongs.value[0], albumSongs.value);
+  }
+};
+
+const shuffleAlbum = () => {
+  if (albumSongs.value.length > 0) {
+    store.shuffleMode = true;
+    const randomIndex = Math.floor(Math.random() * albumSongs.value.length);
+    store.playSong(albumSongs.value[randomIndex], albumSongs.value);
+  }
+};
 </script>
 
 <template>
-  <div class="h-full flex flex-col overflow-auto">
+  <div class="flex flex-col h-full overflow-auto">
     <!-- Header -->
     <div class="p-8 flex gap-8 items-end bg-gradient-to-b from-[#2a2a2a] to-[var(--app-bg)]">
       <!-- Cover -->
-      <div class="h-52 w-52 shadow-2xl shrink-0 group relative">
+      <div class="relative shadow-2xl h-52 w-52 shrink-0 group">
         <CoverImage 
           :path="albumInfo.coverPath" 
           className="h-full w-full rounded-md shadow-lg"
@@ -46,7 +60,7 @@ const albumInfo = computed(() => {
       <!-- Info -->
       <div class="flex flex-col gap-1 pb-2 overflow-hidden">
         <h4 class="text-sm font-bold text-[var(--accent-color)] uppercase tracking-wider mb-1">Album</h4>
-        <h1 class="text-4xl font-bold text-white tracking-tight truncate">{{ albumName }}</h1>
+        <h1 class="text-4xl font-bold tracking-tight text-white truncate">{{ albumName }}</h1>
         <h2 class="text-xl font-medium text-[var(--accent-color)] truncate cursor-pointer hover:underline">{{ albumInfo.artist }}</h2>
         
         <p class="text-xs text-[var(--text-secondary)] font-medium uppercase mt-2 tracking-wide">
@@ -54,11 +68,11 @@ const albumInfo = computed(() => {
         </p>
         
         <div class="flex gap-3 mt-6">
-           <button class="bg-[var(--accent-color)] text-white px-8 py-2 rounded-[4px] text-sm font-semibold hover:bg-red-500 transition flex items-center gap-2">
-             <svg xmlns="[http://www.w3.org/2000/svg](http://www.w3.org/2000/svg)" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+           <button @click="playAlbum" class="bg-[var(--accent-color)] text-white px-8 py-2 rounded-[4px] text-sm font-semibold hover:bg-red-500 transition flex items-center gap-2">
+             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
              Play
            </button>
-           <button class="bg-[#3a3a3a] text-[var(--accent-color)] px-8 py-2 rounded-[4px] text-sm font-semibold hover:bg-[#444] transition">
+           <button @click="shuffleAlbum" class="bg-[#3a3a3a] text-[var(--accent-color)] px-8 py-2 rounded-[4px] text-sm font-semibold hover:bg-[#444] transition">
              Shuffle
            </button>
         </div>

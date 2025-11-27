@@ -19,6 +19,7 @@ struct MusicTrack {
     duration_secs: u64,
     date_added: u64,
     year: Option<u32>,
+    track_number: Option<u32>,
 }
 
 // Filter supported audio files
@@ -63,6 +64,7 @@ fn parse_metadata(path: &Path) -> Option<MusicTrack> {
     let artist = tag.and_then(|t| t.artist().map(|s| s.to_string())).unwrap_or("Unknown Artist".to_string());
     let album = tag.and_then(|t| t.album().map(|s| s.to_string())).unwrap_or("Unknown Album".to_string());
     let year = tag.and_then(|t| t.year()); 
+    let track_number = tag.and_then(|t| t.track());
     let duration_secs = properties.duration().as_secs();
 
     Some(MusicTrack {
@@ -73,6 +75,7 @@ fn parse_metadata(path: &Path) -> Option<MusicTrack> {
         duration_secs,
         date_added,
         year,
+        track_number,
     })
 }
 
@@ -150,6 +153,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         .invoke_handler(tauri::generate_handler![scan_music_folder, get_track_cover])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

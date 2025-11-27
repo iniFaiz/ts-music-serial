@@ -1,6 +1,7 @@
 <script setup>
 import { store } from './store';
 import ScanPopup from './components/ScanPopup.vue';
+import PlayerControls from './components/PlayerControls.vue';
 </script>
 
 <template>
@@ -70,10 +71,15 @@ import ScanPopup from './components/ScanPopup.vue';
     </nav>
 
     <!-- Main Content Area -->
-    <main class="flex-1 relative overflow-hidden flex flex-col bg-[var(--app-bg)]">
-      <div class="flex-1 overflow-auto scroll-smooth">
-        <router-view></router-view>
-      </div>
-    </main>
+    <div class="flex flex-col flex-1 overflow-hidden">
+      <!-- Top Player Controls -->
+      <PlayerControls />
+
+      <main class="flex-1 relative overflow-hidden flex flex-col bg-[var(--app-bg)]">
+        <div class="flex-1 overflow-auto scroll-smooth">
+          <router-view></router-view>
+        </div>
+      </main>
+    </div>
   </div>
 </template>
