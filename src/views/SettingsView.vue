@@ -7,7 +7,8 @@
       
       <div class="space-y-4">
         <ToggleInt 
-          v-model="store.useParallelism" 
+          :modelValue="store.useParallelism"
+          @update:modelValue="store.setParallelism"
           label="Use Parallel Processing (Faster)" 
         />
         

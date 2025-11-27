@@ -215,7 +215,8 @@ const formatTime = (seconds) => {
           min="0" 
           max="1" 
           step="0.01" 
-          v-model="store.volume"
+          :value="store.volume"
+          @input="store.setVolume($event.target.value)"
           class="w-24 h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-[var(--accent-color)] hover:accent-white"
         >
       </div>

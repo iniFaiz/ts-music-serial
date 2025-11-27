@@ -85,10 +85,37 @@ export const store = reactive({
       
       const existingPaths = new Set(this.songs.map(s => s.path));
       const newSongs = result.filter(s => !existingPaths.has(s.path));
-      this.songs = [...this.songs, ...newSongs];
+      
+      // IMMUTABLE PATTERN: Create new array instead of mutating
+      const combinedSongs = [...this.songs, ...newSongs];
 
-      this.sortLibrary();
+      // Sort songs: Artist -> Album -> Track -> Title
+      // IMMUTABLE PATTERN: Use slice().sort() to avoid mutating the source array in place
+      const sortedSongs = combinedSongs.slice().sort((a, b) => {
+        const artistA = (a.artist || "Unknown Artist").toLowerCase();
+        const artistB = (b.artist || "Unknown Artist").toLowerCase();
+        if (artistA < artistB) return -1;
+        if (artistA > artistB) return 1;
 
+        const albumA = (a.album || "Unknown Album").toLowerCase();
+        const albumB = (b.album || "Unknown Album").toLowerCase();
+        if (albumA < albumB) return -1;
+        if (albumA > albumB) return 1;
+
+        const trackA = a.track_number || 0;
+        const trackB = b.track_number || 0;
+        if (trackA < trackB) return -1;
+        if (trackA > trackB) return 1;
+
+        const titleA = (a.title || "").toLowerCase();
+        const titleB = (b.title || "").toLowerCase();
+        if (titleA < titleB) return -1;
+        if (titleA > titleB) return 1;
+
+        return 0;
+      });
+
+      this.songs = sortedSongs;
       localStorage.setItem('music_library', JSON.stringify(this.songs));
       
       const timeSeconds = ((endTime - startTime) / 1000).toFixed(2);
@@ -104,8 +131,10 @@ export const store = reactive({
     }
   },
 
+  // Helper to sort library immutably
   sortLibrary() {
-    this.songs.sort((a, b) => {
+    // IMMUTABLE PATTERN: Replace array with sorted copy
+    this.songs = this.songs.slice().sort((a, b) => {
       const artistA = (a.artist || "Unknown Artist").toLowerCase();
       const artistB = (b.artist || "Unknown Artist").toLowerCase();
       if (artistA < artistB) return -1;
@@ -151,10 +180,6 @@ export const store = reactive({
 
   toggleLoop() {
     this.loopMode = (this.loopMode + 1) % 3;
-  },
-
-  toggleShuffle() {
-    this.shuffleMode = !this.shuffleMode;
   },
 
   nextSong(userTriggered = false) {
@@ -214,6 +239,18 @@ export const store = reactive({
     
     this.currentSong = this.queue[prevIndex];
     this.isPlaying = true;
+  },
+
+  setVolume(val) {
+    this.volume = parseFloat(val);
+  },
+
+  setParallelism(val) {
+    this.useParallelism = val;
+  },
+
+  toggleShuffle() {
+    this.shuffleMode = !this.shuffleMode;
   },
 
   get filteredSongs() {
