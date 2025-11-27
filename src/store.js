@@ -3,7 +3,6 @@ import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 
 export const store = reactive({
-  // State
   songs: [],
   loading: false,
   statusMessage: "Ready to scan",
@@ -14,7 +13,6 @@ export const store = reactive({
   scanDuration: "0",
   scanCount: 0,
 
-  // Player State
   currentSong: null,
   isPlaying: false,
   volume: 1.0,
@@ -24,15 +22,13 @@ export const store = reactive({
   loopMode: 0, 
   shuffleMode: false,
   
-  // Actions
   loadLibrary() {
     const saved = localStorage.getItem('music_library');
     if (saved) {
       try {
         this.songs = JSON.parse(saved);
-        this.sortLibrary();
         this.scanCount = this.songs.length;
-        this.statusMessage = `Loaded ${this.songs.length} songs from storage`;
+        this.statusMessage = `Loaded ${this.songs.length} songs`;
         this.scanComplete = true;
       } catch (e) {
         console.error("Failed to load library", e);
@@ -169,7 +165,6 @@ export const store = reactive({
     } else if (this.queue.length === 0) {
         this.queue = [...this.songs];
     }
-    
     this.currentSong = song;
     this.isPlaying = true;
   },
@@ -186,8 +181,7 @@ export const store = reactive({
     if (!this.currentSong || this.queue.length === 0) return;
 
     if (this.loopMode === 2 && !userTriggered) {
-      this.currentTime = 0;
-      if (!userTriggered) return; 
+      return; 
     }
     
     let nextIndex;
@@ -230,7 +224,7 @@ export const store = reactive({
     }
 
     if (prevIndex < 0) {
-       if (this.loopMode === 1) {
+       if (this.loopMode === 1) { 
          prevIndex = this.queue.length - 1;
        } else {
          prevIndex = 0;

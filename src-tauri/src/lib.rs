@@ -37,7 +37,7 @@ fn is_audio_file(path: &Path) -> bool {
 fn parse_metadata(path: &Path) -> Option<MusicTrack> {
     let path_str = path.to_string_lossy().to_string();
     
-    // 1. Get File Creation Time
+    // Get date created/added
     let date_added = fs::metadata(path)
         .and_then(|m| m.created().or(m.modified()))
         .ok()
@@ -45,7 +45,7 @@ fn parse_metadata(path: &Path) -> Option<MusicTrack> {
         .map(|d| d.as_secs())
         .unwrap_or(0);
 
-    // 2. Parse Audio Tags
+    // extract tags
     let tagged_file = match Probe::open(path) {
         Ok(probe) => match probe.read() {
             Ok(tf) => tf,

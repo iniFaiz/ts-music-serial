@@ -7,19 +7,16 @@ const props = defineProps({
   songs: { type: Array, required: true }
 });
 
-const defaultSortKey = 'date_added';
-const defaultSortOrder = 'desc';
-
-const sortKey = ref(defaultSortKey);
-const sortOrder = ref(defaultSortOrder);
+const sortKey = ref(null);
+const sortOrder = ref('asc');
 
 const toggleSort = (key) => {
   if (sortKey.value === key) {
     if (sortOrder.value === 'asc') {
       sortOrder.value = 'desc';
     } else {
-      sortKey.value = defaultSortKey;
-      sortOrder.value = defaultSortOrder;
+      sortKey.value = null;
+      sortOrder.value = 'asc';
     }
   } else {
     sortKey.value = key;
@@ -29,17 +26,22 @@ const toggleSort = (key) => {
 
 const sortedSongs = computed(() => {
   let items = [...props.songs];
-  
-  if (sortKey.value === 'date_added' && sortOrder.value === 'desc') {
-      return items;
+
+  if (!sortKey.value) {
+    return items;
   }
 
   return items.sort((a, b) => {
     const modifier = sortOrder.value === 'asc' ? 1 : -1;
     let valA = a[sortKey.value];
     let valB = b[sortKey.value];
+    
     if (typeof valA === 'string') valA = valA.toLowerCase();
     if (typeof valB === 'string') valB = valB.toLowerCase();
+    
+    if (valA === undefined || valA === null) valA = 0;
+    if (valB === undefined || valB === null) valB = 0;
+
     if (valA < valB) return -1 * modifier;
     if (valA > valB) return 1 * modifier;
     return 0;
@@ -101,8 +103,18 @@ const getSortIcon = (key) => {
                2xl:py-3"
         :class="{ 'bg-[#2a2a2a]': isCurrentSong(song) }"
       >
-        <div class="text-xs 2xl:text-sm text-gray-500 text-center">
-          <span v-if="isCurrentSong(song) && store.isPlaying" class="text-[var(--accent-color)]">▶</span>
+        <div class="text-xs 2xl:text-sm text-gray-500 text-center flex justify-center items-center h-full">
+          <span v-if="isCurrentSong(song) && store.isPlaying" class="text-[var(--accent-color)] animate-pulse">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+              <polygon points="5 3 19 12 5 21 5 3"></polygon>
+            </svg>
+          </span>
+          <span v-else-if="isCurrentSong(song) && !store.isPlaying" class="text-[var(--accent-color)]">
+             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+               <rect x="6" y="4" width="4" height="16"></rect>
+               <rect x="14" y="4" width="4" height="16"></rect>
+             </svg>
+          </span>
           <span v-else>{{ song.track_number || index + 1 }}</span>
         </div>
 
