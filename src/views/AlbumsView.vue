@@ -25,6 +25,14 @@ const albums = computed(() => {
 function openAlbum(albumName) {
   router.push({ name: 'AlbumDetail', params: { name: albumName } });
 }
+
+function playAlbum(albumName) {
+  const songs = store.songs.filter(s => s.album === albumName);
+  songs.sort((a, b) => (a.track_number || 0) - (b.track_number || 0));
+  if (songs.length > 0) {
+    store.playSong(songs[0], songs);
+  }
+}
 </script>
 
 <template>
@@ -44,9 +52,13 @@ function openAlbum(albumName) {
             :path="album.coverPath" 
             className="w-full h-full rounded-md bg-[#282828]"
           />
+          <!-- Hover -->
           <div class="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity rounded-md flex items-end p-3">
-             <div class="bg-[var(--accent-color)] text-white rounded-full p-3 shadow-lg translate-y-2 opacity-0 group-hover:translate-y-0 group-hover:opacity-100 transition-all duration-300">
-               <svg xmlns="[http://www.w3.org/2000/svg](http://www.w3.org/2000/svg)" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+             <div 
+               @click.stop="playAlbum(album.name)"
+               class="bg-[var(--accent-color)] text-white rounded-full p-3 shadow-lg translate-y-2 opacity-0 group-hover:translate-y-0 group-hover:opacity-100 transition-all duration-300 hover:scale-110 hover:bg-red-500"
+             >
+               <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
              </div>
           </div>
         </div>

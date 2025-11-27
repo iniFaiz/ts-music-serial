@@ -9,13 +9,32 @@ const route = useRoute();
 const router = useRouter();
 const artistName = route.params.name;
 
-const artistSongs = computed(() => 
-  store.songs.filter(s => s.artist === artistName)
-);
+// filter + sort
+const artistSongs = computed(() => {
+  const songs = store.songs.filter(s => s.artist === artistName);
+  
+  // sort
+  return songs.sort((a, b) => {
+    const albumA = (a.album || "").toLowerCase();
+    const albumB = (b.album || "").toLowerCase();
+    if (albumA < albumB) return -1;
+    if (albumA > albumB) return 1;
+
+    const trackA = a.track_number || 0;
+    const trackB = b.track_number || 0;
+    return trackA - trackB;
+  });
+});
 
 const representativePath = computed(() => 
   artistSongs.value.length > 0 ? artistSongs.value[0].path : ""
 );
+
+const playArtist = () => {
+  if (artistSongs.value.length > 0) {
+    store.playSong(artistSongs.value[0], artistSongs.value);
+  }
+};
 </script>
 
 <template>
@@ -41,7 +60,11 @@ const representativePath = computed(() =>
         
         <div class="mb-4">
           <h1 class="text-5xl font-bold text-white tracking-tight drop-shadow-lg">{{ artistName }}</h1>
-          <button class="mt-4 bg-[var(--accent-color)] text-white px-8 py-2 rounded-[4px] text-sm font-semibold hover:bg-red-500 transition flex items-center gap-2 shadow-lg">
+          
+          <button 
+            @click="playArtist"
+            class="mt-4 bg-[var(--accent-color)] text-white px-8 py-2 rounded-[4px] text-sm font-semibold hover:bg-red-500 transition flex items-center gap-2 shadow-lg"
+          >
              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
              Play
            </button>

@@ -29,6 +29,11 @@ const toggleSort = (key) => {
 
 const sortedSongs = computed(() => {
   let items = [...props.songs];
+  
+  if (sortKey.value === 'date_added' && sortOrder.value === 'desc') {
+      return items;
+  }
+
   return items.sort((a, b) => {
     const modifier = sortOrder.value === 'asc' ? 1 : -1;
     let valA = a[sortKey.value];
@@ -98,7 +103,7 @@ const getSortIcon = (key) => {
       >
         <div class="text-xs 2xl:text-sm text-gray-500 text-center">
           <span v-if="isCurrentSong(song) && store.isPlaying" class="text-[var(--accent-color)]">▶</span>
-          <span v-else>{{ index + 1 }}</span>
+          <span v-else>{{ song.track_number || index + 1 }}</span>
         </div>
 
         <!-- Title & Cover -->
@@ -121,7 +126,7 @@ const getSortIcon = (key) => {
       
       <div v-if="songs.length === 0" class="p-20 text-center text-gray-600">
         <div class="text-4xl mb-4 opacity-20">♫</div>
-        <p>Your library is empty.</p>
+        <p>No songs found.</p>
       </div>
     </div>
   </div>
