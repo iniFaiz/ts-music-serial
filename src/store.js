@@ -82,11 +82,8 @@ export const store = reactive({
       const existingPaths = new Set(this.songs.map(s => s.path));
       const newSongs = result.filter(s => !existingPaths.has(s.path));
       
-      // IMMUTABLE PATTERN: Create new array instead of mutating
       const combinedSongs = [...this.songs, ...newSongs];
 
-      // Sort songs: Artist -> Album -> Track -> Title
-      // IMMUTABLE PATTERN: Use slice().sort() to avoid mutating the source array in place
       const sortedSongs = combinedSongs.slice().sort((a, b) => {
         const artistA = (a.artist || "Unknown Artist").toLowerCase();
         const artistB = (b.artist || "Unknown Artist").toLowerCase();
@@ -129,7 +126,6 @@ export const store = reactive({
 
   // Helper to sort library immutably
   sortLibrary() {
-    // IMMUTABLE PATTERN: Replace array with sorted copy
     this.songs = this.songs.slice().sort((a, b) => {
       const artistA = (a.artist || "Unknown Artist").toLowerCase();
       const artistB = (b.artist || "Unknown Artist").toLowerCase();
