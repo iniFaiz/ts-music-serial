@@ -128,31 +128,25 @@ async fn get_track_cover(path: String) -> Result<Option<String>, String> {
 
     // Run in separate thread to avoid blocking
     let result = std::thread::spawn(move || {
-        if let Ok(probe) = Probe::open(&path_buf) {
-            if let Ok(tagged_file) = probe.read() {
-                if let Some(tag) = tagged_file.primary_tag().or_else(|| tagged_file.first_tag()) {
-                    if let Some(picture) = tag.pictures().first() {
-                        // Convert to base64
-                        let b64 = general_purpose::STANDARD.encode(picture.data());
-                        let mime_str = match picture.mime_type() {
-                            Some(MimeType::Png) => "image/png",
-                            Some(MimeType::Jpeg) => "image/jpeg",
-                            Some(MimeType::Tiff) => "image/tiff",
-                            Some(MimeType::Bmp) => "image/bmp",
-                            Some(MimeType::Gif) => "image/gif",
-                            _ => "image/jpeg"
-                        };
-                        return Some(format!("data:{};base64,{}", mime_str, b64));
-                    }
-                }
-            }
-        }
-        None
+        // open and read file
+        let tagged_file = Probe::open(&path_buf).ok()?.read().ok()?;
+        // get tag and picture
+        let picture = tagged_file.primary_tag().or_else(|| tagged_file.first_tag()).and_then(|tag| tag.pictures().first())?;
+
+        let b64 = general_purpose::STANDARD.encode(picture.data());
+        let mime_str = match picture.mime_type() {
+            Some(MimeType::Png) => "image/png",
+            Some(MimeType::Jpeg) => "image/jpeg",
+            Some(MimeType::Tiff) => "image/tiff",
+            Some(MimeType::Bmp) => "image/bmp",
+            Some(MimeType::Gif) => "image/gif",
+            _ => "image/jpeg"
+        };
+        Some(format!("data:{};base64,{}", mime_str, b64))
     }).join().map_err(|_| "Thread panicked".to_string())?;
 
     Ok(result)
 }
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
