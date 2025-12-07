@@ -46,8 +46,7 @@ fn parse_metadata(path: &Path) -> Option<MusicTrack> {
         .unwrap_or(0);
 
     // extract tags
-    let probe = Probe::open(path).ok()?;
-    let tagged_file = probe.read().ok()?;
+    let tagged_file = Probe::open(path).ok()?.read().ok()?;
 
     let tag = tagged_file.primary_tag().or_else(|| tagged_file.first_tag());
     let properties = tagged_file.properties();
