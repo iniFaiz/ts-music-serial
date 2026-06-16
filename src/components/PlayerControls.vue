@@ -1,83 +1,115 @@
 <script setup>
-import { ref, watch } from 'vue';
+import { ref, watch, onMounted, onUnmounted } from 'vue';
 import { store } from '../store';
-import { convertFileSrc } from '@tauri-apps/api/core';
+import { invoke } from '@tauri-apps/api/core';
 import CoverImage from './CoverImage.vue';
 
-const audioPlayer = ref(null);
+// Playback is handled natively in Rust (rodio + symphonia). This component just
+// issues commands and polls the backend for the current position/duration.
 const seekValue = ref(0);
 const playbackError = ref(null);
 
-// Stream the file through Tauri's asset protocol instead of reading the whole
-// file into a Blob. This enables seeking, keeps memory flat for large files,
-// and means the webview no longer needs broad filesystem access.
-watch(() => store.currentSong, async (newSong) => {
-  if (!newSong || !audioPlayer.value) return;
+let pollTimer = null;
+let lastSeekAt = 0; // suppress poll overwriting the slider right after a seek
+let endedHandledFor = null; // latch so a finished track only advances once
 
+// Load + play whenever the selected song changes.
+watch(() => store.currentSong, async (song) => {
+  if (!song) return;
   playbackError.value = null;
-  store.isPlaying = false;
-
+  endedHandledFor = null;
   try {
-    audioPlayer.value.src = convertFileSrc(newSong.path);
-    audioPlayer.value.load();
-    await audioPlayer.value.play();
+    const duration = await invoke('player_load', { path: song.path, volume: store.volume });
+    store.duration = duration || 0;
+    store.currentTime = 0;
+    seekValue.value = 0;
     store.isPlaying = true;
   } catch (err) {
-    // play() rejects with AbortError when the source is swapped quickly
-    // (e.g. spamming next/prev) — that's expected, not a real failure.
-    if (err?.name !== 'AbortError') {
-      playbackError.value = err?.message ?? String(err);
+    playbackError.value = String(err);
+    store.isPlaying = false;
+  }
+});
+
+watch(() => store.isPlaying, async (playing) => {
+  try {
+    await invoke(playing ? 'player_resume' : 'player_pause');
+  } catch {
+    // ignore — status poll keeps UI in sync
+  }
+});
+
+watch(() => store.volume, async (vol) => {
+  try {
+    await invoke('player_set_volume', { volume: vol });
+  } catch {
+    // ignore
+  }
+});
+
+// While dragging: update the visible time only, and keep the poll from snapping
+// the thumb back to the old position.
+const onSeekInput = () => {
+  lastSeekAt = Date.now();
+  store.currentTime = Number(seekValue.value);
+};
+
+// On release: issue a single seek command (range v-model yields a string, so
+// coerce to a number for the f64 backend arg).
+const onSeekCommit = async () => {
+  const time = Number(seekValue.value);
+  store.currentTime = time;
+  lastSeekAt = Date.now();
+  try {
+    await invoke('player_seek', { position: time });
+  } catch (err) {
+    playbackError.value = String(err);
+  }
+};
+
+const handleTrackEnded = async () => {
+  const current = store.currentSong;
+  if (!current || endedHandledFor === current.path) return;
+  endedHandledFor = current.path;
+
+  if (store.loopMode === 2) {
+    // Loop one: reload the same track from the start.
+    try {
+      await invoke('player_load', { path: current.path, volume: store.volume });
+      store.currentTime = 0;
+      seekValue.value = 0;
+      endedHandledFor = null;
+    } catch {
+      // ignore
     }
-  }
-});
-
-watch(() => store.isPlaying, (playing) => {
-  if (!audioPlayer.value) return;
-  if (playing) audioPlayer.value.play().catch(e => console.error(e));
-  else audioPlayer.value.pause();
-});
-
-watch(() => store.volume, (vol) => {
-  if (audioPlayer.value) audioPlayer.value.volume = vol;
-});
-
-watch(() => store.currentTime, (time) => {
-  if (audioPlayer.value && Math.abs(audioPlayer.value.currentTime - time) > 1) {
-     audioPlayer.value.currentTime = time;
-  }
-});
-
-const onTimeUpdate = () => {
-  if (!audioPlayer.value) return;
-  if (Math.abs(store.currentTime - audioPlayer.value.currentTime) > 1) {
-      store.currentTime = audioPlayer.value.currentTime;
-  }
-  seekValue.value = audioPlayer.value.currentTime;
-};
-
-const onLoadedMetadata = () => {
-  if (!audioPlayer.value) return;
-  store.duration = audioPlayer.value.duration;
-  audioPlayer.value.volume = store.volume;
-};
-
-const onEnded = () => {
-  if (store.loopMode !== 2) {
+  } else {
     store.nextSong(false);
   }
 };
 
-const onError = (e) => {
-  playbackError.value = `Playback error (code ${e.target.error?.code ?? '?'})`;
-};
-
-const onSeek = (e) => {
-  const time = parseFloat(e.target.value);
-  if (audioPlayer.value) {
-    audioPlayer.value.currentTime = time;
-    store.currentTime = time;
+const poll = async () => {
+  if (!store.currentSong) return;
+  try {
+    const status = await invoke('player_status');
+    if (status.duration > 0) store.duration = status.duration;
+    if (Date.now() - lastSeekAt > 500) {
+      store.currentTime = status.position;
+      seekValue.value = status.position;
+    }
+    if (status.finished) {
+      await handleTrackEnded();
+    }
+  } catch {
+    // ignore transient errors
   }
 };
+
+onMounted(() => {
+  pollTimer = setInterval(poll, 300);
+});
+
+onUnmounted(() => {
+  if (pollTimer) clearInterval(pollTimer);
+});
 
 const formatTime = (seconds) => {
   if (!seconds || isNaN(seconds)) return "0:00";
@@ -95,15 +127,6 @@ const formatTime = (seconds) => {
     </div>
 
     <div class="h-24 flex items-center justify-between px-4">
-      <audio
-        ref="audioPlayer"
-        @timeupdate="onTimeUpdate"
-        @loadedmetadata="onLoadedMetadata"
-        @ended="onEnded"
-        @error="onError"
-        :loop="store.loopMode === 2"
-      ></audio>
-
       <!-- Controls -->
       <div class="flex items-center gap-5 w-1/3 pl-4">
         <!-- Shuffle -->
@@ -167,7 +190,8 @@ const formatTime = (seconds) => {
             min="0" 
             :max="store.duration || 100" 
             v-model="seekValue"
-            @input="onSeek"
+            @input="onSeekInput"
+            @change="onSeekCommit"
             class="w-full h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-[var(--accent-color)] hover:accent-white"
           >
           <span>{{ formatTime(store.duration) }}</span>

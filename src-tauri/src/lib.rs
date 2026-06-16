@@ -5,13 +5,16 @@ use std::fs;
 use std::hash::{Hash, Hasher};
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc, Mutex};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::{engine::general_purpose, Engine as _};
 use lofty::picture::MimeType;
 use lofty::prelude::*;
 use lofty::probe::Probe;
-use tauri::{AppHandle, Manager};
+use rodio::{Decoder, OutputStreamBuilder, Sink, Source};
+use tauri::{AppHandle, Manager, State};
 use walkdir::WalkDir;
 
 const SUPPORTED_EXTS: [&str; 6] = ["mp3", "flac", "wav", "m4a", "ogg", "aac"];
@@ -269,14 +272,190 @@ async fn get_track_cover(app: AppHandle, path: String) -> Result<Option<String>,
     Ok(result)
 }
 
+// ---------------------------------------------------------------------------
+// Native audio playback
+//
+// Decoding/playback runs entirely in Rust (rodio + symphonia) rather than the
+// webview's <audio> element. This guarantees consistent format support across
+// platforms — notably FLAC/AAC, which several webviews (e.g. WebKitGTK) cannot
+// decode — and gives precise, reliable seeking.
+// ---------------------------------------------------------------------------
+
+struct AudioPlayer {
+    // None when no output device is available; playback commands then no-op.
+    sink: Option<Arc<Sink>>,
+    // Duration of the currently loaded track, in seconds.
+    duration: Mutex<f64>,
+    // True once a track has been loaded, so an empty sink means "finished"
+    // rather than "nothing has played yet".
+    active: AtomicBool,
+}
+
+#[derive(Serialize)]
+struct PlayerStatus {
+    position: f64,
+    duration: f64,
+    playing: bool,
+    finished: bool,
+}
+
+// Load a track and start playing it, replacing whatever was playing. Returns
+// the track duration in seconds.
+#[tauri::command]
+fn player_load(
+    app: AppHandle,
+    player: State<AudioPlayer>,
+    path: String,
+    volume: f64,
+) -> Result<f64, String> {
+    let path_buf = PathBuf::from(&path);
+    if !is_allowed_audio(&app, &path_buf) {
+        return Err("Path is not within an allowed music folder".to_string());
+    }
+
+    let sink = player.sink.as_ref().ok_or("No audio output device")?;
+
+    // Read the whole file into memory and build a *seekable* decoder. rodio's
+    // generic reader wrapper defaults to non-seekable, which makes try_seek fail
+    // with SeekError(Unseekable); the builder lets us declare the source
+    // seekable and supply its byte length so Symphonia can seek. Loading into a
+    // Cursor also removes any disk-read stutter mid-playback.
+    let bytes = fs::read(&path_buf).map_err(|e| e.to_string())?;
+    let byte_len = bytes.len() as u64;
+    let decoder = Decoder::builder()
+        .with_data(Cursor::new(bytes))
+        .with_byte_len(byte_len)
+        .with_seekable(true)
+        .build()
+        .map_err(|e| e.to_string())?;
+    let duration = decoder
+        .total_duration()
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
+
+    sink.clear();
+    sink.set_volume(volume.clamp(0.0, 1.0) as f32);
+    sink.append(decoder);
+    sink.play();
+
+    *player.duration.lock().unwrap() = duration;
+    player.active.store(true, Ordering::SeqCst);
+
+    Ok(duration)
+}
+
+#[tauri::command]
+fn player_pause(player: State<AudioPlayer>) {
+    if let Some(sink) = &player.sink {
+        sink.pause();
+    }
+}
+
+#[tauri::command]
+fn player_resume(player: State<AudioPlayer>) {
+    if let Some(sink) = &player.sink {
+        sink.play();
+    }
+}
+
+#[tauri::command]
+fn player_set_volume(player: State<AudioPlayer>, volume: f64) {
+    if let Some(sink) = &player.sink {
+        sink.set_volume(volume.clamp(0.0, 1.0) as f32);
+    }
+}
+
+#[tauri::command]
+fn player_seek(player: State<AudioPlayer>, position: f64) -> Result<(), String> {
+    if let Some(sink) = &player.sink {
+        let duration = *player.duration.lock().unwrap();
+        // Keep the target inside the track; seeking to/past the end can error.
+        let target = if duration > 0.1 {
+            position.clamp(0.0, duration - 0.1)
+        } else {
+            position.max(0.0)
+        };
+        sink.try_seek(Duration::from_secs_f64(target))
+            .map_err(|e| format!("Seek failed: {e:?}"))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn player_stop(player: State<AudioPlayer>) {
+    if let Some(sink) = &player.sink {
+        sink.clear();
+    }
+    player.active.store(false, Ordering::SeqCst);
+}
+
+#[tauri::command]
+fn player_status(player: State<AudioPlayer>) -> PlayerStatus {
+    match &player.sink {
+        Some(sink) => {
+            let empty = sink.empty();
+            PlayerStatus {
+                position: sink.get_pos().as_secs_f64(),
+                duration: *player.duration.lock().unwrap(),
+                playing: !sink.is_paused() && !empty,
+                finished: player.active.load(Ordering::SeqCst) && empty,
+            }
+        }
+        None => PlayerStatus {
+            position: 0.0,
+            duration: 0.0,
+            playing: false,
+            finished: false,
+        },
+    }
+}
+
+// Build the audio player. The OutputStream is `!Send`, so it lives on a
+// dedicated thread that parks for the app's lifetime; only the (Send) Sink is
+// shared back to the command handlers.
+fn init_audio_player() -> AudioPlayer {
+    let (tx, rx) = mpsc::channel();
+
+    std::thread::spawn(move || {
+        match OutputStreamBuilder::open_default_stream() {
+            Ok(stream) => {
+                let sink = Sink::connect_new(stream.mixer());
+                let _ = tx.send(Some(Arc::new(sink)));
+                // Keep the output stream alive so audio output stays open.
+                let _keep = stream;
+                loop {
+                    std::thread::sleep(Duration::from_secs(3600));
+                }
+            }
+            Err(_) => {
+                let _ = tx.send(None);
+            }
+        }
+    });
+
+    AudioPlayer {
+        sink: rx.recv().unwrap_or(None),
+        duration: Mutex::new(0.0),
+        active: AtomicBool::new(false),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .manage(init_audio_player())
         .invoke_handler(tauri::generate_handler![
             scan_music_folder,
             get_track_cover,
-            restore_roots
+            restore_roots,
+            player_load,
+            player_pause,
+            player_resume,
+            player_set_volume,
+            player_seek,
+            player_stop,
+            player_status
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -115,7 +115,7 @@ const getSortIcon = (key) => {
                <rect x="14" y="4" width="4" height="16"></rect>
              </svg>
           </span>
-          <span v-else>{{ song.track_number || index + 1 }}</span>
+          <span v-else>{{ index + 1 }}</span>
         </div>
 
         <!-- Title & Cover -->
