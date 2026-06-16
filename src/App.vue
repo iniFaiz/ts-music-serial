@@ -76,7 +76,11 @@ import PlayerControls from './components/PlayerControls.vue';
 
       <main class="flex-1 relative overflow-hidden flex flex-col bg-[var(--app-bg)]">
         <div class="flex-1 overflow-auto scroll-smooth">
-          <router-view></router-view>
+          <router-view v-slot="{ Component }">
+            <keep-alive :include="['SongsView', 'AlbumsView', 'ArtistsView']">
+              <component :is="Component" />
+            </keep-alive>
+          </router-view>
         </div>
       </main>
     </div>

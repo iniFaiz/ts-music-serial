@@ -4,6 +4,8 @@ import { store } from '../store';
 import { useRouter } from 'vue-router';
 import CoverImage from '../components/CoverImage.vue';
 
+defineOptions({ name: 'AlbumsView' });
+
 const router = useRouter();
 
 const albums = computed(() => {

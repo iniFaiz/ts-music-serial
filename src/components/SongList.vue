@@ -97,7 +97,7 @@ const getSortIcon = (key) => {
         v-for="(song, index) in sortedSongs" 
         :key="song.path" 
         @click="playSong(song)"
-        class="grid gap-4 py-2 px-2 rounded-md hover:bg-[#2a2a2a] group items-center transition-colors cursor-pointer
+        class="song-row grid gap-4 py-2 px-2 rounded-md hover:bg-[#2a2a2a] group items-center transition-colors cursor-pointer
                grid-cols-[20px_3fr_2fr_2fr_60px]
                2xl:grid-cols-[40px_4fr_3fr_3fr_80px]
                2xl:py-3"
@@ -143,3 +143,14 @@ const getSortIcon = (key) => {
     </div>
   </div>
 </template>
+
+<style scoped>
+/* Skip rendering rows that are scrolled off-screen. Cheap, browser-native
+   culling that keeps large libraries (thousands of tracks) smooth without a
+   full virtual-scroll rewrite. The intrinsic size hint preserves scrollbar
+   geometry for unrendered rows. */
+.song-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 56px;
+}
+</style>

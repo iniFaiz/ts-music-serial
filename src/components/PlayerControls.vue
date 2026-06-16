@@ -1,61 +1,33 @@
 <script setup>
-import { ref, watch, onUnmounted, nextTick } from 'vue';
+import { ref, watch } from 'vue';
 import { store } from '../store';
-import { readFile } from '@tauri-apps/plugin-fs';
+import { convertFileSrc } from '@tauri-apps/api/core';
 import CoverImage from './CoverImage.vue';
 
 const audioPlayer = ref(null);
 const seekValue = ref(0);
-const debugError = ref(null);
-const debugStatus = ref('Idle');
-let currentObjectUrl = null;
+const playbackError = ref(null);
 
-const getMimeType = (path) => {
-  const ext = path.split('.').pop().toLowerCase();
-  const types = {
-    'mp3': 'audio/mpeg',
-    'wav': 'audio/wav',
-    'ogg': 'audio/ogg',
-    'm4a': 'audio/mp4',
-    'flac': 'audio/flac',
-    'aac': 'audio/aac'
-  };
-  return types[ext] || 'application/octet-stream';
-};
-
+// Stream the file through Tauri's asset protocol instead of reading the whole
+// file into a Blob. This enables seeking, keeps memory flat for large files,
+// and means the webview no longer needs broad filesystem access.
 watch(() => store.currentSong, async (newSong) => {
-  if (!newSong) return;
+  if (!newSong || !audioPlayer.value) return;
 
-  if (currentObjectUrl) {
-    URL.revokeObjectURL(currentObjectUrl);
-    currentObjectUrl = null;
-  }
-
-  debugStatus.value = `Loading...`;
-  debugError.value = null;
+  playbackError.value = null;
   store.isPlaying = false;
 
   try {
-    const fileBytes = await readFile(newSong.path);
-    const mimeType = getMimeType(newSong.path);
-    const blob = new Blob([fileBytes], { type: mimeType });
-    currentObjectUrl = URL.createObjectURL(blob);
-
-    if (audioPlayer.value) {
-      audioPlayer.value.src = currentObjectUrl;
-      audioPlayer.value.load();
-      const playPromise = audioPlayer.value.play();
-      if (playPromise !== undefined) {
-        playPromise
-          .then(() => {
-            store.isPlaying = true;
-            debugStatus.value = `Playing`;
-          })
-          .catch(e => debugError.value = e.message);
-      }
-    }
+    audioPlayer.value.src = convertFileSrc(newSong.path);
+    audioPlayer.value.load();
+    await audioPlayer.value.play();
+    store.isPlaying = true;
   } catch (err) {
-    debugError.value = `Error: ${err}`; 
+    // play() rejects with AbortError when the source is swapped quickly
+    // (e.g. spamming next/prev) — that's expected, not a real failure.
+    if (err?.name !== 'AbortError') {
+      playbackError.value = err?.message ?? String(err);
+    }
   }
 });
 
@@ -73,10 +45,6 @@ watch(() => store.currentTime, (time) => {
   if (audioPlayer.value && Math.abs(audioPlayer.value.currentTime - time) > 1) {
      audioPlayer.value.currentTime = time;
   }
-});
-
-onUnmounted(() => {
-  if (currentObjectUrl) URL.revokeObjectURL(currentObjectUrl);
 });
 
 const onTimeUpdate = () => {
@@ -100,7 +68,7 @@ const onEnded = () => {
 };
 
 const onError = (e) => {
-  debugError.value = `Error ${e.target.error?.code}`;
+  playbackError.value = `Playback error (code ${e.target.error?.code ?? '?'})`;
 };
 
 const onSeek = (e) => {
@@ -122,19 +90,18 @@ const formatTime = (seconds) => {
 <template>
   <div class="bg-[#181818] border-t border-[#282828] z-50 select-none flex flex-col">
     
-    <div v-if="debugError" class="bg-red-900/50 text-[10px] text-red-200 p-1 px-4 text-center">
-      {{ debugError }}
+    <div v-if="playbackError" class="bg-red-900/50 text-[10px] text-red-200 p-1 px-4 text-center">
+      {{ playbackError }}
     </div>
 
     <div class="h-24 flex items-center justify-between px-4">
-      <audio 
+      <audio
         ref="audioPlayer"
         @timeupdate="onTimeUpdate"
         @loadedmetadata="onLoadedMetadata"
         @ended="onEnded"
         @error="onError"
         :loop="store.loopMode === 2"
-        crossorigin="anonymous"
       ></audio>
 
       <!-- Controls -->

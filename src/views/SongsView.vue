@@ -1,6 +1,8 @@
 <script setup>
 import { store } from '../store';
 import SongList from '../components/SongList.vue';
+
+defineOptions({ name: 'SongsView' });
 </script>
 
 <template>

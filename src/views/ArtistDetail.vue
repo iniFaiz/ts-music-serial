@@ -1,12 +1,11 @@
 <script setup>
 import { computed } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
+import { useRoute } from 'vue-router';
 import { store } from '../store';
 import SongList from '../components/SongList.vue';
 import CoverImage from '../components/CoverImage.vue';
 
 const route = useRoute();
-const router = useRouter();
 const artistName = route.params.name;
 
 // filter + sort

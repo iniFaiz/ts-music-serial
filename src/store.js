@@ -1,9 +1,18 @@
 import { reactive } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
+import { idbGet, idbSet, idbDelete } from './libraryStore';
+import { sortTracks } from './sortTracks';
+
+// Directory portion of a file path (handles both / and \ separators).
+function dirName(path) {
+  const idx = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+  return idx > 0 ? path.slice(0, idx) : path;
+}
 
 export const store = reactive({
   songs: [],
+  roots: [],
   loading: false,
   statusMessage: "Ready to scan",
   selectedPath: "",
@@ -19,32 +28,78 @@ export const store = reactive({
   currentTime: 0,
   duration: 0,
   queue: [],
-  loopMode: 0, 
+  loopMode: 0,
   shuffleMode: false,
-  
-  loadLibrary() {
-    const saved = localStorage.getItem('music_library');
-    if (saved) {
-      try {
-        this.songs = JSON.parse(saved);
-        this.scanCount = this.songs.length;
-        this.statusMessage = `Loaded ${this.songs.length} songs`;
-        this.scanComplete = true;
-      } catch (e) {
-        console.error("Failed to load library", e);
-      }
+
+  // Persist the current library + scanned roots to IndexedDB. JSON round-trips
+  // strip Vue's reactive proxies so the values can be structured-cloned.
+  async persist() {
+    try {
+      await idbSet('library', JSON.parse(JSON.stringify(this.songs)));
+      await idbSet('roots', [...this.roots]);
+    } catch (e) {
+      console.error("Failed to persist library", e);
     }
   },
 
-  resetLibrary() {
+  async loadLibrary() {
+    try {
+      // One-time migration from the old localStorage cache.
+      const legacy = localStorage.getItem('music_library');
+      if (legacy) {
+        try {
+          await idbSet('library', JSON.parse(legacy));
+        } catch (e) {
+          console.error("Failed to migrate legacy library", e);
+        }
+        localStorage.removeItem('music_library');
+      }
+
+      const [songs, roots] = await Promise.all([idbGet('library'), idbGet('roots')]);
+      this.songs = Array.isArray(songs) ? songs : [];
+
+      // Roots authorize streaming/cover access. If unknown (e.g. migrated
+      // data), fall back to each track's containing folder.
+      let resolvedRoots = Array.isArray(roots) ? roots : [];
+      if (resolvedRoots.length === 0 && this.songs.length > 0) {
+        resolvedRoots = [...new Set(this.songs.map((s) => dirName(s.path)))];
+        await idbSet('roots', resolvedRoots);
+      }
+      this.roots = resolvedRoots;
+
+      if (this.roots.length > 0) {
+        try {
+          await invoke('restore_roots', { roots: this.roots });
+        } catch (e) {
+          console.error("Failed to restore roots", e);
+        }
+      }
+
+      if (this.songs.length > 0) {
+        this.scanCount = this.songs.length;
+        this.statusMessage = `Loaded ${this.songs.length} songs`;
+        this.scanComplete = true;
+      }
+    } catch (e) {
+      console.error("Failed to load library", e);
+    }
+  },
+
+  async resetLibrary() {
     this.songs = [];
+    this.roots = [];
     this.scanCount = 0;
     this.currentSong = null;
     this.queue = [];
     this.isPlaying = false;
-    localStorage.removeItem('music_library');
-    this.statusMessage = "Library reset";
     this.scanComplete = false;
+    this.statusMessage = "Library reset";
+    try {
+      await idbDelete('library');
+      await idbDelete('roots');
+    } catch (e) {
+      console.error("Failed to reset library", e);
+    }
   },
 
   async selectAndScan() {
@@ -81,36 +136,14 @@ export const store = reactive({
       
       const existingPaths = new Set(this.songs.map(s => s.path));
       const newSongs = result.filter(s => !existingPaths.has(s.path));
-      
-      const combinedSongs = [...this.songs, ...newSongs];
 
-      const sortedSongs = combinedSongs.slice().sort((a, b) => {
-        const artistA = (a.artist || "Unknown Artist").toLowerCase();
-        const artistB = (b.artist || "Unknown Artist").toLowerCase();
-        if (artistA < artistB) return -1;
-        if (artistA > artistB) return 1;
+      this.songs = sortTracks([...this.songs, ...newSongs]);
 
-        const albumA = (a.album || "Unknown Album").toLowerCase();
-        const albumB = (b.album || "Unknown Album").toLowerCase();
-        if (albumA < albumB) return -1;
-        if (albumA > albumB) return 1;
+      if (!this.roots.includes(path)) {
+        this.roots = [...this.roots, path];
+      }
+      await this.persist();
 
-        const trackA = a.track_number || 0;
-        const trackB = b.track_number || 0;
-        if (trackA < trackB) return -1;
-        if (trackA > trackB) return 1;
-
-        const titleA = (a.title || "").toLowerCase();
-        const titleB = (b.title || "").toLowerCase();
-        if (titleA < titleB) return -1;
-        if (titleA > titleB) return 1;
-
-        return 0;
-      });
-
-      this.songs = sortedSongs;
-      localStorage.setItem('music_library', JSON.stringify(this.songs));
-      
       const timeSeconds = ((endTime - startTime) / 1000).toFixed(2);
       this.statusMessage = `Added ${newSongs.length} new tracks in ${timeSeconds}s`;
       
