@@ -1,32 +1,33 @@
 <script setup>
-import { ref, onMounted, watch } from 'vue';
-import { invoke } from '@tauri-apps/api/core';
+import { ref, watch } from 'vue';
+import { loadCover, getCachedCover, hasCachedCover } from '../coverCache';
 
 const props = defineProps({
   path: { type: String, required: true },
   className: { type: String, default: "h-10 w-10 rounded" }
 });
 
-const imageData = ref(null);
-const loaded = ref(false);
+// Hydrate synchronously from the shared cache so a previously seen cover renders
+// immediately (no flash) when the component is recreated on page navigation.
+const imageData = ref(hasCachedCover(props.path) ? getCachedCover(props.path) : null);
 
-async function loadCover() {
-  if (!props.path || loaded.value) return;
-  
-  try {
-    const result = await invoke('get_track_cover', { path: props.path });
+async function resolveCover(path) {
+  if (!path) {
+    imageData.value = null;
+    return;
+  }
+  if (hasCachedCover(path)) {
+    imageData.value = getCachedCover(path);
+    return;
+  }
+  const result = await loadCover(path);
+  // Guard against a race: the path prop may have changed while awaiting.
+  if (props.path === path) {
     imageData.value = result;
-  } catch (e) {
-  } finally {
-    loaded.value = true;
   }
 }
 
-onMounted(loadCover);
-watch(() => props.path, () => {
-  loaded.value = false;
-  loadCover();
-});
+watch(() => props.path, resolveCover, { immediate: true });
 </script>
 
 <template>
