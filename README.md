@@ -138,13 +138,8 @@ npm run tauri build
    on demand through the `get_track_cover` command.
 
 ## Contributors
-
-<div align="center">
-
 <a href="https://github.com/iniFaiz"><img src="https://avatars.githubusercontent.com/u/64961002?v=4" title="Faiz Alrazi Hidayat" width="80" height="80"></a>
 <a href="https://github.com/Bluenomic"><img src="https://avatars.githubusercontent.com/u/149468407?v=4" title="Imam Dzulvan Muffid" width="80" height="80"></a>
 <a href="https://github.com/nfgcode"><img src="https://avatars.githubusercontent.com/u/50001308?v=4" title="Nurfauzan Gymnastiar" width="80" height="80"></a>
 <a href="https://github.com/ReezqiAseli"><img src="https://avatars.githubusercontent.com/u/111623692?v=4" title="Mochammad Reezqi Pratama" width="80" height="80"></a>
 <a href="https://github.com/kingpentes"><img src="https://avatars.githubusercontent.com/u/146577113?v=4" title="Hadri Harazit" width="80" height="80"></a>
-
-</div>
