@@ -1,6 +1,7 @@
 use rayon::prelude::*;
 use serde::Serialize;
 use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::io::Cursor;
@@ -13,10 +14,13 @@ use base64::{engine::general_purpose, Engine as _};
 use lofty::picture::MimeType;
 use lofty::prelude::*;
 use lofty::probe::Probe;
+use lofty::tag::ItemKey;
 use rodio::source::SeekError;
-use rodio::{Decoder, OutputStreamBuilder, Sink, Source};
-use tauri::{AppHandle, Manager, State};
+use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink, Source};
+use tauri::{AppHandle, Emitter, Manager, State};
 use walkdir::WalkDir;
+
+mod lyrics;
 
 const SUPPORTED_EXTS: [&str; 6] = ["mp3", "flac", "wav", "m4a", "ogg", "aac"];
 // Cover art is downscaled to this maximum edge (px) before being sent to the
@@ -38,6 +42,16 @@ struct MusicTrack {
     has_cover: bool,
     sample_rate: Option<u32>,
     bit_depth: Option<u8>,
+    // ReplayGain track gain/peak read from tags (if present), used by the volume
+    // normalization feature. `None` when the file carries no ReplayGain tags.
+    track_gain_db: Option<f32>,
+    track_peak: Option<f32>,
+}
+
+// Parse a ReplayGain gain string like "-6.54 dB" / "+3.2" into decibels.
+fn parse_rg_db(s: &str) -> Option<f32> {
+    let cleaned = s.trim().trim_end_matches(|c: char| c.is_alphabetic() || c.is_whitespace());
+    cleaned.trim().parse::<f32>().ok()
 }
 
 // Filter supported audio files by extension.
@@ -103,6 +117,13 @@ fn parse_metadata(path: &Path) -> Option<MusicTrack> {
     let sample_rate = properties.sample_rate();
     let bit_depth = properties.bit_depth();
 
+    let track_gain_db = tag
+        .and_then(|t| t.get_string(&ItemKey::ReplayGainTrackGain))
+        .and_then(parse_rg_db);
+    let track_peak = tag
+        .and_then(|t| t.get_string(&ItemKey::ReplayGainTrackPeak))
+        .and_then(|s| s.trim().parse::<f32>().ok());
+
     Some(MusicTrack {
         path: path_str,
         title,
@@ -115,6 +136,8 @@ fn parse_metadata(path: &Path) -> Option<MusicTrack> {
         has_cover,
         sample_rate,
         bit_depth,
+        track_gain_db,
+        track_peak,
     })
 }
 
@@ -178,6 +201,54 @@ fn restore_roots(app: AppHandle, roots: Vec<String>) {
     for root in roots {
         allow_root(&app, &root);
     }
+}
+
+// Scan a heterogeneous list of paths (files and/or folders), e.g. from a
+// drag-and-drop onto the window. Folders are walked recursively; lone audio
+// files are parsed directly. Each touched directory is granted streaming scope.
+#[tauri::command]
+async fn scan_paths(app: AppHandle, paths: Vec<String>) -> Result<Vec<MusicTrack>, String> {
+    let mut tracks: Vec<MusicTrack> = Vec::new();
+    for p in paths {
+        let pb = PathBuf::from(&p);
+        if pb.is_dir() {
+            allow_root(&app, &p);
+            let entries: Vec<_> = jwalk::WalkDir::new(&pb)
+                .into_iter()
+                .filter_map(|e| e.ok())
+                .filter(|e| e.file_type().is_file())
+                .map(|e| e.path())
+                .collect();
+            let mut found: Vec<MusicTrack> = entries
+                .into_par_iter()
+                .filter(|path| is_audio_file(path))
+                .filter_map(|path| parse_metadata(&path))
+                .collect();
+            tracks.append(&mut found);
+        } else if pb.is_file() && is_audio_file(&pb) {
+            if let Some(parent) = pb.parent() {
+                let parent_str = parent.to_string_lossy().to_string();
+                allow_root(&app, &parent_str);
+            }
+            if let Some(t) = parse_metadata(&pb) {
+                tracks.push(t);
+            }
+        }
+    }
+    Ok(tracks)
+}
+
+// Return the subset of `paths` that still exist on disk (and are within an
+// allowed music folder). Used to prune deleted files during a library refresh.
+#[tauri::command]
+fn filter_existing(app: AppHandle, paths: Vec<String>) -> Vec<String> {
+    paths
+        .into_iter()
+        .filter(|p| {
+            let pb = Path::new(p);
+            is_allowed_audio(&app, pb) && pb.exists()
+        })
+        .collect()
 }
 
 // Directory where downscaled cover thumbnails are cached on disk.
@@ -292,9 +363,17 @@ async fn get_track_cover(app: AppHandle, path: String) -> Result<Option<String>,
 // decode — and gives precise, reliable seeking.
 // ---------------------------------------------------------------------------
 
+// Command sent to the dedicated audio thread (which owns the !Send OutputStream).
+enum AudioCommand {
+    // Open the output device with the given name, or the system default (None).
+    // The reply channel is signalled once the device is open.
+    OpenDevice(Option<String>, mpsc::Sender<()>),
+}
+
 struct AudioPlayer {
-    // None when no output device is available; playback commands then no-op.
-    sink: Option<Arc<Sink>>,
+    // The active sink. Wrapped in a Mutex<Option<..>> so the audio thread can
+    // swap it when the output device changes; None when no device is available.
+    sink: Arc<Mutex<Option<Arc<Sink>>>>,
     // Duration of the currently loaded track, in seconds.
     duration: Arc<Mutex<f64>>,
     // True once a track has been loaded, so an empty sink means "finished"
@@ -306,6 +385,34 @@ struct AudioPlayer {
     generation: Arc<AtomicU64>,
     // Latest frequency-band levels for the UI visualizer, fed by SpectrumSource.
     spectrum: Arc<SpectrumShared>,
+    // Volume-normalization factor (linear) applied on top of the user volume.
+    // 1.0 = no normalization.
+    norm_factor: Arc<Mutex<f32>>,
+    // Last user-requested volume (0..1), so the normalization factor can be
+    // re-applied to the live sink without the frontend re-sending the volume.
+    last_volume: Arc<Mutex<f32>>,
+    // Channel to the audio thread for device-management commands.
+    cmd_tx: mpsc::Sender<AudioCommand>,
+    // Pre-decoded next track (path + ready decoder) for near-gapless playback.
+    // player_load consumes this when the loaded path matches, skipping the disk
+    // read + decoder setup so the transition has no audible decode gap.
+    prepared: Arc<Mutex<Option<(String, Decoder<Cursor<Vec<u8>>>)>>>,
+}
+
+impl AudioPlayer {
+    // Clone out the current sink handle (if any) without holding the lock.
+    fn sink(&self) -> Option<Arc<Sink>> {
+        self.sink.lock().unwrap().clone()
+    }
+    // Effective sink volume = user volume * normalization factor. Capped above
+    // 1.0 (≈ +12 dB) so normalization can boost quiet tracks; rodio amplifies
+    // values > 1.0 and the peak limiter in player_set_normalization guards
+    // against clipping.
+    fn effective_volume(&self) -> f32 {
+        let vol = *self.last_volume.lock().unwrap();
+        let factor = *self.norm_factor.lock().unwrap();
+        (vol * factor).clamp(0.0, 4.0)
+    }
 }
 
 #[derive(Serialize)]
@@ -593,14 +700,15 @@ async fn player_load(
     start_at: Option<f64>,
     autoplay: bool,
     duration_hint: f64,
+    fade_in_secs: Option<f64>,
 ) -> Result<PlaybackInfo, String> {
     let path_buf = PathBuf::from(&path);
     if !is_allowed_audio(&app, &path_buf) {
         return Err("Path is not within an allowed music folder".to_string());
     }
 
-    let sink = match &player.sink {
-        Some(s) => s.clone(),
+    let sink = match player.sink() {
+        Some(s) => s,
         None => return Err("No audio output device".to_string()),
     };
     // Clone the shared handles out so we never hold the State guard across .await.
@@ -608,6 +716,9 @@ async fn player_load(
     let duration_slot = player.duration.clone();
     let active = player.active.clone();
     let spectrum = player.spectrum.clone();
+    let norm_factor = player.norm_factor.clone();
+    let last_volume = player.last_volume.clone();
+    let prepared = player.prepared.clone();
 
     // Claim a generation and stop the current track right away. Marking the
     // player inactive during the load gap prevents the now-empty sink from
@@ -616,13 +727,34 @@ async fn player_load(
     sink.clear();
     active.store(false, Ordering::SeqCst);
     spectrum.reset(); // clear the visualizer during the load gap
-    sink.set_volume(volume.clamp(0.0, 1.0) as f32);
+    // Apply the requested volume together with the active normalization factor.
+    let user_vol = volume.clamp(0.0, 1.0) as f32;
+    *last_volume.lock().unwrap() = user_vol;
+    let factor = *norm_factor.lock().unwrap();
+    sink.set_volume((user_vol * factor).clamp(0.0, 4.0));
 
-    let path_buf_clone = path_buf.clone();
-    let (decoder, decoded_duration) =
-        tauri::async_runtime::spawn_blocking(move || build_decoder(&path_buf_clone))
-            .await
-            .map_err(|e| format!("Decode task failed: {e}"))??;
+    // Reuse a pre-decoded next track when it matches (near-gapless); otherwise
+    // read + decode on the blocking pool.
+    let prepared_decoder = {
+        let mut g = prepared.lock().unwrap();
+        if g.as_ref().map(|(p, _)| p == &path).unwrap_or(false) {
+            g.take().map(|(_, d)| d)
+        } else {
+            None
+        }
+    };
+    let (decoder, decoded_duration) = match prepared_decoder {
+        Some(dec) => {
+            let dur = dec.total_duration().map(|d| d.as_secs_f64()).unwrap_or(0.0);
+            (dec, dur)
+        }
+        None => {
+            let path_buf_clone = path_buf.clone();
+            tauri::async_runtime::spawn_blocking(move || build_decoder(&path_buf_clone))
+                .await
+                .map_err(|e| format!("Decode task failed: {e}"))??
+        }
+    };
 
     // A newer load was requested while we were reading — drop this stale one.
     if generation.load(Ordering::SeqCst) != my_gen {
@@ -642,7 +774,14 @@ async fn player_load(
     };
     *duration_slot.lock().unwrap() = duration;
     // Tap the decoded samples for the visualizer on their way to the sink.
-    sink.append(SpectrumSource::new(decoder, spectrum));
+    // In crossfade mode each track is eased in with a fade.
+    let tapped = SpectrumSource::new(decoder, spectrum);
+    match fade_in_secs {
+        Some(secs) if secs > 0.0 => {
+            sink.append(tapped.fade_in(Duration::from_secs_f64(secs.min(12.0))));
+        }
+        _ => sink.append(tapped),
+    }
 
     // Resume support: jump to a saved position before (optionally) playing.
     if let Some(pos) = start_at {
@@ -679,30 +818,66 @@ async fn player_load(
     })
 }
 
+// Pre-decode the next track for near-gapless playback. The ready decoder is
+// stored and consumed by the upcoming player_load (when paths match), skipping
+// its disk read + decode pass so the transition has no audible decode gap.
+#[tauri::command]
+async fn player_prepare_next(
+    app: AppHandle,
+    player: State<'_, AudioPlayer>,
+    path: String,
+) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    if !is_allowed_audio(&app, &path_buf) {
+        return Err("Path is not within an allowed music folder".to_string());
+    }
+    // Already prepared for this path — nothing to do.
+    if player
+        .prepared
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|(p, _)| p == &path)
+        .unwrap_or(false)
+    {
+        return Ok(());
+    }
+    let prepared = player.prepared.clone();
+    let pb = path_buf.clone();
+    if let Ok(Ok((dec, _dur))) =
+        tauri::async_runtime::spawn_blocking(move || build_decoder(&pb)).await
+    {
+        *prepared.lock().unwrap() = Some((path, dec));
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn player_pause(player: State<AudioPlayer>) {
-    if let Some(sink) = &player.sink {
+    if let Some(sink) = player.sink() {
         sink.pause();
     }
 }
 
 #[tauri::command]
 fn player_resume(player: State<AudioPlayer>) {
-    if let Some(sink) = &player.sink {
+    if let Some(sink) = player.sink() {
         sink.play();
     }
 }
 
 #[tauri::command]
 fn player_set_volume(player: State<AudioPlayer>, volume: f64) {
-    if let Some(sink) = &player.sink {
-        sink.set_volume(volume.clamp(0.0, 1.0) as f32);
+    let user_vol = volume.clamp(0.0, 1.0) as f32;
+    *player.last_volume.lock().unwrap() = user_vol;
+    if let Some(sink) = player.sink() {
+        sink.set_volume(player.effective_volume());
     }
 }
 
 #[tauri::command]
 fn player_seek(player: State<AudioPlayer>, position: f64) -> Result<(), String> {
-    if let Some(sink) = &player.sink {
+    if let Some(sink) = player.sink() {
         let duration = *player.duration.lock().unwrap();
         // Keep the target inside the track; seeking to/past the end can error.
         let target = if duration > 0.1 {
@@ -718,7 +893,7 @@ fn player_seek(player: State<AudioPlayer>, position: f64) -> Result<(), String> 
 
 #[tauri::command]
 fn player_stop(player: State<AudioPlayer>) {
-    if let Some(sink) = &player.sink {
+    if let Some(sink) = player.sink() {
         sink.clear();
     }
     player.active.store(false, Ordering::SeqCst);
@@ -726,7 +901,7 @@ fn player_stop(player: State<AudioPlayer>) {
 
 #[tauri::command]
 fn player_status(player: State<AudioPlayer>) -> PlayerStatus {
-    match &player.sink {
+    match player.sink() {
         Some(sink) => {
             let empty = sink.empty();
             PlayerStatus {
@@ -762,36 +937,461 @@ fn player_set_spectrum_enabled(player: State<AudioPlayer>, enabled: bool) {
     }
 }
 
-// Build the audio player. The OutputStream is `!Send`, so it lives on a
-// dedicated thread that parks for the app's lifetime; only the (Send) Sink is
-// shared back to the command handlers.
-fn init_audio_player() -> AudioPlayer {
-    let (tx, rx) = mpsc::channel();
+// Open an OutputStream for the named device (or the system default when None),
+// build a fresh Sink on its mixer and publish it into `slot`. Returns the
+// stream so the caller (the audio thread) can keep it alive; leaves `slot` as
+// None on failure. The new sink inherits the current effective volume so a
+// device switch doesn't reset levels.
+fn open_device_stream(
+    name: Option<&str>,
+    slot: &Arc<Mutex<Option<Arc<Sink>>>>,
+    last_volume: &Arc<Mutex<f32>>,
+    norm_factor: &Arc<Mutex<f32>>,
+) -> Option<OutputStream> {
+    use rodio::cpal::traits::{DeviceTrait, HostTrait};
 
-    std::thread::spawn(move || {
-        match OutputStreamBuilder::open_default_stream() {
-            Ok(stream) => {
-                let sink = Sink::connect_new(stream.mixer());
-                let _ = tx.send(Some(Arc::new(sink)));
-                // Keep the output stream alive so audio output stays open.
-                let _keep = stream;
-                loop {
-                    std::thread::sleep(Duration::from_secs(3600));
-                }
+    let stream = match name {
+        Some(want) => {
+            let host = rodio::cpal::default_host();
+            let device = host
+                .output_devices()
+                .ok()
+                .and_then(|mut devs| devs.find(|d| d.name().map(|n| n == want).unwrap_or(false)));
+            match device {
+                Some(dev) => OutputStreamBuilder::from_device(dev)
+                    .and_then(|b| b.open_stream())
+                    .ok(),
+                // Requested device vanished — fall back to default.
+                None => OutputStreamBuilder::open_default_stream().ok(),
             }
-            Err(_) => {
-                let _ = tx.send(None);
+        }
+        None => OutputStreamBuilder::open_default_stream().ok(),
+    };
+
+    match stream {
+        Some(stream) => {
+            let sink = Sink::connect_new(stream.mixer());
+            let vol =
+                (*last_volume.lock().unwrap() * *norm_factor.lock().unwrap()).clamp(0.0, 4.0);
+            sink.set_volume(vol);
+            *slot.lock().unwrap() = Some(Arc::new(sink));
+            Some(stream)
+        }
+        None => {
+            *slot.lock().unwrap() = None;
+            None
+        }
+    }
+}
+
+// Build the audio player. The OutputStream is `!Send`, so it lives on a
+// dedicated thread that owns it for the app's lifetime; the thread blocks on a
+// command channel (keeping the stream alive) and rebuilds the stream/sink when
+// the output device changes. Only the (Send) Sink handle is shared back.
+fn init_audio_player() -> AudioPlayer {
+    let (cmd_tx, cmd_rx) = mpsc::channel::<AudioCommand>();
+    let (ready_tx, ready_rx) = mpsc::channel::<()>();
+
+    let sink_slot: Arc<Mutex<Option<Arc<Sink>>>> = Arc::new(Mutex::new(None));
+    let norm_factor = Arc::new(Mutex::new(1.0f32));
+    let last_volume = Arc::new(Mutex::new(1.0f32));
+
+    let slot_t = sink_slot.clone();
+    let nf_t = norm_factor.clone();
+    let lv_t = last_volume.clone();
+    std::thread::spawn(move || {
+        // Open the default device on startup, then signal readiness.
+        let mut _stream = open_device_stream(None, &slot_t, &lv_t, &nf_t);
+        let _ = ready_tx.send(());
+
+        // Process device-change commands. recv() blocks (keeping `_stream`
+        // alive) until the sender is dropped at shutdown.
+        while let Ok(cmd) = cmd_rx.recv() {
+            match cmd {
+                AudioCommand::OpenDevice(name, reply) => {
+                    // Stop and drop the old sink, then drop the old stream by
+                    // overwriting it with the freshly opened one.
+                    {
+                        let mut guard = slot_t.lock().unwrap();
+                        if let Some(s) = guard.take() {
+                            s.stop();
+                        }
+                    }
+                    _stream = open_device_stream(name.as_deref(), &slot_t, &lv_t, &nf_t);
+                    let _ = reply.send(());
+                }
             }
         }
     });
 
+    // Wait for the initial device open so the first player_load sees a sink
+    // (or a definitive None when no output device exists).
+    let _ = ready_rx.recv();
+
     AudioPlayer {
-        sink: rx.recv().unwrap_or(None),
+        sink: sink_slot,
         duration: Arc::new(Mutex::new(0.0)),
         active: Arc::new(AtomicBool::new(false)),
         generation: Arc::new(AtomicU64::new(0)),
         spectrum: Arc::new(SpectrumShared::new()),
+        norm_factor,
+        last_volume,
+        cmd_tx,
+        prepared: Arc::new(Mutex::new(None)),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Output device selection
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+struct OutputDeviceInfo {
+    name: String,
+    is_default: bool,
+}
+
+// Enumerate the available audio output devices.
+#[tauri::command]
+fn list_output_devices() -> Vec<OutputDeviceInfo> {
+    use rodio::cpal::traits::{DeviceTrait, HostTrait};
+    let host = rodio::cpal::default_host();
+    let default_name = host.default_output_device().and_then(|d| d.name().ok());
+    let mut out = Vec::new();
+    if let Ok(devices) = host.output_devices() {
+        for d in devices {
+            if let Ok(name) = d.name() {
+                let is_default = default_name.as_deref() == Some(name.as_str());
+                out.push(OutputDeviceInfo { name, is_default });
+            }
+        }
+    }
+    out
+}
+
+// Switch the audio output device (None = system default). Blocks until the new
+// device is open so the frontend can immediately reload the current track.
+#[tauri::command]
+fn set_output_device(player: State<AudioPlayer>, name: Option<String>) -> Result<(), String> {
+    let (reply_tx, reply_rx) = mpsc::channel();
+    player
+        .cmd_tx
+        .send(AudioCommand::OpenDevice(name, reply_tx))
+        .map_err(|e| format!("Audio thread unavailable: {e}"))?;
+    let _ = reply_rx.recv_timeout(Duration::from_secs(5));
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Volume normalization (Sound Check) — ReplayGain tags + lazy EBU R128 compute
+// ---------------------------------------------------------------------------
+
+// Reference loudness for normalization (ReplayGain 2.0 standard).
+const NORM_TARGET_LUFS: f64 = -18.0;
+
+// Set the normalization factor from a track's gain (dB), an optional peak (to
+// prevent clipping when boosting) and the user pre-amp. Re-applies immediately
+// to the live sink. `enabled = false` resets the factor to 1.0 (no change).
+#[tauri::command]
+fn player_set_normalization(
+    player: State<AudioPlayer>,
+    gain_db: Option<f64>,
+    preamp_db: f64,
+    peak: Option<f64>,
+    enabled: bool,
+) {
+    let factor = if enabled {
+        let total_db = gain_db.unwrap_or(0.0) + preamp_db;
+        let mut f = 10f64.powf(total_db / 20.0);
+        if let Some(pk) = peak {
+            if pk > 0.0 {
+                f = f.min(1.0 / pk); // never amplify past the track's peak headroom
+            }
+        }
+        (f as f32).clamp(0.0, 4.0)
+    } else {
+        1.0
+    };
+    *player.norm_factor.lock().unwrap() = factor;
+    if let Some(sink) = player.sink() {
+        sink.set_volume(player.effective_volume());
+    }
+}
+
+// Process-wide guard around the on-disk loudness cache file.
+static LOUDNESS_LOCK: Mutex<()> = Mutex::new(());
+
+fn loudness_cache_file(app: &AppHandle) -> Option<PathBuf> {
+    let dir = app.path().app_cache_dir().ok()?;
+    fs::create_dir_all(&dir).ok()?;
+    Some(dir.join("loudness.json"))
+}
+
+fn read_loudness(app: &AppHandle, key: &str) -> Option<f32> {
+    let file = loudness_cache_file(app)?;
+    let _g = LOUDNESS_LOCK.lock().ok()?;
+    let data = fs::read_to_string(&file).ok()?;
+    let map: HashMap<String, f32> = serde_json::from_str(&data).ok()?;
+    map.get(key).copied()
+}
+
+fn write_loudness(app: &AppHandle, key: &str, gain: f32) {
+    if let Some(file) = loudness_cache_file(app) {
+        let _g = LOUDNESS_LOCK.lock();
+        let mut map: HashMap<String, f32> = fs::read_to_string(&file)
+            .ok()
+            .and_then(|d| serde_json::from_str(&d).ok())
+            .unwrap_or_default();
+        map.insert(key.to_string(), gain);
+        if let Ok(s) = serde_json::to_string(&map) {
+            let _ = fs::write(&file, s);
+        }
+    }
+}
+
+// Decode the whole track and measure its integrated loudness (EBU R128), then
+// return the gain (dB) needed to reach the reference target. Heavy — runs on
+// the blocking pool via compute_track_gain.
+fn compute_gain_blocking(path: &Path) -> Result<f32, String> {
+    use ebur128::{EbuR128, Mode};
+    let (decoder, _dur) = build_decoder(path)?;
+    let channels = decoder.channels().max(1) as u32;
+    let sample_rate = decoder.sample_rate().max(1);
+    let mut ebu = EbuR128::new(channels, sample_rate, Mode::I).map_err(|e| e.to_string())?;
+    let mut buf: Vec<f32> = Vec::with_capacity(65536);
+    for s in decoder {
+        buf.push(s);
+        if buf.len() >= 65536 {
+            ebu.add_frames_f32(&buf).map_err(|e| e.to_string())?;
+            buf.clear();
+        }
+    }
+    if !buf.is_empty() {
+        ebu.add_frames_f32(&buf).map_err(|e| e.to_string())?;
+    }
+    let loudness = ebu.loudness_global().map_err(|e| e.to_string())?;
+    if !loudness.is_finite() {
+        return Ok(0.0); // silent / unmeasurable track
+    }
+    let gain = (NORM_TARGET_LUFS - loudness) as f32;
+    Ok(gain.clamp(-15.0, 15.0))
+}
+
+// Return the normalization gain (dB) for a track without ReplayGain tags,
+// computing and caching it on first request.
+#[tauri::command]
+async fn compute_track_gain(app: AppHandle, path: String) -> Result<f32, String> {
+    let path_buf = PathBuf::from(&path);
+    if !is_allowed_audio(&app, &path_buf) {
+        return Err("Path is not within an allowed music folder".to_string());
+    }
+    let key = cover_cache_key(&path_buf).unwrap_or_else(|| path.clone());
+    if let Some(g) = read_loudness(&app, &key) {
+        return Ok(g);
+    }
+    let app2 = app.clone();
+    let gain = tauri::async_runtime::spawn_blocking(move || compute_gain_blocking(&path_buf))
+        .await
+        .map_err(|e| format!("Loudness task failed: {e}"))??;
+    write_loudness(&app2, &key, gain);
+    Ok(gain)
+}
+
+// ---------------------------------------------------------------------------
+// Lyrics — local tag / sidecar .lrc, then LRCLIB → NetEase → Musixmatch
+// ---------------------------------------------------------------------------
+
+fn lyrics_cache_dir(app: &AppHandle) -> Option<PathBuf> {
+    let dir = app.path().app_cache_dir().ok()?.join("lyrics");
+    fs::create_dir_all(&dir).ok()?;
+    Some(dir)
+}
+
+// Look for lyrics shipped with the file itself: a sidecar "<name>.lrc" (usually
+// hand-synced) takes priority over an embedded lyrics tag.
+fn local_lyrics(path: &Path) -> Option<lyrics::Lyrics> {
+    let sidecar = path.with_extension("lrc");
+    if let Ok(text) = fs::read_to_string(&sidecar) {
+        if let Some(l) = lyrics::lyrics_from_text(&text, "Local (.lrc)") {
+            return Some(l);
+        }
+    }
+    if let Ok(tagged) = Probe::open(path).and_then(|p| p.read()) {
+        let tag = tagged.primary_tag().or_else(|| tagged.first_tag());
+        if let Some(text) = tag.and_then(|t| t.get_string(&ItemKey::Lyrics)) {
+            if let Some(l) = lyrics::lyrics_from_text(text, "Embedded") {
+                return Some(l);
+            }
+        }
+    }
+    None
+}
+
+// Resolve lyrics through the full pipeline, caching the result (including a
+// "not found" sentinel) on disk. `force` bypasses the cache for a manual retry.
+#[tauri::command]
+async fn get_lyrics(
+    app: AppHandle,
+    path: String,
+    title: String,
+    artist: String,
+    album: String,
+    duration_secs: u64,
+    musixmatch_token: Option<String>,
+    lyrics_source: String,
+    force: bool,
+) -> Option<lyrics::Lyrics> {
+    let path_buf = PathBuf::from(&path);
+    if !is_allowed_audio(&app, &path_buf) {
+        return None;
+    }
+
+    if lyrics_source == "none" {
+        return None;
+    }
+
+    // Disk cache keyed by path+mtime+size. "null" = previously not found.
+    let cache_file = cover_cache_key(&path_buf)
+        .and_then(|k| lyrics_cache_dir(&app).map(|d| d.join(format!("{k}.json"))));
+    if !force {
+        if let Some(cf) = &cache_file {
+            if let Ok(data) = fs::read_to_string(cf) {
+                if data.trim() == "null" {
+                    return None;
+                }
+                if let Ok(l) = serde_json::from_str::<lyrics::Lyrics>(&data) {
+                    // Make sure the cached source matches the requested source
+                    let source_matches = match lyrics_source.as_str() {
+                        "local" => l.source.to_lowercase() == "local",
+                        "lrclib" => l.source.to_lowercase() == "lrclib",
+                        "netease" => l.source.to_lowercase() == "netease",
+                        "musixmatch" => l.source.to_lowercase() == "musixmatch",
+                        _ => true,
+                    };
+                    if source_matches {
+                        return Some(l);
+                    }
+                }
+            }
+        }
+    }
+
+    let mut result = None;
+
+    if lyrics_source == "local" {
+        // 1. Local lyrics (file IO + lofty) on the blocking pool.
+        let pb = path_buf.clone();
+        result = tauri::async_runtime::spawn_blocking(move || local_lyrics(&pb))
+            .await
+            .ok()
+            .flatten();
+    } else {
+        // Remote providers
+        if let Ok(client) = reqwest::Client::builder()
+            .timeout(Duration::from_secs(8))
+            .user_agent("ts-music/0.1 (https://github.com/)")
+            .build()
+        {
+            if lyrics_source == "lrclib" {
+                result = lyrics::from_lrclib(&client, &title, &artist, &album, duration_secs).await;
+            } else if lyrics_source == "netease" {
+                result = lyrics::from_netease(&client, &title, &artist).await;
+            } else if lyrics_source == "musixmatch" {
+                if let Some(token) = musixmatch_token
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|t| !t.is_empty())
+                {
+                    result = lyrics::from_musixmatch(
+                        &client,
+                        &title,
+                        &artist,
+                        &album,
+                        duration_secs,
+                        token,
+                    )
+                    .await;
+                }
+            }
+        }
+    }
+
+    if let Some(cf) = &cache_file {
+        let data = match &result {
+            Some(l) => serde_json::to_string(l).unwrap_or_else(|_| "null".to_string()),
+            None => "null".to_string(),
+        };
+        let _ = fs::write(cf, data);
+    }
+
+    result
+}
+
+// ---------------------------------------------------------------------------
+// Filesystem watching — library auto-update
+//
+// A single RecommendedWatcher covers all scanned roots. Raw events are funnelled
+// into a coalescing thread that debounces bursts (e.g. a bulk copy) into a
+// single `library-changed` event, which the frontend reacts to with an
+// incremental refresh.
+// ---------------------------------------------------------------------------
+
+struct FileWatcher {
+    watcher: Mutex<Option<notify::RecommendedWatcher>>,
+    // Notifies the coalescing thread that a relevant change occurred.
+    evt_tx: mpsc::Sender<()>,
+}
+
+// Drain a burst of filesystem events and emit one `library-changed` per quiet
+// window, so a folder copy doesn't trigger dozens of rescans.
+fn spawn_fs_coalescer(app: AppHandle, rx: mpsc::Receiver<()>) {
+    std::thread::spawn(move || loop {
+        // Block until the first event of a burst.
+        if rx.recv().is_err() {
+            break; // all senders dropped → app shutting down
+        }
+        // Swallow further events until things go quiet for the debounce window.
+        loop {
+            match rx.recv_timeout(Duration::from_millis(800)) {
+                Ok(()) => continue,
+                Err(mpsc::RecvTimeoutError::Timeout) => break,
+                Err(mpsc::RecvTimeoutError::Disconnected) => return,
+            }
+        }
+        let _ = app.emit("library-changed", ());
+    });
+}
+
+// (Re)configure the watcher to cover exactly the given roots. Replacing the
+// watcher drops the previous one, unwatching the old set.
+#[tauri::command]
+fn watch_roots(state: State<FileWatcher>, roots: Vec<String>) -> Result<(), String> {
+    use notify::event::{EventKind, ModifyKind};
+    use notify::{RecursiveMode, Watcher};
+
+    let tx = state.evt_tx.clone();
+    let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+        if let Ok(event) = res {
+            // Only structural changes (add / remove / rename) warrant a rescan;
+            // ignore pure content/attribute writes to avoid needless churn.
+            let relevant = matches!(
+                event.kind,
+                EventKind::Create(_) | EventKind::Remove(_) | EventKind::Modify(ModifyKind::Name(_))
+            );
+            if relevant {
+                let _ = tx.send(());
+            }
+        }
+    })
+    .map_err(|e| e.to_string())?;
+
+    for root in &roots {
+        // Best-effort: a missing/again-removed folder shouldn't abort the rest.
+        let _ = watcher.watch(Path::new(root), RecursiveMode::Recursive);
+    }
+
+    *state.watcher.lock().unwrap() = Some(watcher);
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1014,10 +1614,18 @@ fn player_delete_file(app: AppHandle, path: String) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Channel feeding the filesystem-watch coalescer (spawned in setup).
+    let (fs_tx, fs_rx) = mpsc::channel::<()>();
+    let fs_rx = Mutex::new(Some(fs_rx));
+
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(init_audio_player());
+        .manage(init_audio_player())
+        .manage(FileWatcher {
+            watcher: Mutex::new(None),
+            evt_tx: fs_tx,
+        });
 
     #[cfg(target_os = "windows")]
     {
@@ -1025,16 +1633,23 @@ pub fn run() {
     }
 
     builder
-        .setup(|_app| {
+        .setup(move |_app| {
             #[cfg(target_os = "windows")]
             init_media_controls(_app.handle());
+            // Start the debounced filesystem-change → library-changed pump.
+            if let Some(rx) = fs_rx.lock().unwrap().take() {
+                spawn_fs_coalescer(_app.handle().clone(), rx);
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             scan_music_folder,
+            scan_paths,
+            filter_existing,
             get_track_cover,
             restore_roots,
             player_load,
+            player_prepare_next,
             player_pause,
             player_resume,
             player_set_volume,
@@ -1043,6 +1658,12 @@ pub fn run() {
             player_status,
             player_spectrum,
             player_set_spectrum_enabled,
+            list_output_devices,
+            set_output_device,
+            player_set_normalization,
+            compute_track_gain,
+            get_lyrics,
+            watch_roots,
             smtc_set_metadata,
             smtc_set_playback,
             player_show_in_folder,

@@ -30,6 +30,9 @@ base64 = "0.22" #images encoding
 image = "0.25" #cover art decoding/downscaling
 rodio = { version = "0.21", features = ["symphonia-all"] } #native audio playback/decoding (all formats incl. FLAC)
 souvlaki = "0.8.3" #OS media controls (Windows SMTC / media keys)
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] } #lyrics HTTP (rustls = no OpenSSL on Windows)
+notify = "6" #filesystem watching for library auto-update
+ebur128 = "0.1" #EBU R128 loudness analysis for volume normalization (ReplayGain)
 
 # Optimize dependencies even in debug/dev builds. Audio codecs (symphonia) are
 # math-heavy and unusably slow when compiled unoptimized — that is what made

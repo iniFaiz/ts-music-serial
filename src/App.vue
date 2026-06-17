@@ -1,15 +1,73 @@
 <script setup>
 import { ref, onMounted, onUnmounted, nextTick } from 'vue';
 import { useRouter } from 'vue-router';
+import { getCurrentWebview } from '@tauri-apps/api/webview';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { listen } from '@tauri-apps/api/event';
 import { store } from './store';
 import PlayerControls from './components/PlayerControls.vue';
 import QueuePanel from './components/QueuePanel.vue';
 import PlaylistCreateModal from './components/PlaylistCreateModal.vue';
 import PlaylistCover from './components/PlaylistCover.vue';
 import TitleBar from './components/TitleBar.vue';
+import FullScreenPlayer from './components/FullScreenPlayer.vue';
+import LyricsPanel from './components/LyricsPanel.vue';
 import { goBackWithTransition } from './viewTransition';
 
 const router = useRouter();
+const appWindow = getCurrentWindow();
+
+// ---- Global keyboard shortcuts ----
+const handleKeydown = (e) => {
+  // Ctrl+Shift+F toggles the fullscreen Now-Playing view and enters native monitor fullscreen.
+  if (e.ctrlKey && e.shiftKey && (e.key === 'F' || e.key === 'f')) {
+    e.preventDefault();
+    if (store.fullscreenOpen) {
+      store.closeFullscreen();
+      setTimeout(() => {
+        try {
+          appWindow.setFullscreen(false);
+        } catch (err) {
+          console.warn("Tauri fullscreen restore error:", err);
+        }
+      }, 50);
+    } else {
+      store.openFullscreen();
+      setTimeout(() => {
+        try {
+          appWindow.setFullscreen(true)
+            .then(() => {
+              store.statusMessage = "Tauri Fullscreen: SUCCESS";
+            })
+            .catch(err => {
+              store.statusMessage = "Tauri Fullscreen ERR: " + err;
+              console.warn("Tauri fullscreen promise error:", err);
+            });
+        } catch (err) {
+          store.statusMessage = "Tauri Fullscreen CATCH: " + err;
+          console.warn("Tauri fullscreen catch error:", err);
+        }
+      }, 50);
+    }
+    return;
+  }
+  if (e.key === 'Escape' && store.fullscreenOpen) {
+    store.closeFullscreen();
+    setTimeout(() => {
+      try {
+        appWindow.setFullscreen(false);
+      } catch (err) {
+        console.warn("Tauri fullscreen restore error:", err);
+      }
+    }, 50);
+  }
+};
+
+// ---- Drag & drop folders/files onto the window ----
+let unlistenDrop = null;
+// ---- Filesystem watcher → debounced library refresh ----
+let unlistenLibraryChanged = null;
+let refreshTimer = null;
 
 const scrollContainer = ref(null);
 const scrollPositions = new Map();
@@ -70,12 +128,45 @@ const handleAuxClick = (e) => {
   }
 };
 
-onMounted(() => {
+onMounted(async () => {
   updateCompact();
   window.addEventListener('resize', updateCompact);
   window.addEventListener('mouseup', handleMouseUp);
   window.addEventListener('mousedown', handleMouseDown);
   window.addEventListener('auxclick', handleAuxClick);
+  window.addEventListener('keydown', handleKeydown);
+
+  // Drag & drop: highlight while hovering, add the dropped paths on release.
+  try {
+    unlistenDrop = await getCurrentWebview().onDragDropEvent((event) => {
+      const t = event.payload.type;
+      if (t === 'enter' || t === 'over') {
+        store.dragActive = true;
+      } else if (t === 'leave') {
+        store.dragActive = false;
+      } else if (t === 'drop') {
+        store.dragActive = false;
+        if (event.payload.paths && event.payload.paths.length) {
+          store.addPaths(event.payload.paths);
+        }
+      }
+    });
+  } catch {
+    // drag-drop best-effort
+  }
+
+  // Auto-refresh the library when watched folders change on disk (debounced
+  // again on the JS side so several backend events collapse into one refresh).
+  try {
+    unlistenLibraryChanged = await listen('library-changed', () => {
+      if (refreshTimer) clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(() => {
+        if (!store.loading) store.refreshLibrary();
+      }, 600);
+    });
+  } catch {
+    // watcher best-effort
+  }
 });
 
 onUnmounted(() => {
@@ -83,6 +174,10 @@ onUnmounted(() => {
   window.removeEventListener('mouseup', handleMouseUp);
   window.removeEventListener('mousedown', handleMouseDown);
   window.removeEventListener('auxclick', handleAuxClick);
+  window.removeEventListener('keydown', handleKeydown);
+  if (unlistenDrop) unlistenDrop();
+  if (unlistenLibraryChanged) unlistenLibraryChanged();
+  if (refreshTimer) clearTimeout(refreshTimer);
 });
 
 function newPlaylist() {
@@ -102,7 +197,7 @@ function newPlaylist() {
       <nav
         class="bg-[var(--sidebar-bg)] border-r border-[var(--border-color)] flex flex-col shrink-0 pt-4 pb-4 gap-5 transition-[width] duration-200 ease-out"
         :class="compact ? 'w-16 px-2' : 'w-64 px-4'"
-        @click="store.queuePanelOpen = false"
+        @click="store.queuePanelOpen = false; store.lyricsPanelOpen = false"
       >
         <!-- Search -->
         <div v-if="!compact" class="relative">
@@ -443,7 +538,7 @@ function newPlaylist() {
           <div
             ref="scrollContainer"
             class="flex-1 overflow-auto scroll-smooth"
-            @click="store.queuePanelOpen = false"
+            @click="store.queuePanelOpen = false; store.lyricsPanelOpen = false"
           >
             <router-view v-slot="{ Component }">
               <keep-alive :include="['SongsView', 'AlbumsView', 'ArtistsView', 'PlaylistsView']">
@@ -454,11 +549,43 @@ function newPlaylist() {
 
           <!-- Up-next queue drawer -->
           <QueuePanel @click.stop />
+
+          <!-- Lyrics panel -->
+          <LyricsPanel @click.stop />
         </main>
       </div>
     </div>
 
     <!-- Create-playlist modal (global overlay) -->
     <PlaylistCreateModal />
+
+    <!-- Fullscreen Now-Playing + lyrics (global overlay) -->
+    <FullScreenPlayer />
+
+    <!-- Drag & drop hint -->
+    <Transition name="fade">
+      <div
+        v-if="store.dragActive"
+        class="fixed inset-0 z-[150] flex items-center justify-center bg-black/60 backdrop-blur-sm pointer-events-none"
+      >
+        <div
+          class="border-2 border-dashed border-[var(--accent-color)] rounded-2xl px-12 py-10 text-center"
+        >
+          <div class="text-2xl font-bold text-white mb-1">Drop to add music</div>
+          <div class="text-sm text-gray-300">Folders and audio files are added to your library</div>
+        </div>
+      </div>
+    </Transition>
   </div>
 </template>
+
+<style>
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.15s ease;
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+</style>

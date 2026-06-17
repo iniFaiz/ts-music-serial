@@ -10,6 +10,22 @@ function dirName(path) {
   return idx > 0 ? path.slice(0, idx) : path;
 }
 
+// Normalize a path for prefix comparison: unify separators and lowercase (paths
+// are case-insensitive on Windows). Strips a trailing separator.
+function normPath(path) {
+  return String(path || '')
+    .replace(/\\/g, '/')
+    .replace(/\/+$/, '')
+    .toLowerCase();
+}
+
+// True when `filePath` lives inside the directory `root` (or equals it).
+function isUnderRoot(filePath, root) {
+  const f = normPath(filePath);
+  const r = normPath(root);
+  return f === r || f.startsWith(r + '/');
+}
+
 export const store = reactive({
   songs: [],
   roots: [],
@@ -31,6 +47,10 @@ export const store = reactive({
   isMuted: false,
   currentTime: 0,
   duration: 0,
+  // Timestamp of the last user seek; the PlayerControls poll uses it to avoid
+  // snapping the slider back to a stale position. Shared so the fullscreen
+  // player and lyric-click seeks suppress the poll too. Not persisted.
+  lastSeekAt: 0,
   queue: [],
   loopMode: 0,
   shuffleMode: false,
@@ -42,6 +62,28 @@ export const store = reactive({
   visualizerEnabled: true,
   playbackFinished: false,
 
+  // --- Advanced playback / library settings (persisted) ---
+  // Selected audio output device name; null = system default.
+  outputDevice: null,
+  // Volume normalization (Sound Check): level out loudness across tracks using
+  // ReplayGain tags, falling back to a lazily-computed EBU R128 gain.
+  normalizationEnabled: false,
+  normalizationPreampDb: 0,
+  // Track-to-track transition: 'off' | 'gapless' | 'crossfade'.
+  transitionMode: 'off',
+  crossfadeSecs: 6,
+  // Optional Musixmatch community user token for the lyrics fallback chain.
+  musixmatchToken: '',
+  // Selected lyrics provider: 'lrclib' | 'local' | 'netease' | 'musixmatch' | 'none'
+  lyricsSource: 'lrclib',
+
+  // Fullscreen Now-Playing overlay (Apple Music style cover + synced lyrics).
+  fullscreenOpen: false,
+  // Currently selected/active album for keyboard shortcut actions.
+  selectedAlbum: null,
+  // Drop-overlay visibility while a drag is over the window.
+  dragActive: false,
+
   // Liked songs (array of file paths) and user playlists.
   favorites: [],
   playlists: [], // [{ id, name, paths: [] }]
@@ -51,6 +93,7 @@ export const store = reactive({
   pendingSeek: null,
   pendingAutoplay: true,
   queuePanelOpen: false,
+  lyricsPanelOpen: false,
 
   // Persist the current library + scanned roots to IndexedDB. JSON round-trips
   // strip Vue's reactive proxies so the values can be structured-cloned.
@@ -71,6 +114,15 @@ export const store = reactive({
       await idbSet('app_state', {
         favorites: [...this.favorites],
         playlists: JSON.parse(JSON.stringify(this.playlists)),
+        settings: {
+          outputDevice: this.outputDevice,
+          normalizationEnabled: this.normalizationEnabled,
+          normalizationPreampDb: this.normalizationPreampDb,
+          transitionMode: this.transitionMode,
+          crossfadeSecs: this.crossfadeSecs,
+          musixmatchToken: this.musixmatchToken,
+          lyricsSource: this.lyricsSource,
+        },
         playback: {
           songPath: this.currentSong ? this.currentSong.path : null,
           positionSecs: this.currentTime || 0,
@@ -119,6 +171,8 @@ export const store = reactive({
         } catch (e) {
           console.error('Failed to restore roots', e);
         }
+        // Start watching folders so the library auto-updates on disk changes.
+        this.watchRoots();
       }
 
       if (this.songs.length > 0) {
@@ -146,6 +200,24 @@ export const store = reactive({
 
     this.favorites = Array.isArray(state.favorites) ? state.favorites : [];
     this.playlists = Array.isArray(state.playlists) ? state.playlists : [];
+
+    const s = state.settings;
+    if (s) {
+      if (typeof s.outputDevice !== 'undefined') this.outputDevice = s.outputDevice;
+      if (typeof s.normalizationEnabled === 'boolean')
+        this.normalizationEnabled = s.normalizationEnabled;
+      if (typeof s.normalizationPreampDb === 'number')
+        this.normalizationPreampDb = s.normalizationPreampDb;
+      if (typeof s.transitionMode === 'string') this.transitionMode = s.transitionMode;
+      if (typeof s.crossfadeSecs === 'number') this.crossfadeSecs = s.crossfadeSecs;
+      if (typeof s.musixmatchToken === 'string') this.musixmatchToken = s.musixmatchToken;
+      if (typeof s.lyricsSource === 'string') this.lyricsSource = s.lyricsSource;
+
+      // Re-select the saved output device (the audio thread starts on default).
+      if (this.outputDevice) {
+        invoke('set_output_device', { name: this.outputDevice }).catch(() => {});
+      }
+    }
 
     const pb = state.playback;
     if (!pb) return;
@@ -233,6 +305,7 @@ export const store = reactive({
 
       if (!this.roots.includes(path)) {
         this.roots = [...this.roots, path];
+        this.watchRoots();
       }
       await this.persist();
 
@@ -247,6 +320,226 @@ export const store = reactive({
     } finally {
       this.loading = false;
     }
+  },
+
+  // Add audio from arbitrary dropped paths (files and/or folders). Folders are
+  // registered as roots so their audio can be streamed; lone files register
+  // their containing folder. Mirrors scanMusic's incremental merge.
+  async addPaths(paths) {
+    const list = (Array.isArray(paths) ? paths : [paths]).filter(Boolean);
+    if (list.length === 0) return;
+    this.loading = true;
+    this.statusMessage = 'Adding dropped items...';
+    try {
+      const result = await invoke('scan_paths', { paths: list });
+      const existingPaths = new Set(this.songs.map((s) => s.path));
+      const newSongs = result.filter((s) => !existingPaths.has(s.path));
+      this.songs = sortTracks([...this.songs, ...newSongs]);
+
+      // Register new roots so the watcher and streaming scope cover them. A
+      // dropped path that contains new tracks is treated as a folder root;
+      // otherwise fall back to each new track's containing folder.
+      const newRoots = [];
+      for (const p of list) {
+        if (
+          !this.roots.some((r) => isUnderRoot(p, r)) &&
+          !newRoots.includes(p) &&
+          newSongs.some((s) => isUnderRoot(s.path, p))
+        ) {
+          newRoots.push(p);
+        }
+      }
+      for (const d of new Set(newSongs.map((s) => dirName(s.path)))) {
+        if (!this.roots.some((r) => isUnderRoot(d, r)) && !newRoots.some((r) => isUnderRoot(d, r))) {
+          newRoots.push(d);
+        }
+      }
+      if (newRoots.length) {
+        this.roots = [...this.roots, ...newRoots];
+        this.watchRoots();
+      }
+      await this.persist();
+      this.scanCount = this.songs.length;
+      this.scanComplete = true;
+      this.statusMessage = `Added ${newSongs.length} new tracks`;
+    } catch (e) {
+      this.statusMessage = `Error: ${e}`;
+    } finally {
+      this.loading = false;
+    }
+  },
+
+  // ---- Multi-folder library management -----------------------------------
+
+  // Remove a scanned folder and every track that lives inside it.
+  async removeRoot(root) {
+    this.roots = this.roots.filter((r) => normPath(r) !== normPath(root));
+    const removed = this.songs.filter((s) => isUnderRoot(s.path, root));
+    if (removed.length) {
+      const removedSet = new Set(removed.map((s) => s.path));
+      // Stop playback if the current track is being removed.
+      if (this.currentSong && removedSet.has(this.currentSong.path)) {
+        this.isPlaying = false;
+        this.currentSong = null;
+        this.currentTime = 0;
+        this.duration = 0;
+        try {
+          await invoke('player_stop');
+        } catch {
+          /* ignore */
+        }
+      }
+      this.queue = this.queue.filter((s) => !removedSet.has(s.path));
+      this.songs = this.songs.filter((s) => !removedSet.has(s.path));
+      this.favorites = this.favorites.filter((p) => !removedSet.has(p));
+      this.playlists.forEach((pl) => {
+        pl.paths = pl.paths.filter((p) => !removedSet.has(p));
+      });
+    }
+    await this.persist();
+    await this.persistState();
+    this.scanCount = this.songs.length;
+    this.statusMessage = `Removed folder: ${root}`;
+    this.watchRoots();
+  },
+
+  // Re-scan all roots, merging any newly-added files and pruning files that no
+  // longer exist on disk. Lightweight — does not touch unchanged tracks.
+  async refreshLibrary() {
+    if (this.roots.length === 0) return;
+    this.loading = true;
+    this.statusMessage = 'Refreshing library...';
+    try {
+      const existingPaths = new Set(this.songs.map((s) => s.path));
+      let merged = this.songs;
+      for (const root of this.roots) {
+        const result = await invoke('scan_music_folder', {
+          path: root,
+          useParallelism: this.useParallelism,
+        });
+        const newSongs = result.filter((s) => !existingPaths.has(s.path));
+        newSongs.forEach((s) => existingPaths.add(s.path));
+        if (newSongs.length) merged = [...merged, ...newSongs];
+      }
+
+      // Prune tracks whose files were deleted.
+      try {
+        const alive = new Set(await invoke('filter_existing', { paths: merged.map((s) => s.path) }));
+        merged = merged.filter((s) => alive.has(s.path));
+      } catch {
+        /* backend prune unavailable — keep all */
+      }
+
+      this.songs = sortTracks(merged);
+      this.queue = this.queue.filter((s) => this.songs.some((x) => x.path === s.path));
+      await this.persist();
+      this.scanCount = this.songs.length;
+      this.scanComplete = true;
+      this.statusMessage = `Library refreshed — ${this.songs.length} tracks`;
+    } catch (e) {
+      this.statusMessage = `Error: ${e}`;
+    } finally {
+      this.loading = false;
+    }
+  },
+
+  // Wipe and rebuild the library from scratch by re-scanning every root.
+  async reindexLibrary() {
+    if (this.roots.length === 0) return;
+    this.loading = true;
+    this.statusMessage = 'Reindexing...';
+    const startTime = performance.now();
+    try {
+      const collected = [];
+      const seen = new Set();
+      for (const root of this.roots) {
+        const result = await invoke('scan_music_folder', {
+          path: root,
+          useParallelism: this.useParallelism,
+        });
+        for (const s of result) {
+          if (!seen.has(s.path)) {
+            seen.add(s.path);
+            collected.push(s);
+          }
+        }
+      }
+      this.songs = sortTracks(collected);
+      this.queue = this.queue.filter((s) => seen.has(s.path));
+      await this.persist();
+      const secs = ((performance.now() - startTime) / 1000).toFixed(2);
+      this.scanCount = this.songs.length;
+      this.scanComplete = true;
+      this.statusMessage = `Reindexed ${this.songs.length} tracks in ${secs}s`;
+    } catch (e) {
+      this.statusMessage = `Error: ${e}`;
+    } finally {
+      this.loading = false;
+    }
+  },
+
+  // (Re)configure the native filesystem watcher to cover the current roots so
+  // the library auto-updates when files change outside the app.
+  watchRoots() {
+    invoke('watch_roots', { roots: [...this.roots] }).catch(() => {});
+  },
+
+  // ---- Audio output device ----------------------------------------------
+
+  async setOutputDevice(name) {
+    this.outputDevice = name || null;
+    try {
+      await invoke('set_output_device', { name: this.outputDevice });
+    } catch (e) {
+      console.error('Failed to set output device', e);
+    }
+    this.persistState();
+    // Reload the current track on the new device, preserving position/play state.
+    if (this.currentSong) {
+      this.pendingSeek = this.currentTime || 0;
+      this.pendingAutoplay = this.isPlaying;
+      this.currentSong = { ...this.currentSong };
+    }
+  },
+
+  // ---- Normalization / transition settings -------------------------------
+
+  setNormalizationEnabled(v) {
+    this.normalizationEnabled = !!v;
+    this.persistState();
+  },
+  setNormalizationPreamp(v) {
+    this.normalizationPreampDb = Number(v) || 0;
+    this.persistState();
+  },
+  setTransitionMode(v) {
+    this.transitionMode = v;
+    this.persistState();
+  },
+  setCrossfadeSecs(v) {
+    this.crossfadeSecs = Math.max(1, Math.min(12, Number(v) || 6));
+    this.persistState();
+  },
+  setMusixmatchToken(v) {
+    this.musixmatchToken = String(v || '').trim();
+    this.persistState();
+  },
+  setLyricsSource(v) {
+    this.lyricsSource = String(v || 'lrclib');
+    this.persistState();
+  },
+
+  // ---- Fullscreen Now-Playing --------------------------------------------
+
+  openFullscreen() {
+    if (this.currentSong) this.fullscreenOpen = true;
+  },
+  closeFullscreen() {
+    this.fullscreenOpen = false;
+  },
+  toggleFullscreen() {
+    if (this.fullscreenOpen) this.fullscreenOpen = false;
+    else this.openFullscreen();
   },
 
   closePopup() {
@@ -607,6 +900,26 @@ export const store = reactive({
     this.persistState();
   },
 
+  // Seek the current track to `time` seconds. Shared by the player bar, the
+  // fullscreen player and lyric-line clicks. Handles the finished-track case by
+  // reloading at the requested position.
+  async seek(time) {
+    const t = Math.max(0, Number(time) || 0);
+    this.currentTime = t;
+    this.lastSeekAt = Date.now();
+    if (this.playbackFinished && this.currentSong) {
+      this.pendingSeek = t;
+      this.pendingAutoplay = true;
+      this.playSong(this.currentSong);
+    } else {
+      try {
+        await invoke('player_seek', { position: t });
+      } catch (e) {
+        console.error('Seek failed', e);
+      }
+    }
+  },
+
   setVolume(val) {
     const num = parseFloat(val);
     this.volume = num;
@@ -663,6 +976,23 @@ export const store = reactive({
       pick = this.songs[Math.floor(Math.random() * this.songs.length)];
     } while (currentPath && pick.path === currentPath && ++tries < 10);
     return pick;
+  },
+
+  // Path of the track that will play next under the current queue/loop settings,
+  // or null when it's unpredictable (shuffle / autoplay-random). Used to
+  // pre-decode the next track for gapless playback.
+  nextUpPath() {
+    if (!this.currentSong || this.queue.length === 0) return null;
+    if (this.loopMode === 2) return this.currentSong.path; // repeat-one
+    if (this.shuffleMode) return null;
+    const i = this.queue.findIndex((s) => s.path === this.currentSong.path);
+    if (i < 0) return null;
+    let n = i + 1;
+    if (n >= this.queue.length) {
+      if (this.loopMode === 1) n = 0;
+      else return null; // end of queue (autoplay picks a random track)
+    }
+    return this.queue[n] ? this.queue[n].path : null;
   },
 
   get filteredSongs() {

@@ -1,10 +1,10 @@
 <template>
-  <div class="flex items-center justify-between py-3">
-    <span class="text-gray-300 font-medium">{{ label }}</span>
+  <div class="flex items-center justify-between py-2.5">
+    <span class="text-gray-300 font-medium text-sm">{{ label }}</span>
     <button
       @click="toggle"
-      class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:ring-offset-gray-900"
-      :class="modelValue ? 'bg-indigo-600' : 'bg-gray-700'"
+      class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none shrink-0"
+      :class="modelValue ? 'bg-[var(--accent-color)]' : 'bg-gray-700'"
     >
       <span
         class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform"

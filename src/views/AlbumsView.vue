@@ -26,6 +26,7 @@ const albums = computed(() => {
 });
 
 function openAlbum(albumName, event) {
+  store.selectedAlbum = albumName;
   const coverEl = event.currentTarget.querySelector('.cover-image');
   navigateWithTransition(
     () => router.push({ name: 'AlbumDetail', params: { name: albumName } }),
@@ -36,6 +37,7 @@ function openAlbum(albumName, event) {
 }
 
 function playAlbum(albumName) {
+  store.selectedAlbum = albumName;
   const songs = store.songs.filter((s) => s.album === albumName);
   songs.sort((a, b) => (a.track_number || 0) - (b.track_number || 0));
   if (songs.length > 0) {

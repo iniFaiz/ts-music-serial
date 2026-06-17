@@ -12,13 +12,14 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "ts-music",
         "width": 1200,
         "height": 700,
         "minWidth": 720,
         "minHeight": 480,
         "decorations": false,
-        "dragDropEnabled": false
+        "dragDropEnabled": true
       }
     ],
     "security": {

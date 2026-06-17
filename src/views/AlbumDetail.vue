@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { store } from '../store';
 import SongList from '../components/SongList.vue';
@@ -10,6 +10,10 @@ const route = useRoute();
 const router = useRouter();
 const albumName = route.params.name;
 const coverRef = ref(null);
+
+onMounted(() => {
+  store.selectedAlbum = albumName;
+});
 
 const albumSongs = computed(() => {
   return store.songs

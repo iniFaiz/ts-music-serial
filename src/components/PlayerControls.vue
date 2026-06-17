@@ -3,8 +3,11 @@ import { ref, watch, onMounted, onUnmounted, computed } from 'vue';
 import { store } from '../store';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import CoverImage from './CoverImage.vue';
 import Visualizer from './Visualizer.vue';
+
+const appWindow = getCurrentWindow();
 
 // Playback is handled natively in Rust (rodio + symphonia). This component just
 // issues commands and polls the backend for the current position/duration.
@@ -12,6 +15,28 @@ const seekValue = ref(0);
 const playbackError = ref(null);
 
 const losslessPopupOpen = ref(false);
+
+const openFullScreen = () => {
+  if (store.fullscreenOpen) {
+    store.closeFullscreen();
+    setTimeout(() => {
+      try {
+        appWindow.setFullscreen(false);
+      } catch (err) {
+        console.warn("Tauri fullscreen restore error:", err);
+      }
+    }, 50);
+  } else {
+    store.openFullscreen();
+    setTimeout(() => {
+      try {
+        appWindow.setFullscreen(true);
+      } catch (err) {
+        console.warn("Tauri fullscreen error:", err);
+      }
+    }, 50);
+  }
+};
 
 const isLossless = computed(() => {
   if (!store.currentSong || !store.currentSong.path) return false;
@@ -49,7 +74,8 @@ const volumePercentage = computed(() => {
 
 let pollTimer = null;
 let stateTimer = null;
-let lastSeekAt = 0; // suppress poll overwriting the slider right after a seek
+// Seek suppression timestamp lives on the store (store.lastSeekAt) so the
+// fullscreen player and lyric-click seeks suppress this poll too.
 let endedHandledFor = null; // latch so a finished track only advances once
 let loadToken = 0; // guards against a stale load winning after a rapid skip
 
@@ -74,13 +100,19 @@ watch(
     store.currentTime = startPos;
     seekValue.value = startPos;
 
+    // Set the normalization factor before loading so the initial volume is
+    // already corrected for this track.
+    await applyNormalization(song);
+
     try {
+      const fadeIn = store.transitionMode === 'crossfade' ? store.crossfadeSecs : 0;
       const info = await invoke('player_load', {
         path: song.path,
         volume: store.isMuted ? 0 : store.volume,
         startAt,
         autoplay,
         durationHint: song.duration_secs || 0,
+        fadeInSecs: fadeIn,
       });
       if (token !== loadToken) return; // a newer track was selected meanwhile
       store.duration = info.duration || 0;
@@ -91,6 +123,15 @@ watch(
       store.isPlaying = autoplay;
       pushMediaMetadata(song);
       pushMediaPlayback();
+
+      // Gapless/crossfade: pre-decode the next track so the upcoming switch has
+      // no decode gap. No-op for shuffle / end-of-queue (unpredictable next).
+      if (store.transitionMode !== 'off') {
+        const np = store.nextUpPath();
+        if (np && np !== song.path) {
+          invoke('player_prepare_next', { path: np }).catch(() => {});
+        }
+      }
     } catch (err) {
       if (token !== loadToken) return;
       playbackError.value = String(err);
@@ -133,6 +174,57 @@ const pushMediaPlayback = () => {
     position: store.currentTime || 0,
   }).catch(() => {});
 };
+
+// ---- Volume normalization (Sound Check) -------------------------------------
+// Push the per-track gain to the backend. Uses the ReplayGain tag when present,
+// otherwise kicks off a one-time background loudness analysis and re-applies.
+const applyNormalization = async (song) => {
+  if (!song) return;
+  const enabled = store.normalizationEnabled;
+  let gain = null;
+  let peak = null;
+  if (enabled && typeof song.track_gain_db === 'number') {
+    gain = song.track_gain_db;
+    peak = typeof song.track_peak === 'number' ? song.track_peak : null;
+  }
+  try {
+    await invoke('player_set_normalization', {
+      gainDb: gain,
+      preampDb: store.normalizationPreampDb,
+      peak,
+      enabled,
+    });
+  } catch {
+    // ignore — normalization is best-effort
+  }
+  // No tag gain: compute loudness in the background, then re-apply if still current.
+  if (enabled && gain == null) {
+    invoke('compute_track_gain', { path: song.path })
+      .then((g) => {
+        if (
+          store.currentSong &&
+          store.currentSong.path === song.path &&
+          store.normalizationEnabled
+        ) {
+          invoke('player_set_normalization', {
+            gainDb: g,
+            preampDb: store.normalizationPreampDb,
+            peak: null,
+            enabled: true,
+          }).catch(() => {});
+        }
+      })
+      .catch(() => {});
+  }
+};
+
+// Re-apply when the normalization settings change mid-playback.
+watch(
+  () => [store.normalizationEnabled, store.normalizationPreampDb],
+  () => {
+    if (store.currentSong) applyNormalization(store.currentSong);
+  }
+);
 
 let unlistenMedia = null;
 
@@ -192,27 +284,14 @@ watch(
 // While dragging: update the visible time only, and keep the poll from snapping
 // the thumb back to the old position.
 const onSeekInput = () => {
-  lastSeekAt = Date.now();
+  store.lastSeekAt = Date.now();
   store.currentTime = Number(seekValue.value);
 };
 
-// On release: issue a single seek command (range v-model yields a string, so
-// coerce to a number for the f64 backend arg).
-const onSeekCommit = async () => {
-  const time = Number(seekValue.value);
-  store.currentTime = time;
-  lastSeekAt = Date.now();
-  if (store.playbackFinished && store.currentSong) {
-    store.pendingSeek = time;
-    store.pendingAutoplay = true;
-    store.playSong(store.currentSong);
-  } else {
-    try {
-      await invoke('player_seek', { position: time });
-    } catch (err) {
-      playbackError.value = String(err);
-    }
-  }
+// On release: issue a single seek command via the shared store action (handles
+// the finished-track reload case and the seek-suppression timestamp).
+const onSeekCommit = () => {
+  store.seek(Number(seekValue.value));
 };
 
 const handleTrackEnded = async () => {
@@ -248,7 +327,7 @@ const poll = async () => {
   try {
     const status = await invoke('player_status');
     if (status.duration > 0) store.duration = status.duration;
-    if (Date.now() - lastSeekAt > 500) {
+    if (Date.now() - store.lastSeekAt > 500) {
       if (status.finished) {
         store.currentTime = store.duration;
         seekValue.value = store.duration;
@@ -274,7 +353,7 @@ const closeLosslessPopup = () => {
 };
 
 onMounted(async () => {
-  pollTimer = setInterval(poll, 300);
+  pollTimer = setInterval(poll, 100);
   // Checkpoint playback position periodically so resume-on-launch is accurate.
   stateTimer = setInterval(() => {
     if (store.currentSong) store.persistState();
@@ -468,10 +547,16 @@ const formatTime = (seconds) => {
         >
           <!-- Group container: CoverImage on left, Lossless Badge on right, both aligned to top -->
           <div class="hidden sm:flex items-start shrink-0 gap-1.5 relative">
-            <CoverImage
-              :path="store.currentSong.path"
-              className="h-8 w-8 md:h-10 md:w-10 rounded shadow-sm bg-[#333]"
-            />
+            <button
+              @click="openFullScreen()"
+              class="shrink-0 rounded overflow-hidden hover:opacity-90 transition focus:outline-none"
+              title="Open full screen (Ctrl+Shift+F)"
+            >
+              <CoverImage
+                :path="store.currentSong.path"
+                className="h-8 w-8 md:h-10 md:w-10 rounded shadow-sm bg-[#333]"
+              />
+            </button>
 
             <!-- Lossless Badge Container -->
             <div v-if="isLossless" class="relative mt-0.5 shrink-0">
@@ -599,9 +684,34 @@ const formatTime = (seconds) => {
         <!-- Real-time audio visualizer (reacts to the playing track) -->
         <Visualizer v-if="store.visualizerEnabled && store.currentSong" />
 
+        <!-- Lyrics panel toggle -->
+        <button
+          v-if="store.currentSong"
+          @click="store.queuePanelOpen = false; store.lyricsPanelOpen = !store.lyricsPanelOpen"
+          class="transition hover:text-white"
+          :class="store.lyricsPanelOpen ? 'text-[var(--accent-color)]' : 'text-gray-400'"
+          title="Lyrics"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
+            <line x1="8.5" y1="10" x2="13.5" y2="10" />
+            <line x1="8.5" y1="13.5" x2="11.5" y2="13.5" />
+          </svg>
+        </button>
+
         <!-- Queue toggle (with an ∞ badge when unlimited autoplay is on) -->
         <button
-          @click="store.queuePanelOpen = !store.queuePanelOpen"
+          @click="store.lyricsPanelOpen = false; store.queuePanelOpen = !store.queuePanelOpen"
           class="transition hover:text-white relative"
           :class="store.queuePanelOpen ? 'text-[var(--accent-color)]' : 'text-gray-400'"
           title="Queue"
