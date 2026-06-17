@@ -1,13 +1,15 @@
 <script setup>
-import { computed } from 'vue';
+import { ref, computed } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { store } from '../store';
 import SongList from '../components/SongList.vue';
 import CoverImage from '../components/CoverImage.vue';
+import { navigateWithTransition } from '../viewTransition';
 
 const route = useRoute();
 const router = useRouter();
 const albumName = route.params.name;
+const coverRef = ref(null);
 
 const albumSongs = computed(() => {
   return store.songs
@@ -51,7 +53,16 @@ const shuffleAlbum = () => {
 
 const goToArtist = () => {
   if (albumInfo.value.artist) {
-    router.push({ name: 'ArtistDetail', params: { name: albumInfo.value.artist } });
+    const el = coverRef.value ? (coverRef.value.querySelector('.cover-image') || coverRef.value) : null;
+    if (el) {
+      navigateWithTransition(
+        () => router.push({ name: 'ArtistDetail', params: { name: albumInfo.value.artist } }),
+        el,
+        'shared-cover'
+      );
+    } else {
+      router.push({ name: 'ArtistDetail', params: { name: albumInfo.value.artist } });
+    }
   }
 };
 </script>
@@ -61,7 +72,7 @@ const goToArtist = () => {
     <!-- Header -->
     <div class="p-8 flex gap-8 items-end bg-gradient-to-b from-[#2a2a2a] to-[var(--app-bg)]">
       <!-- Cover -->
-      <div class="relative shadow-2xl h-52 w-52 shrink-0 group">
+      <div ref="coverRef" class="relative shadow-2xl h-52 w-52 shrink-0 group">
         <CoverImage
           :path="albumInfo.coverPath"
           className="h-full w-full rounded-md shadow-lg"

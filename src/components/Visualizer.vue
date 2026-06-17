@@ -1,7 +1,8 @@
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue';
+import { ref, watch, onMounted, onUnmounted } from 'vue';
 import { store } from '../store';
 import { invoke } from '@tauri-apps/api/core';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 
 // Real-time 7-bar spectrum visualizer. The backend analyzes audio into 6 bands;
 // we map these onto a beautiful 7-bar Apple-style equalizer.
@@ -11,12 +12,18 @@ const BAR_COUNT = 7;
 const PLAYING_ENVELOPE = [0.7, 0.85, 1.0, 0.9, 0.8, 0.65, 0.5]; // preserves the curved shape at peak levels
 const POLL_MS = 33; // ~30 Hz backend polling; rendering still runs at full rAF rate
 
-const heights = ref(Array(BAR_COUNT).fill(0.0)); // start flat (all the way down)
-const targets = new Array(BAR_COUNT).fill(0.0);  // start targets flat
+const canvasRef = ref(null);
+
+// Plain JS arrays — no Vue reactivity overhead here!
+const heights = new Array(BAR_COUNT).fill(0.0);
+const targets = new Array(BAR_COUNT).fill(0.0);
 
 let rafId = null;
 let inflight = false;
 let lastPoll = 0;
+let isVisible = null; // Unset initially to force the first updateVisibilityState to run
+let pollTimer = null;
+const appWindow = getCurrentWindow();
 
 // Linear interpolation to map 6 backend bands to 7 visualizer bars
 const mapBandsTo7 = (vals) => {
@@ -31,8 +38,83 @@ const mapBandsTo7 = (vals) => {
   return mapped;
 };
 
+// Update active state based on visibility/minimize
+const updateVisibilityState = (visible) => {
+  if (visible === isVisible) return;
+  isVisible = visible;
+
+  // Tell Rust backend to enable/disable FFT computation
+  invoke('player_set_spectrum_enabled', { enabled: visible && store.visualizerEnabled }).catch(() => {});
+
+  if (visible) {
+    // Only resume animation loop if the player is playing, or if we need to settle to 0
+    if (!rafId && (store.isPlaying || heights.some(h => h > 0))) {
+      rafId = requestAnimationFrame(tick);
+    }
+  } else {
+    // Stop animation loop completely to save CPU
+    if (rafId) {
+      cancelAnimationFrame(rafId);
+      rafId = null;
+    }
+    // Instantly collapse heights to 0 and redraw
+    for (let i = 0; i < BAR_COUNT; i++) {
+      heights[i] = 0.0;
+      targets[i] = 0.0;
+    }
+    draw();
+  }
+};
+
+// Periodic check for window minimized state
+const checkWindowStatus = async () => {
+  try {
+    const minimized = await appWindow.isMinimized();
+    const docHidden = document.visibilityState === 'hidden';
+    // The window is visible only if it is NOT minimized AND document is NOT hidden
+    const visible = !minimized && !docHidden;
+    updateVisibilityState(visible);
+  } catch (e) {
+    // ignore
+  }
+};
+
+const draw = () => {
+  const canvas = canvasRef.value;
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+
+  const width = 33;
+  const height = 40;
+
+  // Clear context
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = '#ffffff';
+
+  const barWidth = 2.5;
+  const gap = 2.5;
+  const minHeight = 2.5; // Matches barWidth so that idle state is a perfect circle
+
+  for (let i = 0; i < BAR_COUNT; i++) {
+    const hFactor = heights[i];
+    const barHeight = Math.max(minHeight, hFactor * height);
+    const x = i * (barWidth + gap);
+    const y = height - barHeight;
+
+    ctx.beginPath();
+    ctx.roundRect(x, y, barWidth, barHeight, barWidth / 2);
+    ctx.fill();
+  }
+};
+
 const tick = (now) => {
-  rafId = requestAnimationFrame(tick);
+  if (isVisible) {
+    // We conditionally reschedule the next frame at the end of the tick
+  } else {
+    rafId = null;
+    return;
+  }
 
   if (store.isPlaying) {
     // Throttle the IPC poll; a single request is kept in flight at a time.
@@ -60,34 +142,101 @@ const tick = (now) => {
     }
   }
 
-  // Ease each bar toward its target with a low-pass easing (0.18) for a liquid, non-jittery flow.
-  const h = heights.value;
+  // Ease each bar toward its target.
+  const easeFactor = store.isPlaying ? 0.22 : 0.08;
+  let hasChanged = false;
+
   for (let i = 0; i < BAR_COUNT; i++) {
     const t = targets[i];
-    h[i] += (t - h[i]) * 0.18;
+    const diff = t - heights[i];
+    if (Math.abs(diff) > 1e-4) {
+      heights[i] += diff * easeFactor;
+      hasChanged = true;
+    } else {
+      heights[i] = t;
+    }
+  }
+
+  // Draw the updated heights on the canvas
+  draw();
+
+  // Optimize: stop the requestAnimationFrame loop entirely once the bars have fully settled to 0
+  // to avoid consuming any CPU while the player is paused/stopped.
+  if (store.isPlaying || hasChanged) {
+    rafId = requestAnimationFrame(tick);
+  } else {
+    rafId = null;
   }
 };
 
-onMounted(() => {
-  rafId = requestAnimationFrame(tick);
-});
+// Watch play state to restart the tick loop when music starts
+watch(
+  () => store.isPlaying,
+  (playing) => {
+    if (playing && isVisible && !rafId) {
+      rafId = requestAnimationFrame(tick);
+    }
+  }
+);
 
-onUnmounted(() => {
-  if (rafId) cancelAnimationFrame(rafId);
+const setupCanvas = () => {
+  const canvas = canvasRef.value;
+  if (!canvas) return;
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = 33 * dpr;
+  canvas.height = 40 * dpr;
+  const ctx = canvas.getContext('2d');
+  if (ctx) {
+    ctx.scale(dpr, dpr);
+  }
+  draw();
+};
+
+onMounted(async () => {
+  setupCanvas();
+
+  // Listen to visibilitychange event
+  document.addEventListener('visibilitychange', checkWindowStatus);
+
+  // Listen to Tauri blur/focus events for prompt responsiveness
+  let unlistenBlur, unlistenFocus;
+  try {
+    unlistenBlur = await appWindow.listen('tauri://blur', checkWindowStatus);
+    unlistenFocus = await appWindow.listen('tauri://focus', checkWindowStatus);
+  } catch (e) {
+    // ignore
+  }
+
+  // Check state every 300ms as a fallback for OS-level minimization
+  pollTimer = setInterval(checkWindowStatus, 300);
+
+  // Initial check
+  await checkWindowStatus();
+
+  // If initial check starts in active playback, make sure loop runs
+  if (store.isPlaying && isVisible && !rafId) {
+    rafId = requestAnimationFrame(tick);
+  }
+
+  onUnmounted(() => {
+    document.removeEventListener('visibilitychange', checkWindowStatus);
+    if (pollTimer) clearInterval(pollTimer);
+    if (unlistenBlur) unlistenBlur();
+    if (unlistenFocus) unlistenFocus();
+    if (rafId) {
+      cancelAnimationFrame(rafId);
+      rafId = null;
+    }
+  });
 });
 </script>
 
 <template>
-  <div
-    class="flex items-end gap-[3px] h-[30px] shrink-0 mr-3 translate-y-[-3px]"
+  <canvas
+    ref="canvasRef"
+    class="mr-3 shrink-0 translate-y-[-16px]"
+    style="width: 33px; height: 55px;"
     :title="store.isPlaying ? 'Now playing' : 'Audio visualizer'"
     aria-hidden="true"
-  >
-    <div
-      v-for="(h, i) in heights"
-      :key="i"
-      class="w-[2px] rounded-full bg-white origin-bottom"
-      :style="{ height: Math.max(15, Math.min(100, h * 100)) + '%' }"
-    ></div>
-  </div>
+  ></canvas>
 </template>

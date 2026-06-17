@@ -62,3 +62,47 @@ body {
 ::view-transition-group(player-bar) {
   z-index: 999;
 }
+
+/* Custom keyframes for border-radius morphing */
+@keyframes morph-to-circle {
+  from {
+    border-radius: 8px;
+  }
+  to {
+    border-radius: 50%;
+  }
+}
+
+@keyframes morph-to-square {
+  from {
+    border-radius: 50%;
+  }
+  to {
+    border-radius: 8px;
+  }
+}
+
+@keyframes fade-out-vt {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@keyframes fade-in-vt {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Custom View Transitions for morphing shape (square to circle) */
+.to-artist-transition ::view-transition-old(shared-cover) {
+  animation: fade-out-vt 0.42s both, morph-to-circle 0.42s cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+.to-artist-transition ::view-transition-new(shared-cover) {
+  animation: fade-in-vt 0.42s both, morph-to-circle 0.42s cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+
+.to-album-transition ::view-transition-old(shared-cover) {
+  animation: fade-out-vt 0.42s both, morph-to-square 0.42s cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+.to-album-transition ::view-transition-new(shared-cover) {
+  animation: fade-in-vt 0.42s both, morph-to-square 0.42s cubic-bezier(0.32, 0.72, 0, 1) both;
+}

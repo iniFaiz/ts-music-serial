@@ -13,6 +13,7 @@ export async function navigateWithTransition(navigate, sourceEl, name = 'shared-
     return;
   }
 
+  document.documentElement.classList.add('to-artist-transition');
   const prev = sourceEl.style.viewTransitionName;
   sourceEl.style.viewTransitionName = name;
 
@@ -27,6 +28,7 @@ export async function navigateWithTransition(navigate, sourceEl, name = 'shared-
   } finally {
     // Release the name so the list element can't clash on the next capture.
     sourceEl.style.viewTransitionName = prev;
+    document.documentElement.classList.remove('to-artist-transition');
   }
 }
 
@@ -58,6 +60,7 @@ export async function goBackWithTransition(router, name = 'shared-cover') {
     return;
   }
 
+  document.documentElement.classList.add('to-album-transition');
   let tagged = null;
   const transition = document.startViewTransition(async () => {
     // Wait until the route change actually settles (keep-alive restores the list
@@ -86,5 +89,6 @@ export async function goBackWithTransition(router, name = 'shared-cover') {
       tagged.style.viewTransitionName = tagged.dataset._prevVt || '';
       delete tagged.dataset._prevVt;
     }
+    document.documentElement.classList.remove('to-album-transition');
   }
 }

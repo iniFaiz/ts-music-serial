@@ -350,10 +350,8 @@ const SPECTRUM_BANDS: usize = 6;
 // Loudness window (in ~dBFS) mapped onto the 0..1 bar range. Magnitudes quieter
 // than DB_MIN read as an empty bar, DB_MAX (and above) as a full one. Widen or
 // shift these if bars sit too low/high across your library.
-const SPECTRUM_DB_MIN: f32 = -70.0;
-const SPECTRUM_DB_MAX: f32 = 0.0;
-const SPECTRUM_ATTACK: f32 = 0.65; // how quickly a bar rises toward a louder value
-const SPECTRUM_DECAY: f32 = 0.16; // how slowly it falls back (springy feel)
+const SPECTRUM_ATTACK: f32 = 0.75; // how quickly a bar rises toward a louder value
+const SPECTRUM_DECAY: f32 = 0.18; // how slowly it falls back (springy feel)
 
 // Lock-free hand-off of the latest band levels from the audio thread to the
 // `player_spectrum` command: each band is an f32 kept as its bit pattern.
@@ -488,7 +486,10 @@ impl<S: Source> SpectrumSource<S> {
         let rms = (energy / n as f32).sqrt();
         fft_in_place(&mut self.re, &mut self.im);
 
-        // Silence gate: keep the noise floor from making the bars twitch.
+        // Equalization gains to compensate for high-frequency roll-off (pink noise nature)
+        // and make all bands react with satisfying height.
+        let gains = [1.6f32, 2.2, 2.8, 3.4, 4.0, 4.6];
+
         let mut targets = [0.0f32; SPECTRUM_BANDS];
         if rms > 1e-4 {
             for (b, &(lo, hi)) in self.band_bins.iter().enumerate() {
@@ -499,11 +500,8 @@ impl<S: Source> SpectrumSource<S> {
                         peak = mag;
                     }
                 }
-                // Normalize so a full-scale tone ≈ 0 dBFS, then map the dB window.
                 let norm = peak / (n as f32 * 0.5);
-                let db = 20.0 * (norm + 1e-9).log10();
-                targets[b] =
-                    ((db - SPECTRUM_DB_MIN) / (SPECTRUM_DB_MAX - SPECTRUM_DB_MIN)).clamp(0.0, 1.0);
+                targets[b] = (norm * gains[b]).clamp(0.0, 1.0).sqrt();
             }
         }
 

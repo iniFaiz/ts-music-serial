@@ -30,8 +30,8 @@
         />
 
         <p class="text-sm text-gray-400 mt-2">
-          Show the six-bar spectrum next to the player controls, reacting to the playing track in
-          real time. Disable it to skip the audio analysis entirely.
+          Show the seven-bar spectrum next to the player controls, reacting to the playing track in
+          real time. (Note: Real-time audio analysis and visualizer rendering can increase CPU usage. Disable this if you experience performance issues.)
         </p>
       </div>
     </div>

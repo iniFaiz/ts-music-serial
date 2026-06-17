@@ -27,7 +27,11 @@ router.afterEach((to) => {
     if (scrollContainer.value) {
       const container =
         scrollContainer.value.querySelector('.overflow-auto') || scrollContainer.value;
-      const pos = scrollPositions.get(to.fullPath) || 0;
+      
+      // Detail pages should always start scrolled to the top
+      const isDetailPage = ['AlbumDetail', 'ArtistDetail', 'PlaylistDetail'].includes(to.name);
+      const pos = isDetailPage ? 0 : (scrollPositions.get(to.fullPath) || 0);
+
       const originalBehavior = container.style.scrollBehavior;
       container.style.scrollBehavior = 'auto';
       container.scrollTop = pos;
