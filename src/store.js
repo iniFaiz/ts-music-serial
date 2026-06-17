@@ -31,6 +31,9 @@ export const store = reactive({
   queue: [],
   loopMode: 0,
   shuffleMode: false,
+  // Unlimited queue (autoplay): when the queue is exhausted, keep playing by
+  // appending random tracks from the library — like Apple Music's ∞ autoplay.
+  autoplayMode: false,
 
   // Liked songs (array of file paths) and user playlists.
   favorites: [],
@@ -68,6 +71,7 @@ export const store = reactive({
           volume: this.volume,
           loopMode: this.loopMode,
           shuffleMode: this.shuffleMode,
+          autoplayMode: this.autoplayMode,
         },
       });
     } catch (e) {
@@ -140,6 +144,7 @@ export const store = reactive({
     if (typeof pb.volume === 'number') this.volume = pb.volume;
     this.loopMode = pb.loopMode || 0;
     this.shuffleMode = !!pb.shuffleMode;
+    this.autoplayMode = !!pb.autoplayMode;
 
     const byPath = new Map(this.songs.map((s) => [s.path, s]));
     if (Array.isArray(pb.queuePaths)) {
@@ -256,19 +261,21 @@ export const store = reactive({
     return this.queue.findIndex((s) => s.path === this.currentSong.path);
   },
 
-  // Insert right after the current track so it plays next.
+  // Insert right after the current track so it plays next. Clone so the same
+  // song queued twice stays a distinct entry (stable, unique key for the UI).
   playNext(song) {
+    const entry = { ...song };
     if (this.queue.length === 0) {
-      this.queue = this.currentSong ? [this.currentSong, song] : [song];
+      this.queue = this.currentSong ? [this.currentSong, entry] : [entry];
     } else {
       const idx = this.currentQueueIndex();
-      this.queue.splice(idx + 1, 0, song);
+      this.queue.splice(idx + 1, 0, entry);
     }
     this.persistState();
   },
 
   addToQueue(songs) {
-    const list = Array.isArray(songs) ? songs : [songs];
+    const list = (Array.isArray(songs) ? songs : [songs]).map((s) => ({ ...s }));
     if (this.queue.length === 0 && this.currentSong) {
       this.queue = [this.currentSong];
     }
@@ -433,6 +440,15 @@ export const store = reactive({
     if (nextIndex >= this.queue.length) {
       if (this.loopMode === 1) {
         nextIndex = 0;
+      } else if (this.autoplayMode) {
+        // Unlimited queue: append a random track and continue into it.
+        const song = this.pickRandomSong();
+        if (!song) {
+          this.isPlaying = false;
+          return;
+        }
+        this.queue.push({ ...song });
+        nextIndex = this.queue.length - 1;
       } else {
         this.isPlaying = false;
         return;
@@ -489,6 +505,25 @@ export const store = reactive({
   toggleShuffle() {
     this.shuffleMode = !this.shuffleMode;
     this.persistState();
+  },
+
+  toggleAutoplay() {
+    this.autoplayMode = !this.autoplayMode;
+    this.persistState();
+  },
+
+  // Pick a random track from the library for unlimited-queue autoplay. Avoids
+  // immediately repeating the current song when the library has alternatives.
+  pickRandomSong() {
+    if (this.songs.length === 0) return null;
+    if (this.songs.length === 1) return this.songs[0];
+    const currentPath = this.currentSong ? this.currentSong.path : null;
+    let pick;
+    let tries = 0;
+    do {
+      pick = this.songs[Math.floor(Math.random() * this.songs.length)];
+    } while (currentPath && pick.path === currentPath && ++tries < 10);
+    return pick;
   },
 
   get filteredSongs() {

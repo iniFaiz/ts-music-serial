@@ -3,6 +3,7 @@ import { store } from './store';
 import PlayerControls from './components/PlayerControls.vue';
 import QueuePanel from './components/QueuePanel.vue';
 import PlaylistCreateModal from './components/PlaylistCreateModal.vue';
+import PlaylistCover from './components/PlaylistCover.vue';
 
 function newPlaylist() {
   store.openPlaylistModal();
@@ -13,7 +14,7 @@ function newPlaylist() {
   <div class="flex h-screen bg-[var(--app-bg)] text-[var(--text-primary)] font-sans overflow-hidden select-none">
     
     <!-- Sidebar -->
-    <nav class="w-64 bg-[var(--sidebar-bg)] border-r border-[var(--border-color)] flex flex-col shrink-0 pt-8 pb-4 px-4 gap-6">
+    <nav class="w-64 bg-[var(--sidebar-bg)] border-r border-[var(--border-color)] flex flex-col shrink-0 pt-8 pb-4 px-4 gap-6" @click="store.queuePanelOpen = false">
       <!-- Search -->
       <div class="relative">
         <span class="absolute text-gray-500 -translate-y-1/2 left-3 top-1/2">
@@ -71,9 +72,9 @@ function newPlaylist() {
             :key="pl.id"
             :to="'/playlists/' + pl.id"
             active-class="bg-[#282828] text-white"
-            class="flex items-center gap-3 px-3 py-1.5 rounded-md text-sm text-[var(--text-secondary)] hover:text-white hover:bg-[#282828] transition-colors"
+            class="flex items-center gap-3 px-2 py-1.5 rounded-md text-sm text-[var(--text-secondary)] hover:text-white hover:bg-[#282828] transition-colors"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
+            <PlaylistCover :name="pl.name" :cover="pl.cover" :size="28" className="h-7 w-7 rounded shrink-0" />
             <span class="truncate">{{ pl.name }}</span>
           </router-link>
           <div v-if="store.playlists.length === 0" class="px-3 py-1 text-[11px] text-gray-600">
@@ -111,7 +112,7 @@ function newPlaylist() {
       <PlayerControls />
 
       <main class="flex-1 relative overflow-hidden flex flex-col bg-[var(--app-bg)]">
-        <div class="flex-1 overflow-auto scroll-smooth">
+        <div class="flex-1 overflow-auto scroll-smooth" @click="store.queuePanelOpen = false">
           <router-view v-slot="{ Component }">
             <keep-alive :include="['SongsView', 'AlbumsView', 'ArtistsView']">
               <component :is="Component" />
@@ -120,7 +121,7 @@ function newPlaylist() {
         </div>
 
         <!-- Up-next queue drawer -->
-        <QueuePanel />
+        <QueuePanel @click.stop />
       </main>
     </div>
 

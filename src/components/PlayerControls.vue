@@ -256,8 +256,8 @@ const formatTime = (seconds) => {
         <!-- Shuffle -->
         <button 
           @click="store.toggleShuffle()" 
-          class="transition hover:text-white"
-          :class="store.shuffleMode ? 'text-[var(--accent-color)]' : 'text-gray-400'"
+          class="transition"
+          :class="store.shuffleMode ? 'text-[var(--accent-color)]' : 'text-gray-400 hover:text-white'"
           title="Shuffle"
         >
           <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg>
@@ -286,8 +286,8 @@ const formatTime = (seconds) => {
         <!-- Loop -->
         <button 
           @click="store.toggleLoop()" 
-          class="transition hover:text-white relative"
-          :class="store.loopMode > 0 ? 'text-[var(--accent-color)]' : 'text-gray-400'"
+          class="transition relative"
+          :class="store.loopMode > 0 ? 'text-[var(--accent-color)]' : 'text-gray-400 hover:text-white'"
           title="Loop"
         >
           <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 1l4 4-4 4"></path><path d="M3 11V9a4 4 0 0 1 4-4h14"></path><path d="M7 23l-4-4 4-4"></path><path d="M21 13v2a4 4 0 0 1-4 4H3"></path></svg>

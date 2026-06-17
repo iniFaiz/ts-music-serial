@@ -3,7 +3,7 @@ import { computed, ref, nextTick } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { store } from '../store';
 import SongList from '../components/SongList.vue';
-import CoverImage from '../components/CoverImage.vue';
+import PlaylistCover from '../components/PlaylistCover.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -48,11 +48,12 @@ const removePlaylist = () => {
   <div v-if="playlist" class="flex flex-col h-full overflow-auto">
     <!-- Header -->
     <div class="p-8 flex gap-8 items-end bg-gradient-to-b from-[#2a2a2a] to-[var(--app-bg)]">
-      <div class="h-52 w-52 shrink-0 rounded-md shadow-2xl overflow-hidden bg-gradient-to-br from-[#4a4a4a] to-[#1f1f1f] flex items-center justify-center">
-        <img v-if="playlist.cover" :src="playlist.cover" class="w-full h-full object-cover" alt="" />
-        <CoverImage v-else-if="songs.length > 0" :path="songs[0].path" className="w-full h-full" />
-        <svg v-else xmlns="http://www.w3.org/2000/svg" width="72" height="72" viewBox="0 0 24 24" fill="none" stroke="#888" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
-      </div>
+      <PlaylistCover
+        :name="playlist.name"
+        :cover="playlist.cover"
+        :size="208"
+        className="h-52 w-52 rounded-md shadow-2xl"
+      />
 
       <div class="flex flex-col gap-1 pb-2 overflow-hidden flex-1">
         <h4 class="text-sm font-bold text-[var(--accent-color)] uppercase tracking-wider mb-1">Playlist</h4>
