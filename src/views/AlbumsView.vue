@@ -29,7 +29,9 @@ function openAlbum(albumName, event) {
   const coverEl = event.currentTarget.querySelector('.cover-image');
   navigateWithTransition(
     () => router.push({ name: 'AlbumDetail', params: { name: albumName } }),
-    coverEl
+    coverEl,
+    'shared-cover',
+    'to-album-transition'
   );
 }
 

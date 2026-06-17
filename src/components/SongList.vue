@@ -95,7 +95,7 @@ const navigateToArtist = (artistName, event = null) => {
   const coverEl = rowEl ? rowEl.querySelector('.cover-image') : null;
 
   if (coverEl) {
-    navigateWithTransition(navigate, coverEl);
+    navigateWithTransition(navigate, coverEl, 'shared-cover', 'to-artist-transition');
   } else {
     navigate();
   }
@@ -109,7 +109,7 @@ const navigateToAlbum = (albumName, event = null) => {
   const coverEl = rowEl ? rowEl.querySelector('.cover-image') : null;
 
   if (coverEl) {
-    navigateWithTransition(navigate, coverEl);
+    navigateWithTransition(navigate, coverEl, 'shared-cover', 'to-album-transition');
   } else {
     navigate();
   }
@@ -267,9 +267,8 @@ const closeDeleteConfirm = () => {
 };
 
 const executeDelete = async (fromDisk) => {
-  const paths = deleteActionType.value === 'bulk'
-    ? [...selectedSongs.value]
-    : [deleteConfirmSong.value.path];
+  const paths =
+    deleteActionType.value === 'bulk' ? [...selectedSongs.value] : [deleteConfirmSong.value.path];
 
   for (const path of paths) {
     try {
@@ -355,7 +354,7 @@ const showArtist = () => {
   const coverEl = findCoverBySongPath(song.path);
   closeMenu();
   if (coverEl) {
-    navigateWithTransition(navigate, coverEl);
+    navigateWithTransition(navigate, coverEl, 'shared-cover', 'to-artist-transition');
   } else {
     navigate();
   }
@@ -368,7 +367,7 @@ const showAlbum = () => {
   const coverEl = findCoverBySongPath(song.path);
   closeMenu();
   if (coverEl) {
-    navigateWithTransition(navigate, coverEl);
+    navigateWithTransition(navigate, coverEl, 'shared-cover', 'to-album-transition');
   } else {
     navigate();
   }
@@ -479,7 +478,9 @@ onUnmounted(() => {
         @click="selectMode ? toggleSelectSong(song) : playSong(song)"
         @contextmenu.prevent="openMenu(song, $event)"
         class="song-row grid gap-4 py-2 px-2 rounded-md hover:bg-[#2a2a2a] group items-center transition-colors cursor-pointer grid-cols-[20px_3fr_2fr_2fr_120px] 2xl:grid-cols-[40px_4fr_3fr_3fr_150px] 2xl:py-3"
-        :class="{ 'bg-[#2a2a2a]': isCurrentSong(song) || (selectMode && selectedSongs.includes(song.path)) }"
+        :class="{
+          'bg-[#2a2a2a]': isCurrentSong(song) || (selectMode && selectedSongs.includes(song.path)),
+        }"
       >
         <div
           class="text-xs 2xl:text-sm text-gray-500 text-center flex justify-center items-center h-full"
@@ -802,9 +803,7 @@ onUnmounted(() => {
           <!-- Right column: Metadata Grid -->
           <div class="flex-1 flex flex-col justify-between overflow-hidden">
             <div>
-              <h2 class="text-xl font-bold text-white mb-4 pr-6 truncate">
-                File Information
-              </h2>
+              <h2 class="text-xl font-bold text-white mb-4 pr-6 truncate">File Information</h2>
 
               <div class="space-y-3.5 text-sm">
                 <div class="grid grid-cols-[100px_1fr] gap-2 items-baseline">
@@ -819,7 +818,10 @@ onUnmounted(() => {
                   <span class="text-gray-500">Album:</span>
                   <span class="text-white font-medium truncate">{{ infoSong?.album }}</span>
                 </div>
-                <div class="grid grid-cols-[100px_1fr] gap-2 items-baseline" v-if="infoSong?.track_number">
+                <div
+                  class="grid grid-cols-[100px_1fr] gap-2 items-baseline"
+                  v-if="infoSong?.track_number"
+                >
                   <span class="text-gray-500">Track:</span>
                   <span class="text-white font-medium">{{ infoSong?.track_number }}</span>
                 </div>
@@ -829,7 +831,9 @@ onUnmounted(() => {
                 </div>
                 <div class="grid grid-cols-[100px_1fr] gap-2 items-baseline">
                   <span class="text-gray-500">Duration:</span>
-                  <span class="text-white font-medium">{{ infoSong ? formatDuration(infoSong.duration_secs) : '' }}</span>
+                  <span class="text-white font-medium">{{
+                    infoSong ? formatDuration(infoSong.duration_secs) : ''
+                  }}</span>
                 </div>
                 <div class="grid grid-cols-[100px_1fr] gap-2 items-baseline">
                   <span class="text-gray-500">Date Added:</span>
@@ -842,9 +846,7 @@ onUnmounted(() => {
 
             <!-- Path/Copy Section -->
             <div class="mt-6 pt-4 border-t border-[#2c2c2e]">
-              <div class="text-[11px] text-gray-500 uppercase tracking-wider mb-2">
-                File Path
-              </div>
+              <div class="text-[11px] text-gray-500 uppercase tracking-wider mb-2">File Path</div>
               <div
                 class="bg-[#121214] border border-[#2c2c2e] p-2.5 rounded-lg flex items-center justify-between gap-3 text-xs"
               >
@@ -876,7 +878,9 @@ onUnmounted(() => {
           @click.stop
         >
           <!-- Warning Icon -->
-          <div class="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-red-950/50 border border-red-500 mb-4">
+          <div
+            class="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-red-950/50 border border-red-500 mb-4"
+          >
             <svg
               xmlns="http://www.w3.org/2000/svg"
               width="24"
@@ -888,14 +892,16 @@ onUnmounted(() => {
               stroke-linecap="round"
               stroke-linejoin="round"
             >
-              <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path>
+              <path
+                d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"
+              ></path>
               <line x1="12" y1="9" x2="12" y2="13"></line>
               <line x1="12" y1="17" x2="12.01" y2="17"></line>
             </svg>
           </div>
 
           <h3 class="text-lg font-bold text-white mb-2">Delete or Remove Song</h3>
-          
+
           <p class="text-sm text-gray-400 mb-6 px-2">
             <span v-if="deleteActionType === 'single'">
               You are about to modify <strong>"{{ deleteConfirmSong?.title }}"</strong>.
@@ -903,7 +909,8 @@ onUnmounted(() => {
             <span v-else>
               You are about to modify <strong>{{ selectedSongs.length }}</strong> selected songs.
             </span>
-            Choose whether to permanently delete the files from your disk, or just remove them from this application library/playlists.
+            Choose whether to permanently delete the files from your disk, or just remove them from
+            this application library/playlists.
           </p>
 
           <div class="flex flex-col gap-2.5">
@@ -914,7 +921,7 @@ onUnmounted(() => {
             >
               Delete Files (Permanently)
             </button>
-            
+
             <!-- Remove from List (White) -->
             <button
               @click="executeDelete(false)"
@@ -942,9 +949,7 @@ onUnmounted(() => {
         class="fixed bottom-6 left-1/2 -translate-x-1/2 z-[150] bg-[#1e1e1e]/95 border border-[#333] backdrop-blur-md px-6 py-3.5 rounded-full shadow-2xl flex items-center gap-4 text-white text-xs 2xl:text-sm animate-slide-up"
         @click.stop
       >
-        <span class="font-semibold text-gray-300">
-          {{ selectedSongs.length }} selected
-        </span>
+        <span class="font-semibold text-gray-300"> {{ selectedSongs.length }} selected </span>
 
         <div class="h-4 w-[1px] bg-gray-700"></div>
 
@@ -978,7 +983,7 @@ onUnmounted(() => {
               stroke="currentColor"
               stroke-width="2.5"
             >
-              <path d="m6 9 6 6 6-6"/>
+              <path d="m6 9 6 6 6-6" />
             </svg>
           </button>
 

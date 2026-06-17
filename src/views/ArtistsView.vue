@@ -38,7 +38,9 @@ function openArtist(artistName, event) {
   const coverEl = event.currentTarget.querySelector('.cover-image');
   navigateWithTransition(
     () => router.push({ name: 'ArtistDetail', params: { name: artistName } }),
-    coverEl
+    coverEl,
+    'shared-cover',
+    'to-artist-transition'
   );
 }
 </script>

@@ -53,12 +53,15 @@ const shuffleAlbum = () => {
 
 const goToArtist = () => {
   if (albumInfo.value.artist) {
-    const el = coverRef.value ? (coverRef.value.querySelector('.cover-image') || coverRef.value) : null;
+    const el = coverRef.value
+      ? coverRef.value.querySelector('.cover-image') || coverRef.value
+      : null;
     if (el) {
       navigateWithTransition(
         () => router.push({ name: 'ArtistDetail', params: { name: albumInfo.value.artist } }),
         el,
-        'shared-cover'
+        'shared-cover',
+        'to-artist-transition'
       );
     } else {
       router.push({ name: 'ArtistDetail', params: { name: albumInfo.value.artist } });

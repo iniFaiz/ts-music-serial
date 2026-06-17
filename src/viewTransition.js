@@ -7,15 +7,34 @@ import { nextTick } from 'vue';
 //   navigate  - async fn that performs the route change (e.g. () => router.push(...))
 //   sourceEl  - the cover element to morph from (gets the shared name temporarily)
 //   name      - the shared view-transition-name (matched on the destination cover)
-export async function navigateWithTransition(navigate, sourceEl, name = 'shared-cover') {
+export async function navigateWithTransition(
+  navigate,
+  sourceEl,
+  name = 'shared-cover',
+  transitionClass = 'to-artist-transition'
+) {
   if (typeof document === 'undefined' || !document.startViewTransition || !sourceEl) {
     await navigate();
     return;
   }
 
-  document.documentElement.classList.add('to-artist-transition');
+  document.documentElement.classList.add(transitionClass);
   const prev = sourceEl.style.viewTransitionName;
   sourceEl.style.viewTransitionName = name;
+
+  // Temporarily strip viewTransitionName from any other element on the page
+  // to avoid duplicates when we tag the sourceEl.
+  const activeTaggedEls = [];
+  const allElements = document.querySelectorAll('*');
+  for (const el of allElements) {
+    if (
+      el !== sourceEl &&
+      (el.style.viewTransitionName === name || el.style.viewTransitionName === 'shared-cover')
+    ) {
+      activeTaggedEls.push({ el, prevName: el.style.viewTransitionName });
+      el.style.viewTransitionName = '';
+    }
+  }
 
   try {
     const transition = document.startViewTransition(async () => {
@@ -28,7 +47,11 @@ export async function navigateWithTransition(navigate, sourceEl, name = 'shared-
   } finally {
     // Release the name so the list element can't clash on the next capture.
     sourceEl.style.viewTransitionName = prev;
-    document.documentElement.classList.remove('to-artist-transition');
+    // Restore the transition names for the elements we stripped
+    for (const item of activeTaggedEls) {
+      item.el.style.viewTransitionName = item.prevName;
+    }
+    document.documentElement.classList.remove(transitionClass);
   }
 }
 
@@ -60,7 +83,9 @@ export async function goBackWithTransition(router, name = 'shared-cover') {
     return;
   }
 
-  document.documentElement.classList.add('to-album-transition');
+  const transitionClass =
+    from && from.name === 'ArtistDetail' ? 'to-artist-transition' : 'to-album-transition';
+  document.documentElement.classList.add(transitionClass);
   let tagged = null;
   const transition = document.startViewTransition(async () => {
     // Wait until the route change actually settles (keep-alive restores the list
@@ -89,6 +114,6 @@ export async function goBackWithTransition(router, name = 'shared-cover') {
       tagged.style.viewTransitionName = tagged.dataset._prevVt || '';
       delete tagged.dataset._prevVt;
     }
-    document.documentElement.classList.remove('to-album-transition');
+    document.documentElement.classList.remove(transitionClass);
   }
 }

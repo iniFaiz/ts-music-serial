@@ -44,11 +44,13 @@ const updateVisibilityState = (visible) => {
   isVisible = visible;
 
   // Tell Rust backend to enable/disable FFT computation
-  invoke('player_set_spectrum_enabled', { enabled: visible && store.visualizerEnabled }).catch(() => {});
+  invoke('player_set_spectrum_enabled', { enabled: visible && store.visualizerEnabled }).catch(
+    () => {}
+  );
 
   if (visible) {
     // Only resume animation loop if the player is playing, or if we need to settle to 0
-    if (!rafId && (store.isPlaying || heights.some(h => h > 0))) {
+    if (!rafId && (store.isPlaying || heights.some((h) => h > 0))) {
       rafId = requestAnimationFrame(tick);
     }
   } else {
@@ -235,7 +237,7 @@ onMounted(async () => {
   <canvas
     ref="canvasRef"
     class="mr-3 shrink-0 translate-y-[-16px]"
-    style="width: 33px; height: 55px;"
+    style="width: 33px; height: 55px"
     :title="store.isPlaying ? 'Now playing' : 'Audio visualizer'"
     aria-hidden="true"
   ></canvas>
