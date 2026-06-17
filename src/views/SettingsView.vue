@@ -20,6 +20,23 @@
     </div>
 
     <div class="bg-gray-800 rounded-lg p-6 shadow-lg mt-6">
+      <h2 class="text-xl font-semibold text-white mb-4">Playback</h2>
+
+      <div class="space-y-4">
+        <ToggleInt
+          :modelValue="store.visualizerEnabled"
+          @update:modelValue="(val) => store.setVisualizerEnabled(val)"
+          label="Audio Visualizer"
+        />
+
+        <p class="text-sm text-gray-400 mt-2">
+          Show the six-bar spectrum next to the player controls, reacting to the playing track in
+          real time. Disable it to skip the audio analysis entirely.
+        </p>
+      </div>
+    </div>
+
+    <div class="bg-gray-800 rounded-lg p-6 shadow-lg mt-6">
       <h2 class="text-xl font-semibold text-white mb-4">Library Management</h2>
 
       <div class="space-y-4">

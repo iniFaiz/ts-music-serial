@@ -35,6 +35,9 @@ export const store = reactive({
   // Unlimited queue (autoplay): when the queue is exhausted, keep playing by
   // appending random tracks from the library — like Apple Music's ∞ autoplay.
   autoplayMode: false,
+  // Real-time 6-bar audio visualizer in the player bar (default on). Mirrored to
+  // the Rust backend so the FFT analysis only runs when it's actually shown.
+  visualizerEnabled: true,
 
   // Liked songs (array of file paths) and user playlists.
   favorites: [],
@@ -74,6 +77,7 @@ export const store = reactive({
           loopMode: this.loopMode,
           shuffleMode: this.shuffleMode,
           autoplayMode: this.autoplayMode,
+          visualizerEnabled: this.visualizerEnabled,
         },
       });
     } catch (e) {
@@ -148,6 +152,8 @@ export const store = reactive({
     this.loopMode = pb.loopMode || 0;
     this.shuffleMode = !!pb.shuffleMode;
     this.autoplayMode = !!pb.autoplayMode;
+    if (typeof pb.visualizerEnabled === 'boolean') this.visualizerEnabled = pb.visualizerEnabled;
+    this.syncVisualizer();
 
     const byPath = new Map(this.songs.map((s) => [s.path, s]));
     if (Array.isArray(pb.queuePaths)) {
@@ -526,6 +532,18 @@ export const store = reactive({
 
   toggleAutoplay() {
     this.autoplayMode = !this.autoplayMode;
+    this.persistState();
+  },
+
+  // Push the visualizer on/off state to the Rust backend so the FFT analysis is
+  // gated by the Settings toggle (no wasted work when it's hidden).
+  syncVisualizer() {
+    invoke('player_set_spectrum_enabled', { enabled: this.visualizerEnabled }).catch(() => {});
+  },
+
+  setVisualizerEnabled(val) {
+    this.visualizerEnabled = !!val;
+    this.syncVisualizer();
     this.persistState();
   },
 

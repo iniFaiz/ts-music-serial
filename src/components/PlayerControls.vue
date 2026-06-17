@@ -4,6 +4,7 @@ import { store } from '../store';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import CoverImage from './CoverImage.vue';
+import Visualizer from './Visualizer.vue';
 
 // Playback is handled natively in Rust (rodio + symphonia). This component just
 // issues commands and polls the backend for the current position/duration.
@@ -483,6 +484,9 @@ const formatTime = (seconds) => {
 
       <!-- Volume -->
       <div class="flex items-center justify-end gap-3 w-1/3 pr-4">
+        <!-- Real-time audio visualizer (reacts to the playing track) -->
+        <Visualizer v-if="store.visualizerEnabled && store.currentSong" />
+
         <!-- Queue toggle (with an ∞ badge when unlimited autoplay is on) -->
         <button
           @click="store.queuePanelOpen = !store.queuePanelOpen"
