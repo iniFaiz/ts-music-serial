@@ -62,9 +62,10 @@ const goToArtist = () => {
     <div class="p-8 flex gap-8 items-end bg-gradient-to-b from-[#2a2a2a] to-[var(--app-bg)]">
       <!-- Cover -->
       <div class="relative shadow-2xl h-52 w-52 shrink-0 group">
-        <CoverImage 
-          :path="albumInfo.coverPath" 
+        <CoverImage
+          :path="albumInfo.coverPath"
           className="h-full w-full rounded-md shadow-lg"
+          transitionName="shared-cover"
         />
       </div>
 

@@ -33,3 +33,24 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   @apply bg-gray-500/80;
 }
+
+/* Shared-element transition: the cover art glides from the list to the detail
+   page (and back) instead of cutting. Tuned for a smooth spring-like ease. */
+::view-transition-group(shared-cover) {
+  animation-duration: 0.42s;
+  animation-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/* Keep the cover's aspect ratio while its box resizes during the morph. */
+::view-transition-old(shared-cover),
+::view-transition-new(shared-cover) {
+  height: 100%;
+  width: 100%;
+  object-fit: cover;
+}
+
+/* The rest of the page just does a quick, subtle cross-fade. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 0.22s;
+}

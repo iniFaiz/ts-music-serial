@@ -3,6 +3,7 @@ import { computed } from 'vue';
 import { store } from '../store';
 import { useRouter } from 'vue-router';
 import CoverImage from '../components/CoverImage.vue';
+import { navigateWithTransition } from '../viewTransition';
 
 defineOptions({ name: 'AlbumsView' });
 
@@ -24,8 +25,12 @@ const albums = computed(() => {
   return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
 });
 
-function openAlbum(albumName) {
-  router.push({ name: 'AlbumDetail', params: { name: albumName } });
+function openAlbum(albumName, event) {
+  const coverEl = event.currentTarget.querySelector('.cover-image');
+  navigateWithTransition(
+    () => router.push({ name: 'AlbumDetail', params: { name: albumName } }),
+    coverEl
+  );
 }
 
 function playAlbum(albumName) {
@@ -45,7 +50,7 @@ function playAlbum(albumName) {
       <div 
         v-for="album in albums" 
         :key="album.name"
-        @click="openAlbum(album.name)"
+        @click="openAlbum(album.name, $event)"
         class="cursor-pointer group"
       >
         <!-- Album Art -->

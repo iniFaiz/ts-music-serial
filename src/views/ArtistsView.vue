@@ -3,6 +3,7 @@ import { computed } from 'vue';
 import { store } from '../store';
 import { useRouter } from 'vue-router';
 import CoverImage from '../components/CoverImage.vue';
+import { navigateWithTransition } from '../viewTransition';
 
 defineOptions({ name: 'ArtistsView' });
 
@@ -26,8 +27,12 @@ const artists = computed(() => {
   return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
 });
 
-function openArtist(artistName) {
-  router.push({ name: 'ArtistDetail', params: { name: artistName } });
+function openArtist(artistName, event) {
+  const coverEl = event.currentTarget.querySelector('.cover-image');
+  navigateWithTransition(
+    () => router.push({ name: 'ArtistDetail', params: { name: artistName } }),
+    coverEl
+  );
 }
 </script>
 
@@ -39,7 +44,7 @@ function openArtist(artistName) {
       <div 
         v-for="artist in artists" 
         :key="artist.name"
-        @click="openArtist(artist.name)"
+        @click="openArtist(artist.name, $event)"
         class="cursor-pointer group text-center"
       >
         <!-- Artist Image -->

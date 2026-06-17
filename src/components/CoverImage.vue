@@ -4,7 +4,10 @@ import { loadCover, getCachedCover, hasCachedCover } from '../coverCache';
 
 const props = defineProps({
   path: { type: String, required: true },
-  className: { type: String, default: "h-10 w-10 rounded" }
+  className: { type: String, default: "h-10 w-10 rounded" },
+  // When set, tags this cover with a view-transition-name so it can morph
+  // to/from a matching cover on another page (shared-element transition).
+  transitionName: { type: String, default: "" }
 });
 
 // Hydrate synchronously from the shared cache so a previously seen cover renders
@@ -31,7 +34,10 @@ watch(() => props.path, resolveCover, { immediate: true });
 </script>
 
 <template>
-  <div :class="[className, 'flex items-center justify-center overflow-hidden shrink-0 relative border border-white/5']">
+  <div
+    :class="[className, 'cover-image flex items-center justify-center overflow-hidden shrink-0 relative border border-white/5']"
+    :style="transitionName ? { viewTransitionName: transitionName } : null"
+  >
     <img 
       v-if="imageData" 
       :src="imageData" 

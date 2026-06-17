@@ -50,9 +50,12 @@ const playArtist = () => {
       </div>
 
       <div class="absolute bottom-0 left-0 p-8 flex items-end gap-6 w-full">
-        <div class="h-40 w-40 rounded-full overflow-hidden shadow-2xl border-4 border-[var(--app-bg)] shrink-0">
-           <CoverImage 
-            :path="representativePath" 
+        <div
+          class="h-40 w-40 rounded-full overflow-hidden shadow-2xl border-4 border-[var(--app-bg)] shrink-0"
+          style="view-transition-name: shared-cover"
+        >
+           <CoverImage
+            :path="representativePath"
             className="h-full w-full object-cover"
           />
         </div>
