@@ -173,10 +173,16 @@ const onSeekCommit = async () => {
   const time = Number(seekValue.value);
   store.currentTime = time;
   lastSeekAt = Date.now();
-  try {
-    await invoke('player_seek', { position: time });
-  } catch (err) {
-    playbackError.value = String(err);
+  if (store.playbackFinished && store.currentSong) {
+    store.pendingSeek = time;
+    store.pendingAutoplay = true;
+    store.playSong(store.currentSong);
+  } else {
+    try {
+      await invoke('player_seek', { position: time });
+    } catch (err) {
+      playbackError.value = String(err);
+    }
   }
 };
 
@@ -214,8 +220,13 @@ const poll = async () => {
     const status = await invoke('player_status');
     if (status.duration > 0) store.duration = status.duration;
     if (Date.now() - lastSeekAt > 500) {
-      store.currentTime = status.position;
-      seekValue.value = status.position;
+      if (status.finished) {
+        store.currentTime = store.duration;
+        seekValue.value = store.duration;
+      } else {
+        store.currentTime = status.position;
+        seekValue.value = status.position;
+      }
     }
     if (status.finished) {
       await handleTrackEnded();

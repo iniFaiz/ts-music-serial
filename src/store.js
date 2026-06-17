@@ -38,6 +38,7 @@ export const store = reactive({
   // Real-time 6-bar audio visualizer in the player bar (default on). Mirrored to
   // the Rust backend so the FFT analysis only runs when it's actually shown.
   visualizerEnabled: true,
+  playbackFinished: false,
 
   // Liked songs (array of file paths) and user playlists.
   favorites: [],
@@ -256,10 +257,14 @@ export const store = reactive({
     } else if (this.queue.length === 0) {
       this.queue = [...this.songs];
     }
-    this.pendingSeek = null;
+    // Preserve pendingSeek if already set (e.g. by onSeekCommit on a finished track)
+    if (this.pendingSeek === null) {
+      this.pendingSeek = null;
+    }
     this.pendingAutoplay = true;
-    this.currentSong = song;
+    this.currentSong = song ? { ...song } : null;
     this.isPlaying = true;
+    this.playbackFinished = false;
     this.persistState();
   },
 
@@ -309,10 +314,13 @@ export const store = reactive({
 
   playQueueIndex(index) {
     if (index < 0 || index >= this.queue.length) return;
-    this.pendingSeek = null;
+    if (this.pendingSeek === null) {
+      this.pendingSeek = null;
+    }
     this.pendingAutoplay = true;
-    this.currentSong = this.queue[index];
+    this.currentSong = { ...this.queue[index] };
     this.isPlaying = true;
+    this.playbackFinished = false;
     this.persistState();
   },
 
@@ -422,7 +430,11 @@ export const store = reactive({
   },
 
   togglePlay() {
-    this.isPlaying = !this.isPlaying;
+    if (this.playbackFinished && this.currentSong) {
+      this.playSong(this.currentSong);
+    } else {
+      this.isPlaying = !this.isPlaying;
+    }
   },
 
   toggleLoop() {
@@ -459,15 +471,21 @@ export const store = reactive({
         this.queue.push({ ...song });
         nextIndex = this.queue.length - 1;
       } else {
-        this.isPlaying = false;
-        return;
+        if (userTriggered) {
+          nextIndex = 0;
+        } else {
+          this.isPlaying = false;
+          this.playbackFinished = true;
+          return;
+        }
       }
     }
 
     this.pendingSeek = null;
     this.pendingAutoplay = true;
-    this.currentSong = this.queue[nextIndex];
+    this.currentSong = { ...this.queue[nextIndex] };
     this.isPlaying = true;
+    this.playbackFinished = false;
     this.persistState();
   },
 
@@ -475,7 +493,11 @@ export const store = reactive({
     if (!this.currentSong || this.queue.length === 0) return;
 
     if (this.currentTime > 3) {
-      this.currentTime = 0;
+      this.pendingSeek = 0;
+      this.pendingAutoplay = true;
+      this.currentSong = { ...this.currentSong };
+      this.isPlaying = true;
+      this.playbackFinished = false;
       return;
     }
 
@@ -498,8 +520,9 @@ export const store = reactive({
 
     this.pendingSeek = null;
     this.pendingAutoplay = true;
-    this.currentSong = this.queue[prevIndex];
+    this.currentSong = { ...this.queue[prevIndex] };
     this.isPlaying = true;
+    this.playbackFinished = false;
     this.persistState();
   },
 
