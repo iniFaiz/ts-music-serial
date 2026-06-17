@@ -4,6 +4,8 @@ import AlbumsView from '../views/AlbumsView.vue';
 import AlbumDetail from '../views/AlbumDetail.vue';
 import ArtistsView from '../views/ArtistsView.vue';
 import ArtistDetail from '../views/ArtistDetail.vue';
+import FavoritesView from '../views/FavoritesView.vue';
+import PlaylistDetail from '../views/PlaylistDetail.vue';
 import SettingsView from '../views/SettingsView.vue';
 
 const routes = [
@@ -13,6 +15,8 @@ const routes = [
   { path: '/albums/:name', name: 'AlbumDetail', component: AlbumDetail },
   { path: '/artists', component: ArtistsView },
   { path: '/artists/:name', name: 'ArtistDetail', component: ArtistDetail },
+  { path: '/favorites', name: 'Favorites', component: FavoritesView },
+  { path: '/playlists/:id', name: 'PlaylistDetail', component: PlaylistDetail },
   { path: '/settings', component: SettingsView },
 ];
 

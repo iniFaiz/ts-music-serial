@@ -24,12 +24,23 @@ export const store = reactive({
 
   currentSong: null,
   isPlaying: false,
+  isBuffering: false,
   volume: 1.0,
   currentTime: 0,
   duration: 0,
   queue: [],
   loopMode: 0,
   shuffleMode: false,
+
+  // Liked songs (array of file paths) and user playlists.
+  favorites: [],
+  playlists: [], // [{ id, name, paths: [] }]
+
+  // Hand-off to PlayerControls' load watcher: where to start the next load and
+  // whether it should auto-play. Used by "resume on launch" (seek + paused).
+  pendingSeek: null,
+  pendingAutoplay: true,
+  queuePanelOpen: false,
 
   // Persist the current library + scanned roots to IndexedDB. JSON round-trips
   // strip Vue's reactive proxies so the values can be structured-cloned.
@@ -39,6 +50,28 @@ export const store = reactive({
       await idbSet('roots', [...this.roots]);
     } catch (e) {
       console.error("Failed to persist library", e);
+    }
+  },
+
+  // Persist lightweight app state (likes, playlists, and what/where was
+  // playing) so the next launch can restore it. Called on every relevant
+  // change and on an interval to checkpoint the playback position.
+  async persistState() {
+    try {
+      await idbSet('app_state', {
+        favorites: [...this.favorites],
+        playlists: JSON.parse(JSON.stringify(this.playlists)),
+        playback: {
+          songPath: this.currentSong ? this.currentSong.path : null,
+          positionSecs: this.currentTime || 0,
+          queuePaths: this.queue.map((s) => s.path),
+          volume: this.volume,
+          loopMode: this.loopMode,
+          shuffleMode: this.shuffleMode,
+        },
+      });
+    } catch (e) {
+      console.error("Failed to persist app state", e);
     }
   },
 
@@ -80,8 +113,47 @@ export const store = reactive({
         this.statusMessage = `Loaded ${this.songs.length} songs`;
         this.scanComplete = true;
       }
+
+      // Restore likes, playlists and the last playback session.
+      await this.restoreState();
     } catch (e) {
       console.error("Failed to load library", e);
+    }
+  },
+
+  async restoreState() {
+    let state;
+    try {
+      state = await idbGet('app_state');
+    } catch (e) {
+      console.error("Failed to read app state", e);
+      return;
+    }
+    if (!state) return;
+
+    this.favorites = Array.isArray(state.favorites) ? state.favorites : [];
+    this.playlists = Array.isArray(state.playlists) ? state.playlists : [];
+
+    const pb = state.playback;
+    if (!pb) return;
+
+    if (typeof pb.volume === 'number') this.volume = pb.volume;
+    this.loopMode = pb.loopMode || 0;
+    this.shuffleMode = !!pb.shuffleMode;
+
+    const byPath = new Map(this.songs.map((s) => [s.path, s]));
+    if (Array.isArray(pb.queuePaths)) {
+      this.queue = pb.queuePaths.map((p) => byPath.get(p)).filter(Boolean);
+    }
+
+    // Re-load the last track but leave it paused at the saved position; the
+    // PlayerControls watcher reads pendingSeek/pendingAutoplay when it loads.
+    if (pb.songPath && byPath.has(pb.songPath)) {
+      this.pendingSeek = pb.positionSecs || 0;
+      this.pendingAutoplay = false;
+      this.currentTime = pb.positionSecs || 0;
+      this.isPlaying = false;
+      this.currentSong = byPath.get(pb.songPath);
     }
   },
 
@@ -93,10 +165,13 @@ export const store = reactive({
     this.queue = [];
     this.isPlaying = false;
     this.scanComplete = false;
+    this.favorites = [];
+    this.playlists = [];
     this.statusMessage = "Library reset";
     try {
       await idbDelete('library');
       await idbDelete('roots');
+      await idbDelete('app_state');
     } catch (e) {
       console.error("Failed to reset library", e);
     }
@@ -157,33 +232,6 @@ export const store = reactive({
     }
   },
 
-  // Helper to sort library immutably
-  sortLibrary() {
-    this.songs = this.songs.slice().sort((a, b) => {
-      const artistA = (a.artist || "Unknown Artist").toLowerCase();
-      const artistB = (b.artist || "Unknown Artist").toLowerCase();
-      if (artistA < artistB) return -1;
-      if (artistA > artistB) return 1;
-
-      const albumA = (a.album || "Unknown Album").toLowerCase();
-      const albumB = (b.album || "Unknown Album").toLowerCase();
-      if (albumA < albumB) return -1;
-      if (albumA > albumB) return 1;
-
-      const trackA = a.track_number || 0;
-      const trackB = b.track_number || 0;
-      if (trackA < trackB) return -1;
-      if (trackA > trackB) return 1;
-
-      const titleA = (a.title || "").toLowerCase();
-      const titleB = (b.title || "").toLowerCase();
-      if (titleA < titleB) return -1;
-      if (titleA > titleB) return 1;
-
-      return 0;
-    });
-  },
-
   closePopup() {
     this.scanComplete = false;
   },
@@ -194,8 +242,167 @@ export const store = reactive({
     } else if (this.queue.length === 0) {
         this.queue = [...this.songs];
     }
+    this.pendingSeek = null;
+    this.pendingAutoplay = true;
     this.currentSong = song;
     this.isPlaying = true;
+    this.persistState();
+  },
+
+  // ---- Queue management -------------------------------------------------
+
+  currentQueueIndex() {
+    if (!this.currentSong) return -1;
+    return this.queue.findIndex((s) => s.path === this.currentSong.path);
+  },
+
+  // Insert right after the current track so it plays next.
+  playNext(song) {
+    if (this.queue.length === 0) {
+      this.queue = this.currentSong ? [this.currentSong, song] : [song];
+    } else {
+      const idx = this.currentQueueIndex();
+      this.queue.splice(idx + 1, 0, song);
+    }
+    this.persistState();
+  },
+
+  addToQueue(songs) {
+    const list = Array.isArray(songs) ? songs : [songs];
+    if (this.queue.length === 0 && this.currentSong) {
+      this.queue = [this.currentSong];
+    }
+    this.queue.push(...list);
+    this.persistState();
+  },
+
+  removeFromQueue(index) {
+    if (index < 0 || index >= this.queue.length) return;
+    this.queue.splice(index, 1);
+    this.persistState();
+  },
+
+  moveInQueue(from, to) {
+    if (from === to) return;
+    if (from < 0 || from >= this.queue.length) return;
+    if (to < 0 || to >= this.queue.length) return;
+    const [item] = this.queue.splice(from, 1);
+    this.queue.splice(to, 0, item);
+    this.persistState();
+  },
+
+  playQueueIndex(index) {
+    if (index < 0 || index >= this.queue.length) return;
+    this.pendingSeek = null;
+    this.pendingAutoplay = true;
+    this.currentSong = this.queue[index];
+    this.isPlaying = true;
+    this.persistState();
+  },
+
+  clearQueue() {
+    this.queue = this.currentSong ? [this.currentSong] : [];
+    this.persistState();
+  },
+
+  // ---- Favorites --------------------------------------------------------
+
+  isFavorite(path) {
+    return this.favorites.includes(path);
+  },
+
+  toggleFavorite(path) {
+    if (!path) return;
+    const idx = this.favorites.indexOf(path);
+    if (idx >= 0) this.favorites.splice(idx, 1);
+    else this.favorites.push(path);
+    this.persistState();
+  },
+
+  get favoriteSongs() {
+    const set = new Set(this.favorites);
+    return this.songs.filter((s) => set.has(s.path));
+  },
+
+  // ---- Playlists --------------------------------------------------------
+
+  createPlaylist(name, description = '', cover = null) {
+    const id = 'pl_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+    const playlist = {
+      id,
+      name: (name || '').trim() || 'New Playlist',
+      description: (description || '').trim(),
+      cover: cover || null,
+      paths: [],
+    };
+    this.playlists.push(playlist);
+    this.persistState();
+    return playlist;
+  },
+
+  // Playlist-create modal (opened from the sidebar "+" and song context menu).
+  playlistModal: { open: false, pendingSongPath: null },
+
+  openPlaylistModal(pendingSongPath = null) {
+    this.playlistModal.pendingSongPath = pendingSongPath;
+    this.playlistModal.open = true;
+  },
+
+  closePlaylistModal() {
+    this.playlistModal.open = false;
+    this.playlistModal.pendingSongPath = null;
+  },
+
+  deletePlaylist(id) {
+    const idx = this.playlists.findIndex((p) => p.id === id);
+    if (idx >= 0) {
+      this.playlists.splice(idx, 1);
+      this.persistState();
+    }
+  },
+
+  renamePlaylist(id, name) {
+    const pl = this.playlists.find((p) => p.id === id);
+    if (pl && name && name.trim()) {
+      pl.name = name.trim();
+      this.persistState();
+    }
+  },
+
+  getPlaylist(id) {
+    return this.playlists.find((p) => p.id === id);
+  },
+
+  addToPlaylist(id, paths) {
+    const pl = this.getPlaylist(id);
+    if (!pl) return;
+    const list = Array.isArray(paths) ? paths : [paths];
+    for (const path of list) {
+      if (!pl.paths.includes(path)) pl.paths.push(path);
+    }
+    this.persistState();
+  },
+
+  removeFromPlaylist(id, path) {
+    const pl = this.getPlaylist(id);
+    if (!pl) return;
+    const idx = pl.paths.indexOf(path);
+    if (idx >= 0) {
+      pl.paths.splice(idx, 1);
+      this.persistState();
+    }
+  },
+
+  playlistSongs(id) {
+    const pl = this.getPlaylist(id);
+    if (!pl) return [];
+    const byPath = new Map(this.songs.map((s) => [s.path, s]));
+    return pl.paths.map((p) => byPath.get(p)).filter(Boolean);
+  },
+
+  playPlaylist(id) {
+    const list = this.playlistSongs(id);
+    if (list.length > 0) this.playSong(list[0], list);
   },
 
   togglePlay() {
@@ -204,6 +411,7 @@ export const store = reactive({
 
   toggleLoop() {
     this.loopMode = (this.loopMode + 1) % 3;
+    this.persistState();
   },
 
   nextSong(userTriggered = false) {
@@ -223,16 +431,19 @@ export const store = reactive({
     }
 
     if (nextIndex >= this.queue.length) {
-      if (this.loopMode === 1) { 
+      if (this.loopMode === 1) {
         nextIndex = 0;
       } else {
         this.isPlaying = false;
         return;
       }
     }
-    
+
+    this.pendingSeek = null;
+    this.pendingAutoplay = true;
     this.currentSong = this.queue[nextIndex];
     this.isPlaying = true;
+    this.persistState();
   },
 
   prevSong() {
@@ -253,15 +464,18 @@ export const store = reactive({
     }
 
     if (prevIndex < 0) {
-       if (this.loopMode === 1) { 
+       if (this.loopMode === 1) {
          prevIndex = this.queue.length - 1;
        } else {
          prevIndex = 0;
        }
     }
-    
+
+    this.pendingSeek = null;
+    this.pendingAutoplay = true;
     this.currentSong = this.queue[prevIndex];
     this.isPlaying = true;
+    this.persistState();
   },
 
   setVolume(val) {
@@ -274,6 +488,7 @@ export const store = reactive({
 
   toggleShuffle() {
     this.shuffleMode = !this.shuffleMode;
+    this.persistState();
   },
 
   get filteredSongs() {

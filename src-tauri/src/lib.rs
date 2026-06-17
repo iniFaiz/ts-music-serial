@@ -5,7 +5,7 @@ use std::fs;
 use std::hash::{Hash, Hasher};
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -285,10 +285,14 @@ struct AudioPlayer {
     // None when no output device is available; playback commands then no-op.
     sink: Option<Arc<Sink>>,
     // Duration of the currently loaded track, in seconds.
-    duration: Mutex<f64>,
+    duration: Arc<Mutex<f64>>,
     // True once a track has been loaded, so an empty sink means "finished"
     // rather than "nothing has played yet".
-    active: AtomicBool,
+    active: Arc<AtomicBool>,
+    // Bumped on every load. A decode that finishes after a newer load started
+    // checks this and discards its (now stale) result instead of clobbering the
+    // track the user actually wants.
+    generation: Arc<AtomicU64>,
 }
 
 #[derive(Serialize)]
@@ -299,28 +303,14 @@ struct PlayerStatus {
     finished: bool,
 }
 
-// Load a track and start playing it, replacing whatever was playing. Returns
-// the track duration in seconds.
-#[tauri::command]
-fn player_load(
-    app: AppHandle,
-    player: State<AudioPlayer>,
-    path: String,
-    volume: f64,
-) -> Result<f64, String> {
-    let path_buf = PathBuf::from(&path);
-    if !is_allowed_audio(&app, &path_buf) {
-        return Err("Path is not within an allowed music folder".to_string());
-    }
-
-    let sink = player.sink.as_ref().ok_or("No audio output device")?;
-
-    // Read the whole file into memory and build a *seekable* decoder. rodio's
-    // generic reader wrapper defaults to non-seekable, which makes try_seek fail
-    // with SeekError(Unseekable); the builder lets us declare the source
-    // seekable and supply its byte length so Symphonia can seek. Loading into a
-    // Cursor also removes any disk-read stutter mid-playback.
-    let bytes = fs::read(&path_buf).map_err(|e| e.to_string())?;
+// Read a file into memory and build a *seekable* decoder. Decoding stays lazy
+// (samples are produced on demand during playback), so playback starts almost
+// immediately instead of waiting for the whole track. Reading into a Cursor
+// keeps the audio callback off the disk, and `[profile.dev.package."*"]
+// opt-level = 3` keeps the codec fast enough to never starve the callback —
+// together that fixes both the slow start and the "bz bz bz" under load.
+fn build_decoder(path: &Path) -> Result<(Decoder<Cursor<Vec<u8>>>, f64), String> {
+    let bytes = fs::read(path).map_err(|e| e.to_string())?;
     let byte_len = bytes.len() as u64;
     let decoder = Decoder::builder()
         .with_data(Cursor::new(bytes))
@@ -328,18 +318,89 @@ fn player_load(
         .with_seekable(true)
         .build()
         .map_err(|e| e.to_string())?;
+    // Cheap: read from the codec params populated at init (no full-file scan).
+    // May be None for headerless MP3 — the caller falls back to a metadata hint.
     let duration = decoder
         .total_duration()
         .map(|d| d.as_secs_f64())
         .unwrap_or(0.0);
+    Ok((decoder, duration))
+}
 
+// Load a track and start playing it, replacing whatever was playing. Returns
+// the track duration in seconds. The file read + decoder setup run on the
+// blocking pool so the UI/IPC thread never stalls; the previously playing track
+// is stopped immediately so it doesn't bleed over the (brief) load gap.
+#[tauri::command]
+async fn player_load(
+    app: AppHandle,
+    player: State<'_, AudioPlayer>,
+    path: String,
+    volume: f64,
+    start_at: Option<f64>,
+    autoplay: bool,
+    duration_hint: f64,
+) -> Result<f64, String> {
+    let path_buf = PathBuf::from(&path);
+    if !is_allowed_audio(&app, &path_buf) {
+        return Err("Path is not within an allowed music folder".to_string());
+    }
+
+    let sink = match &player.sink {
+        Some(s) => s.clone(),
+        None => return Err("No audio output device".to_string()),
+    };
+    // Clone the shared handles out so we never hold the State guard across .await.
+    let generation = player.generation.clone();
+    let duration_slot = player.duration.clone();
+    let active = player.active.clone();
+
+    // Claim a generation and stop the current track right away. Marking the
+    // player inactive during the load gap prevents the now-empty sink from
+    // being misread as "track finished" (which would auto-skip to the next one).
+    let my_gen = generation.fetch_add(1, Ordering::SeqCst) + 1;
     sink.clear();
+    active.store(false, Ordering::SeqCst);
     sink.set_volume(volume.clamp(0.0, 1.0) as f32);
-    sink.append(decoder);
-    sink.play();
 
-    *player.duration.lock().unwrap() = duration;
-    player.active.store(true, Ordering::SeqCst);
+    let (decoder, decoded_duration) =
+        tauri::async_runtime::spawn_blocking(move || build_decoder(&path_buf))
+            .await
+            .map_err(|e| format!("Decode task failed: {e}"))??;
+
+    // A newer load was requested while we were reading — drop this stale one.
+    if generation.load(Ordering::SeqCst) != my_gen {
+        return Ok(0.0);
+    }
+
+    // Prefer the decoder's duration; fall back to the metadata hint (e.g. for
+    // headerless MP3 where the decoder can't report one).
+    let duration = if decoded_duration > 0.0 {
+        decoded_duration
+    } else {
+        duration_hint.max(0.0)
+    };
+    *duration_slot.lock().unwrap() = duration;
+    sink.append(decoder);
+
+    // Resume support: jump to a saved position before (optionally) playing.
+    if let Some(pos) = start_at {
+        let target = if duration > 0.1 {
+            pos.clamp(0.0, duration - 0.1)
+        } else {
+            pos.max(0.0)
+        };
+        if target > 0.0 {
+            let _ = sink.try_seek(Duration::from_secs_f64(target));
+        }
+    }
+
+    if autoplay {
+        sink.play();
+    } else {
+        sink.pause();
+    }
+    active.store(true, Ordering::SeqCst);
 
     Ok(duration)
 }
@@ -435,16 +496,184 @@ fn init_audio_player() -> AudioPlayer {
 
     AudioPlayer {
         sink: rx.recv().unwrap_or(None),
-        duration: Mutex::new(0.0),
-        active: AtomicBool::new(false),
+        duration: Arc::new(Mutex::new(0.0)),
+        active: Arc::new(AtomicBool::new(false)),
+        generation: Arc::new(AtomicU64::new(0)),
     }
 }
 
+// ---------------------------------------------------------------------------
+// System Media Transport Controls (Windows SMTC)
+//
+// Surfaces the now-playing track in the Windows volume/media overlay and wires
+// up the hardware/keyboard media keys (play/pause/next/prev). The SMTC COM
+// object is bound to the main window's HWND and its apartment, so *every* call
+// into it is marshalled onto the main thread via run_on_main_thread. Button
+// presses are forwarded to the frontend as `media-control` events.
+// ---------------------------------------------------------------------------
+
+#[cfg(target_os = "windows")]
+struct MediaController(Mutex<Option<souvlaki::MediaControls>>);
+// SAFETY: the inner MediaControls is only ever touched on the main thread (the
+// thread that created it and pumps the window's message loop). All command
+// handlers hop onto that thread before locking the mutex.
+#[cfg(target_os = "windows")]
+unsafe impl Send for MediaController {}
+#[cfg(target_os = "windows")]
+unsafe impl Sync for MediaController {}
+
+#[cfg(target_os = "windows")]
+fn init_media_controls(app: &AppHandle) {
+    use souvlaki::{MediaControlEvent, MediaControls, PlatformConfig, SeekDirection};
+    use tauri::Emitter;
+
+    let window = match app.get_webview_window("main") {
+        Some(w) => w,
+        None => return,
+    };
+    let hwnd = match window.hwnd() {
+        // Convert the platform HWND to the raw pointer souvlaki expects. The
+        // double cast tolerates either an isize- or pointer-shaped HWND field.
+        Ok(h) => h.0 as isize as *mut std::ffi::c_void,
+        Err(_) => return,
+    };
+
+    let config = PlatformConfig {
+        dbus_name: "ts-music",
+        display_name: "ts-music",
+        hwnd: Some(hwnd),
+    };
+
+    let mut controls = match MediaControls::new(config) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+
+    let app_handle = app.clone();
+    let _ = controls.attach(move |event: MediaControlEvent| {
+        let (action, position): (&str, Option<f64>) = match event {
+            MediaControlEvent::Play => ("play", None),
+            MediaControlEvent::Pause => ("pause", None),
+            MediaControlEvent::Toggle => ("toggle", None),
+            MediaControlEvent::Next => ("next", None),
+            MediaControlEvent::Previous => ("previous", None),
+            MediaControlEvent::Stop => ("stop", None),
+            MediaControlEvent::SetPosition(p) => ("seek", Some(p.0.as_secs_f64())),
+            MediaControlEvent::Seek(SeekDirection::Forward) => ("seek_forward", None),
+            MediaControlEvent::Seek(SeekDirection::Backward) => ("seek_backward", None),
+            _ => return,
+        };
+        let _ = app_handle.emit(
+            "media-control",
+            serde_json::json!({ "action": action, "position": position }),
+        );
+    });
+
+    if let Some(controller) = app.try_state::<Arc<MediaController>>() {
+        *controller.0.lock().unwrap() = Some(controls);
+    }
+}
+
+#[cfg(target_os = "windows")]
+#[tauri::command]
+fn smtc_set_metadata(
+    app: AppHandle,
+    controller: State<Arc<MediaController>>,
+    title: String,
+    artist: String,
+    album: String,
+    duration: f64,
+    path: String,
+) {
+    // Reuse the on-disk cover thumbnail (already generated for the UI) as the
+    // SMTC artwork, if it exists. We never decode here — no art is fine.
+    let cover_uri = cover_cache_dir(&app).and_then(|dir| {
+        let key = cover_cache_key(Path::new(&path))?;
+        let file = dir.join(format!("{key}.jpg"));
+        if file.exists() {
+            Some(format!("file://{}", file.display()))
+        } else {
+            None
+        }
+    });
+
+    let arc = controller.inner().clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Ok(mut guard) = arc.0.lock() {
+            if let Some(controls) = guard.as_mut() {
+                let metadata = souvlaki::MediaMetadata {
+                    title: Some(&title),
+                    artist: Some(&artist),
+                    album: Some(&album),
+                    cover_url: cover_uri.as_deref(),
+                    duration: Some(Duration::from_secs_f64(duration.max(0.0))),
+                };
+                let _ = controls.set_metadata(metadata);
+            }
+        }
+    });
+}
+
+#[cfg(target_os = "windows")]
+#[tauri::command]
+fn smtc_set_playback(
+    app: AppHandle,
+    controller: State<Arc<MediaController>>,
+    playing: bool,
+    position: f64,
+) {
+    let arc = controller.inner().clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Ok(mut guard) = arc.0.lock() {
+            if let Some(controls) = guard.as_mut() {
+                let progress = Some(souvlaki::MediaPosition(Duration::from_secs_f64(
+                    position.max(0.0),
+                )));
+                let state = if playing {
+                    souvlaki::MediaPlayback::Playing { progress }
+                } else {
+                    souvlaki::MediaPlayback::Paused { progress }
+                };
+                let _ = controls.set_playback(state);
+            }
+        }
+    });
+}
+
+// Non-Windows stubs so the frontend can call these unconditionally.
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+fn smtc_set_metadata(
+    _title: String,
+    _artist: String,
+    _album: String,
+    _duration: f64,
+    _path: String,
+) {
+}
+
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+fn smtc_set_playback(_playing: bool, _position: f64) {}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    #[allow(unused_mut)]
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(init_audio_player())
+        .manage(init_audio_player());
+
+    #[cfg(target_os = "windows")]
+    {
+        builder = builder.manage(Arc::new(MediaController(Mutex::new(None))));
+    }
+
+    builder
+        .setup(|_app| {
+            #[cfg(target_os = "windows")]
+            init_media_controls(_app.handle());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             scan_music_folder,
             get_track_cover,
@@ -455,7 +684,9 @@ pub fn run() {
             player_set_volume,
             player_seek,
             player_stop,
-            player_status
+            player_status,
+            smtc_set_metadata,
+            smtc_set_playback
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

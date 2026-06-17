@@ -29,4 +29,13 @@ lofty = "0.21" #audio metadata parsing
 base64 = "0.22" #images encoding
 image = "0.25" #cover art decoding/downscaling
 rodio = { version = "0.21", features = ["symphonia-all"] } #native audio playback/decoding (all formats incl. FLAC)
+souvlaki = "0.8.3" #OS media controls (Windows SMTC / media keys)
+
+# Optimize dependencies even in debug/dev builds. Audio codecs (symphonia) are
+# math-heavy and unusably slow when compiled unoptimized — that is what made
+# `tauri dev` take ~30s to start a track (the whole song is decoded up front).
+# Our own crate stays unoptimized so incremental rebuilds remain fast; only the
+# (rarely recompiled) dependencies get full optimization.
+[profile.dev.package."*"]
+opt-level = 3
 
