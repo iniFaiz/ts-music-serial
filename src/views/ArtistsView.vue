@@ -49,7 +49,9 @@ function openArtist(artistName, event) {
   <div class="h-full overflow-auto px-8 pt-8 pb-12">
     <h1 class="text-3xl font-bold tracking-tight text-white mb-6">Artists</h1>
 
-    <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-x-6 gap-y-10">
+    <div
+      class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-x-6 gap-y-10"
+    >
       <div
         v-for="artist in artists"
         :key="artist.name"

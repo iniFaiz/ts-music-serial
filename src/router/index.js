@@ -6,6 +6,7 @@ import ArtistsView from '../views/ArtistsView.vue';
 import ArtistDetail from '../views/ArtistDetail.vue';
 import FavoritesView from '../views/FavoritesView.vue';
 import PlaylistDetail from '../views/PlaylistDetail.vue';
+import PlaylistsView from '../views/PlaylistsView.vue';
 import SettingsView from '../views/SettingsView.vue';
 
 const routes = [
@@ -16,6 +17,7 @@ const routes = [
   { path: '/artists', component: ArtistsView },
   { path: '/artists/:name', name: 'ArtistDetail', component: ArtistDetail },
   { path: '/favorites', name: 'Favorites', component: FavoritesView },
+  { path: '/playlists', name: 'Playlists', component: PlaylistsView },
   { path: '/playlists/:id', name: 'PlaylistDetail', component: PlaylistDetail },
   { path: '/settings', component: SettingsView },
 ];

@@ -23,6 +23,8 @@ export const store = reactive({
   scanCount: 0,
 
   currentSong: null,
+  currentSampleRate: null,
+  currentBitDepth: null,
   isPlaying: false,
   isBuffering: false,
   volume: 1.0,

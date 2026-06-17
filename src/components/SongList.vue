@@ -428,10 +428,10 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="w-full text-left text-sm 2xl:text-lg px-6 pb-12">
+  <div class="w-full text-left text-sm 2xl:text-sm px-6 pb-12">
     <!-- Header -->
     <div
-      class="grid gap-4 text-[var(--text-secondary)] text-xs 2xl:text-sm font-medium uppercase tracking-wide border-b border-[var(--border-color)] py-2 mb-2 sticky top-0 bg-[var(--app-bg)]/95 backdrop-blur-xl z-10 select-none grid-cols-[20px_3fr_2fr_2fr_120px] 2xl:grid-cols-[40px_4fr_3fr_3fr_150px]"
+      class="grid gap-4 text-[var(--text-secondary)] text-xs font-medium uppercase tracking-wide border-b border-[var(--border-color)] py-2 mb-2 sticky top-0 bg-[var(--app-bg)]/95 backdrop-blur-xl z-10 select-none grid-cols-[20px_3fr_2fr_2fr_120px] 2xl:grid-cols-[30px_4fr_3fr_3fr_120px]"
     >
       <div class="text-center flex justify-center items-center h-full">
         <input
@@ -447,25 +447,25 @@ onUnmounted(() => {
         @click="toggleSort('title')"
         class="cursor-pointer hover:text-white flex items-center gap-1"
       >
-        Title <span class="text-[8px] 2xl:text-[10px]">{{ getSortIcon('title') }}</span>
+        Title <span class="text-[8px]">{{ getSortIcon('title') }}</span>
       </div>
       <div
         @click="toggleSort('artist')"
         class="cursor-pointer hover:text-white flex items-center gap-1"
       >
-        Artist <span class="text-[8px] 2xl:text-[10px]">{{ getSortIcon('artist') }}</span>
+        Artist <span class="text-[8px]">{{ getSortIcon('artist') }}</span>
       </div>
       <div
         @click="toggleSort('album')"
         class="cursor-pointer hover:text-white flex items-center gap-1"
       >
-        Album <span class="text-[8px] 2xl:text-[10px]">{{ getSortIcon('album') }}</span>
+        Album <span class="text-[8px]">{{ getSortIcon('album') }}</span>
       </div>
       <div
         @click="toggleSort('duration_secs')"
         class="cursor-pointer hover:text-white flex items-center justify-end gap-1 text-right"
       >
-        Time <span class="text-[8px] 2xl:text-[10px]">{{ getSortIcon('duration_secs') }}</span>
+        Time <span class="text-[8px]">{{ getSortIcon('duration_secs') }}</span>
       </div>
     </div>
 
@@ -477,14 +477,12 @@ onUnmounted(() => {
         :data-song-path="song.path"
         @click="selectMode ? toggleSelectSong(song) : playSong(song)"
         @contextmenu.prevent="openMenu(song, $event)"
-        class="song-row grid gap-4 py-2 px-2 rounded-md hover:bg-[#2a2a2a] group items-center transition-colors cursor-pointer grid-cols-[20px_3fr_2fr_2fr_120px] 2xl:grid-cols-[40px_4fr_3fr_3fr_150px] 2xl:py-3"
+        class="song-row grid gap-4 py-2 px-2 rounded-md hover:bg-[#2a2a2a] group items-center transition-colors cursor-pointer grid-cols-[20px_3fr_2fr_2fr_120px] 2xl:grid-cols-[30px_4fr_3fr_3fr_120px] 2xl:py-1.5"
         :class="{
           'bg-[#2a2a2a]': isCurrentSong(song) || (selectMode && selectedSongs.includes(song.path)),
         }"
       >
-        <div
-          class="text-xs 2xl:text-sm text-gray-500 text-center flex justify-center items-center h-full"
-        >
+        <div class="text-xs text-gray-500 text-center flex justify-center items-center h-full">
           <input
             v-if="selectMode"
             type="checkbox"
@@ -527,14 +525,14 @@ onUnmounted(() => {
         </div>
 
         <!-- Title & Cover -->
-        <div class="flex items-center gap-3 2xl:gap-5 overflow-hidden">
+        <div class="flex items-center gap-3 overflow-hidden">
           <CoverImage
             :path="song.path"
-            className="h-10 w-10 2xl:h-14 2xl:w-14 rounded-[4px] shadow-sm shrink-0 bg-[#333]"
+            className="h-10 w-10 2xl:h-9 2xl:w-9 rounded-[4px] shadow-sm shrink-0 bg-[#333]"
           />
           <div class="truncate">
             <div
-              class="text-[13px] 2xl:text-[16px] font-medium text-white truncate leading-tight"
+              class="text-[13px] font-medium text-white truncate leading-tight"
               :class="{ 'text-[var(--accent-color)]': isCurrentSong(song) }"
               @mouseenter="showTooltip($event, song.title)"
               @mousemove="moveTooltip"
@@ -546,7 +544,7 @@ onUnmounted(() => {
         </div>
 
         <div
-          class="text-[13px] 2xl:text-[15px] text-[var(--text-secondary)] truncate"
+          class="text-[13px] 2xl:text-xs text-[var(--text-secondary)] truncate"
           @mouseenter="showTooltip($event, song.artist)"
           @mousemove="moveTooltip"
           @mouseleave="hideTooltip"
@@ -559,7 +557,7 @@ onUnmounted(() => {
           </span>
         </div>
         <div
-          class="text-[13px] 2xl:text-[15px] text-[var(--text-secondary)] truncate"
+          class="text-[13px] 2xl:text-xs text-[var(--text-secondary)] truncate"
           @mouseenter="showTooltip($event, song.album)"
           @mousemove="moveTooltip"
           @mouseleave="hideTooltip"
@@ -573,7 +571,7 @@ onUnmounted(() => {
         </div>
 
         <!-- Actions + time -->
-        <div class="flex items-center justify-end gap-2 2xl:gap-3">
+        <div class="flex items-center justify-end gap-2">
           <button
             @click.stop="store.toggleFavorite(song.path)"
             class="transition hover:scale-110"
@@ -602,7 +600,7 @@ onUnmounted(() => {
           </button>
 
           <span
-            class="text-[12px] 2xl:text-[14px] text-[var(--text-secondary)] font-variant-numeric tabular-nums"
+            class="text-[12px] 2xl:text-xs text-[var(--text-secondary)] font-variant-numeric tabular-nums"
             >{{ formatDuration(song.duration_secs) }}</span
           >
 

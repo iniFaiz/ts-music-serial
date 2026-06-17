@@ -36,6 +36,8 @@ struct MusicTrack {
     year: Option<u32>,
     track_number: Option<u32>,
     has_cover: bool,
+    sample_rate: Option<u32>,
+    bit_depth: Option<u8>,
 }
 
 // Filter supported audio files by extension.
@@ -98,6 +100,9 @@ fn parse_metadata(path: &Path) -> Option<MusicTrack> {
     let duration_secs = properties.duration().as_secs();
     let has_cover = tag.as_ref().map_or(false, |t| !t.pictures().is_empty());
 
+    let sample_rate = properties.sample_rate();
+    let bit_depth = properties.bit_depth();
+
     Some(MusicTrack {
         path: path_str,
         title,
@@ -108,6 +113,8 @@ fn parse_metadata(path: &Path) -> Option<MusicTrack> {
         year,
         track_number,
         has_cover,
+        sample_rate,
+        bit_depth,
     })
 }
 
@@ -570,6 +577,13 @@ impl<S: Source> Source for SpectrumSource<S> {
 // the track duration in seconds. The file read + decoder setup run on the
 // blocking pool so the UI/IPC thread never stalls; the previously playing track
 // is stopped immediately so it doesn't bleed over the (brief) load gap.
+#[derive(Serialize)]
+struct PlaybackInfo {
+    duration: f64,
+    sample_rate: Option<u32>,
+    bit_depth: Option<u8>,
+}
+
 #[tauri::command]
 async fn player_load(
     app: AppHandle,
@@ -579,7 +593,7 @@ async fn player_load(
     start_at: Option<f64>,
     autoplay: bool,
     duration_hint: f64,
-) -> Result<f64, String> {
+) -> Result<PlaybackInfo, String> {
     let path_buf = PathBuf::from(&path);
     if !is_allowed_audio(&app, &path_buf) {
         return Err("Path is not within an allowed music folder".to_string());
@@ -604,14 +618,19 @@ async fn player_load(
     spectrum.reset(); // clear the visualizer during the load gap
     sink.set_volume(volume.clamp(0.0, 1.0) as f32);
 
+    let path_buf_clone = path_buf.clone();
     let (decoder, decoded_duration) =
-        tauri::async_runtime::spawn_blocking(move || build_decoder(&path_buf))
+        tauri::async_runtime::spawn_blocking(move || build_decoder(&path_buf_clone))
             .await
             .map_err(|e| format!("Decode task failed: {e}"))??;
 
     // A newer load was requested while we were reading — drop this stale one.
     if generation.load(Ordering::SeqCst) != my_gen {
-        return Ok(0.0);
+        return Ok(PlaybackInfo {
+            duration: 0.0,
+            sample_rate: None,
+            bit_depth: None,
+        });
     }
 
     // Prefer the decoder's duration; fall back to the metadata hint (e.g. for
@@ -644,7 +663,20 @@ async fn player_load(
     }
     active.store(true, Ordering::SeqCst);
 
-    Ok(duration)
+    // Read properties via lofty
+    let mut sample_rate = None;
+    let mut bit_depth = None;
+    if let Ok(tagged_file) = lofty::probe::Probe::open(&path_buf).and_then(|p| p.read()) {
+        let props = tagged_file.properties();
+        sample_rate = props.sample_rate();
+        bit_depth = props.bit_depth();
+    }
+
+    Ok(PlaybackInfo {
+        duration,
+        sample_rate,
+        bit_depth,
+    })
 }
 
 #[tauri::command]
@@ -929,9 +961,15 @@ fn player_show_in_folder(app: AppHandle, path: String) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        let path_win = path.replace('/', "\\");
+        use std::os::windows::process::CommandExt;
+        let mut path_win = path.replace('/', "\\");
+        if path_win.starts_with(r"\\?\UNC\") {
+            path_win = format!(r"\\{}", &path_win[8..]);
+        } else if path_win.starts_with(r"\\?\") {
+            path_win = path_win[4..].to_string();
+        }
         Command::new("explorer")
-            .arg(format!("/select,{}", path_win))
+            .raw_arg(format!(r#"/select,"{}""#, path_win))
             .spawn()
             .map_err(|e| e.to_string())?;
     }

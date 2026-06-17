@@ -11,6 +11,32 @@ import Visualizer from './Visualizer.vue';
 const seekValue = ref(0);
 const playbackError = ref(null);
 
+const losslessPopupOpen = ref(false);
+
+const isLossless = computed(() => {
+  if (!store.currentSong || !store.currentSong.path) return false;
+  const ext = store.currentSong.path.split('.').pop().toLowerCase();
+  return ['flac', 'wav', 'alac', 'm4a'].includes(ext);
+});
+
+const formatLosslessSpecs = () => {
+  if (!store.currentSong || !store.currentSong.path) return '24-bit 48kHz ALAC';
+  const ext = store.currentSong.path.split('.').pop().toLowerCase();
+  const bits = store.currentBitDepth || store.currentSong.bit_depth;
+  const hz = store.currentSampleRate || store.currentSong.sample_rate;
+
+  if (bits && hz) {
+    const bitStr = `${bits}-bit`;
+    const rateStr = hz >= 1000 ? `${(hz / 1000).toFixed(1).replace('.0', '')}kHz` : `${hz}Hz`;
+    const codecStr = ext === 'm4a' ? 'ALAC' : ext.toUpperCase();
+    return `${bitStr} ${rateStr} ${codecStr}`;
+  }
+
+  if (ext === 'flac') return '24-bit 48kHz FLAC';
+  if (ext === 'wav') return '16-bit 44.1kHz WAV';
+  return '24-bit 48kHz ALAC';
+};
+
 const progressPercentage = computed(() => {
   const max = store.duration || 100;
   const val = Number(seekValue.value) || 0;
@@ -32,6 +58,7 @@ watch(
   () => store.currentSong,
   async (song) => {
     if (!song) return;
+    losslessPopupOpen.value = false;
     playbackError.value = null;
     endedHandledFor = null;
 
@@ -48,7 +75,7 @@ watch(
     seekValue.value = startPos;
 
     try {
-      const duration = await invoke('player_load', {
+      const info = await invoke('player_load', {
         path: song.path,
         volume: store.isMuted ? 0 : store.volume,
         startAt,
@@ -56,7 +83,9 @@ watch(
         durationHint: song.duration_secs || 0,
       });
       if (token !== loadToken) return; // a newer track was selected meanwhile
-      store.duration = duration || 0;
+      store.duration = info.duration || 0;
+      store.currentSampleRate = info.sample_rate;
+      store.currentBitDepth = info.bit_depth;
       store.currentTime = startPos;
       seekValue.value = startPos;
       store.isPlaying = autoplay;
@@ -240,6 +269,10 @@ const poll = async () => {
   }
 };
 
+const closeLosslessPopup = () => {
+  losslessPopupOpen.value = false;
+};
+
 onMounted(async () => {
   pollTimer = setInterval(poll, 300);
   // Checkpoint playback position periodically so resume-on-launch is accurate.
@@ -247,6 +280,7 @@ onMounted(async () => {
     if (store.currentSong) store.persistState();
   }, 5000);
   window.addEventListener('beforeunload', flushState);
+  document.addEventListener('click', closeLosslessPopup);
 
   // Forward OS media-key / overlay button presses into the player.
   try {
@@ -261,6 +295,7 @@ onUnmounted(() => {
   if (stateTimer) clearInterval(stateTimer);
   if (unlistenMedia) unlistenMedia();
   window.removeEventListener('beforeunload', flushState);
+  document.removeEventListener('click', closeLosslessPopup);
 });
 
 const flushState = () => {
@@ -286,11 +321,11 @@ const formatTime = (seconds) => {
 
     <div class="h-24 flex items-center justify-between px-4">
       <!-- Controls -->
-      <div class="flex items-center gap-5 w-1/3 pl-4">
+      <div class="flex items-center gap-2 sm:gap-4 md:gap-5 w-1/3 pl-1 sm:pl-4">
         <!-- Shuffle -->
         <button
           @click="store.toggleShuffle()"
-          class="transition"
+          class="transition hidden sm:block"
           :class="
             store.shuffleMode ? 'text-[var(--accent-color)]' : 'text-gray-400 hover:text-white'
           "
@@ -397,7 +432,7 @@ const formatTime = (seconds) => {
         <!-- Loop -->
         <button
           @click="store.toggleLoop()"
-          class="transition relative"
+          class="transition relative hidden sm:block"
           :class="
             store.loopMode > 0 ? 'text-[var(--accent-color)]' : 'text-gray-400 hover:text-white'
           "
@@ -426,19 +461,85 @@ const formatTime = (seconds) => {
       </div>
 
       <!-- Progress bar -->
-      <div class="flex flex-col items-center w-1/3 px-4">
-        <div v-if="store.currentSong" class="flex items-center gap-4 mb-2 w-full justify-center">
-          <CoverImage
-            :path="store.currentSong.path"
-            className="h-10 w-10 rounded shadow-sm bg-[#333]"
-          />
-          <div class="flex flex-col overflow-hidden text-center">
-            <span class="text-sm font-medium text-white truncate max-w-[260px]">{{
-              store.currentSong.title
-            }}</span>
-            <span class="text-xs text-gray-400 truncate max-w-[260px]">{{
-              store.currentSong.artist
-            }}</span>
+      <div class="flex flex-col items-center w-1/3 px-1 sm:px-4">
+        <div
+          v-if="store.currentSong"
+          class="flex items-center gap-2 md:gap-4 mb-1.5 md:mb-2 w-full justify-center"
+        >
+          <!-- Group container: CoverImage on left, Lossless Badge on right, both aligned to top -->
+          <div class="hidden sm:flex items-start shrink-0 gap-1.5 relative">
+            <CoverImage
+              :path="store.currentSong.path"
+              className="h-8 w-8 md:h-10 md:w-10 rounded shadow-sm bg-[#333]"
+            />
+
+            <!-- Lossless Badge Container -->
+            <div v-if="isLossless" class="relative mt-0.5 shrink-0">
+              <button
+                @click.stop="losslessPopupOpen = !losslessPopupOpen"
+                class="flex shrink-0 items-center justify-center text-gray-500 hover:text-gray-300 transition-colors focus:outline-none"
+                title="Lossless Audio"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 15 9"
+                  class="h-2.5 w-[17px] fill-current"
+                >
+                  <path
+                    d="M8.184,0.35C9.944,0.35 10.703,3.296 11.338,5.238C11.673,3.842 11.497,3.542 11.857,3.542C11.99,3.542 12.126,3.633 12.126,3.798C12.126,3.809 12.123,3.839 12.117,3.883L12.091,4.058C12.02,4.522 11.845,5.494 11.654,6.144C13.198,10.191 14.345,4.861 14.474,3.772C14.493,3.615 14.612,3.542 14.731,3.542C14.891,3.542 15.022,3.662 14.997,3.843C14.72,5.605 14.295,8.35 12.547,8.35C11.582,8.35 11.04,7.595 10.611,6.73C9.54,4.626 9.047,1.093 7.997,1.093C7.66,1.093 7.411,1.444 7.394,1.444C7.362,1.444 7.337,1.301 7.023,0.909C7.322,0.567 7.734,0.35 8.184,0.35ZM2.458,0.354C5.211,0.354 5.456,7.618 7.014,7.618C7.197,7.618 7.394,7.507 7.61,7.256C7.729,7.458 7.851,7.638 7.978,7.796C7.667,8.151 7.28,8.35 6.795,8.35C5.054,8.349 4.306,5.434 3.663,3.466C3.511,4.097 3.432,4.669 3.402,4.925C3.382,5.088 3.263,5.163 3.143,5.163C3.009,5.163 2.874,5.071 2.874,4.908L2.874,4.908L2.877,4.87C2.966,4.223 3.146,3.243 3.347,2.56C3.079,1.858 2.745,1.091 2.252,1.091C1.257,1.091 0.687,3.591 0.527,4.925C0.508,5.088 0.388,5.163 0.268,5.163C0.135,5.163 0,5.071 0,4.908C0,4.896 0.001,4.883 0.002,4.87C0.283,2.836 0.808,0.354 2.458,0.354ZM5.315,0.35C5.809,0.35 6.339,0.608 6.797,1.211C6.822,1.241 7.078,1.639 7.159,1.777C8.277,3.802 8.818,7.627 9.881,7.627C10.065,7.627 10.264,7.513 10.484,7.256C10.604,7.458 10.726,7.638 10.852,7.796C10.542,8.15 10.155,8.35 9.67,8.35C6.933,8.349 6.636,1.09 5.128,1.09C4.788,1.09 4.536,1.444 4.519,1.444C4.487,1.444 4.462,1.301 4.148,0.909C4.455,0.558 4.87,0.35 5.315,0.35Z"
+                  />
+                </svg>
+              </button>
+
+              <!-- Popover (slightly larger) -->
+              <div
+                v-if="losslessPopupOpen"
+                class="lossless-popover-content absolute top-full left-1/2 -translate-x-1/2 mt-3 z-[100] bg-[#1c1c1e] border border-[#323236] rounded-xl shadow-2xl p-4 w-[230px] text-center select-none animate-fade-in"
+                @click.stop
+              >
+                <!-- Upward pointing arrow -->
+                <div
+                  class="absolute bottom-full left-1/2 -translate-x-1/2 translate-y-1/2 w-2 h-2 bg-[#1c1c1e] border-l border-t border-[#323236] rotate-45"
+                ></div>
+
+                <!-- Lossless Logo (Small) -->
+                <div class="flex justify-center mb-2">
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    viewBox="0 0 15 9"
+                    class="h-5 w-[35px] text-white fill-current"
+                  >
+                    <path
+                      d="M8.184,0.35C9.944,0.35 10.703,3.296 11.338,5.238C11.673,3.842 11.497,3.542 11.857,3.542C11.99,3.542 12.126,3.633 12.126,3.798C12.126,3.809 12.123,3.839 12.117,3.883L12.091,4.058C12.02,4.522 11.845,5.494 11.654,6.144C13.198,10.191 14.345,4.861 14.474,3.772C14.493,3.615 14.612,3.542 14.731,3.542C14.891,3.542 15.022,3.662 14.997,3.843C14.72,5.605 14.295,8.35 12.547,8.35C11.582,8.35 11.04,7.595 10.611,6.73C9.54,4.626 9.047,1.093 7.997,1.093C7.66,1.093 7.411,1.444 7.394,1.444C7.362,1.444 7.337,1.301 7.023,0.909C7.322,0.567 7.734,0.35 8.184,0.35ZM2.458,0.354C5.211,0.354 5.456,7.618 7.014,7.618C7.197,7.618 7.394,7.507 7.61,7.256C7.729,7.458 7.851,7.638 7.978,7.796C7.667,8.151 7.28,8.35 6.795,8.35C5.054,8.349 4.306,5.434 3.663,3.466C3.511,4.097 3.432,4.669 3.402,4.925C3.382,5.088 3.263,5.163 3.143,5.163C3.009,5.163 2.874,5.071 2.874,4.908L2.874,4.908L2.877,4.87C2.966,4.223 3.146,3.243 3.347,2.56C3.079,1.858 2.745,1.091 2.252,1.091C1.257,1.091 0.687,3.591 0.527,4.925C0.508,5.088 0.388,5.163 0.268,5.163C0.135,5.163 0,5.071 0,4.908C0,4.896 0.001,4.883 0.002,4.87C0.283,2.836 0.808,0.354 2.458,0.354ZM5.315,0.35C5.809,0.35 6.339,0.608 6.797,1.211C6.822,1.241 7.078,1.639 7.159,1.777C8.277,3.802 8.818,7.627 9.881,7.627C10.065,7.627 10.264,7.513 10.484,7.256C10.604,7.458 10.726,7.638 10.852,7.796C10.542,8.15 10.155,8.35 9.67,8.35C6.933,8.349 6.636,1.09 5.128,1.09C4.788,1.09 4.536,1.444 4.519,1.444C4.487,1.444 4.462,1.301 4.148,0.909C4.455,0.558 4.87,0.35 5.315,0.35Z"
+                    />
+                  </svg>
+                </div>
+
+                <!-- Title -->
+                <h4 class="text-sm font-bold text-white mb-0.5">Lossless</h4>
+                <!-- Description -->
+                <p class="text-xs text-gray-400 mb-3 leading-normal">
+                  This audio is playing with lossless compression.
+                </p>
+
+                <!-- Technical Specs -->
+                <div
+                  class="bg-[#2c2c2e]/60 rounded-lg py-1 px-3 text-xs font-semibold text-[var(--accent-color)] font-variant-numeric tracking-wide border border-white/5"
+                >
+                  {{ formatLosslessSpecs() }}
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="flex flex-col overflow-hidden text-center min-w-0 flex-1">
+            <span
+              class="text-xs md:text-sm font-medium text-white truncate max-w-[80px] sm:max-w-[180px] md:max-w-[260px]"
+              >{{ store.currentSong.title }}</span
+            >
+            <span
+              class="text-[10px] md:text-xs text-gray-400 truncate max-w-[80px] sm:max-w-[180px] md:max-w-[260px]"
+              >{{ store.currentSong.artist }}</span
+            >
           </div>
           <button
             @click="store.toggleFavorite(store.currentSong.path)"
@@ -474,7 +575,7 @@ const formatTime = (seconds) => {
         <div v-else class="h-10 mb-2 flex items-center text-gray-500 text-sm">Select a song</div>
 
         <div
-          class="w-full flex items-center gap-3 text-xs text-gray-400 font-variant-numeric tabular-nums"
+          class="w-full flex items-center gap-1.5 sm:gap-3 text-[10px] sm:text-xs text-gray-400 font-variant-numeric tabular-nums"
         >
           <span>{{ formatTime(store.currentTime) }}</span>
           <input
@@ -484,7 +585,7 @@ const formatTime = (seconds) => {
             v-model="seekValue"
             @input="onSeekInput"
             @change="onSeekCommit"
-            class="w-full h-1 rounded-lg appearance-none cursor-pointer accent-[var(--accent-color)] hover:accent-white"
+            class="flex-1 h-1 rounded-lg appearance-none cursor-pointer accent-[var(--accent-color)] hover:accent-white"
             :style="{
               background: `linear-gradient(to right, var(--accent-color) ${progressPercentage}%, #4b5563 ${progressPercentage}%)`,
             }"
@@ -494,7 +595,7 @@ const formatTime = (seconds) => {
       </div>
 
       <!-- Volume -->
-      <div class="flex items-center justify-end gap-3 w-1/3 pr-4">
+      <div class="flex items-center justify-end gap-1.5 sm:gap-3 w-1/3 pr-1 sm:pr-4">
         <!-- Real-time audio visualizer (reacts to the playing track) -->
         <Visualizer v-if="store.visualizerEnabled && store.currentSong" />
 
@@ -607,7 +708,7 @@ const formatTime = (seconds) => {
           step="0.01"
           :value="store.isMuted ? 0 : store.volume"
           @input="store.setVolume($event.target.value)"
-          class="w-24 h-1 rounded-lg appearance-none cursor-pointer accent-[var(--accent-color)] hover:accent-white transition-opacity duration-200"
+          class="hidden sm:block w-16 md:w-24 h-1 rounded-lg appearance-none cursor-pointer accent-[var(--accent-color)] hover:accent-white transition-opacity duration-200"
           :class="store.isMuted ? 'opacity-40' : 'opacity-100'"
           :style="{
             background: `linear-gradient(to right, var(--accent-color) ${volumePercentage}%, #4b5563 ${volumePercentage}%)`,
@@ -626,5 +727,21 @@ input[type='range']::-webkit-slider-thumb {
   border-radius: 50%;
   background: currentColor;
   margin-top: -4px;
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.15s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  transform-origin: top center;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -4px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1);
+  }
 }
 </style>

@@ -317,6 +317,39 @@ function newPlaylist() {
             </button>
           </div>
           <div class="overflow-auto flex-1 -mr-1 pr-1">
+            <!-- Link to All Playlists -->
+            <router-link
+              to="/playlists"
+              active-class="bg-[#282828] text-[var(--accent-color)] font-medium"
+              class="flex items-center rounded-md text-sm text-[var(--text-secondary)] hover:text-white hover:bg-[#282828] transition-colors mb-1"
+              :class="compact ? 'justify-center py-1.5' : 'gap-3 px-2 py-1.5'"
+              :title="compact ? 'All Playlists' : null"
+            >
+              <div
+                class="h-7 w-7 rounded shrink-0 flex items-center justify-center bg-[#282828] text-gray-400 group-hover:text-white"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <line x1="8" y1="6" x2="21" y2="6"></line>
+                  <line x1="8" y1="12" x2="21" y2="12"></line>
+                  <line x1="8" y1="18" x2="21" y2="18"></line>
+                  <line x1="3" y1="6" x2="3.01" y2="6"></line>
+                  <line x1="3" y1="12" x2="3.01" y2="12"></line>
+                  <line x1="3" y1="18" x2="3.01" y2="18"></line>
+                </svg>
+              </div>
+              <span v-if="!compact" class="truncate">All Playlists</span>
+            </router-link>
+
             <router-link
               v-for="pl in store.playlists"
               :key="pl.id"
@@ -413,7 +446,7 @@ function newPlaylist() {
             @click="store.queuePanelOpen = false"
           >
             <router-view v-slot="{ Component }">
-              <keep-alive :include="['SongsView', 'AlbumsView', 'ArtistsView']">
+              <keep-alive :include="['SongsView', 'AlbumsView', 'ArtistsView', 'PlaylistsView']">
                 <component :is="Component" />
               </keep-alive>
             </router-view>

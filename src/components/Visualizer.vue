@@ -236,7 +236,7 @@ onMounted(async () => {
 <template>
   <canvas
     ref="canvasRef"
-    class="mr-3 shrink-0 translate-y-[-16px]"
+    class="mr-3 shrink-0 translate-y-[-16px] hidden md:block"
     style="width: 33px; height: 55px"
     :title="store.isPlaying ? 'Now playing' : 'Audio visualizer'"
     aria-hidden="true"
