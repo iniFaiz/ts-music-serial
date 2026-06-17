@@ -6,7 +6,7 @@ const props = defineProps({
   cover: { type: String, default: null },
   // Box styling (size/rounding/shadow). The initials font scales from `size`.
   className: { type: String, default: 'h-10 w-10 rounded' },
-  size: { type: Number, default: 40 }
+  size: { type: Number, default: 40 },
 });
 
 // Deterministic hue from the name so each playlist keeps a consistent colour.

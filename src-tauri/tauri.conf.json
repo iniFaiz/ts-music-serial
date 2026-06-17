@@ -15,6 +15,9 @@
         "title": "ts-music",
         "width": 1200,
         "height": 700,
+        "minWidth": 720,
+        "minHeight": 480,
+        "decorations": false,
         "dragDropEnabled": false
       }
     ],

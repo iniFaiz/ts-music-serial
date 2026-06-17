@@ -34,6 +34,7 @@ struct MusicTrack {
     date_added: u64,
     year: Option<u32>,
     track_number: Option<u32>,
+    has_cover: bool,
 }
 
 // Filter supported audio files by extension.
@@ -94,6 +95,7 @@ fn parse_metadata(path: &Path) -> Option<MusicTrack> {
     let year = tag.and_then(|t| t.year());
     let track_number = tag.and_then(|t| t.track());
     let duration_secs = properties.duration().as_secs();
+    let has_cover = tag.as_ref().map_or(false, |t| !t.pictures().is_empty());
 
     Some(MusicTrack {
         path: path_str,
@@ -104,6 +106,7 @@ fn parse_metadata(path: &Path) -> Option<MusicTrack> {
         date_added,
         year,
         track_number,
+        has_cover,
     })
 }
 

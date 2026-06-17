@@ -73,7 +73,9 @@ const create = () => {
       @click.self="cancel"
       @keydown.esc="cancel"
     >
-      <div class="w-[520px] max-w-[92vw] bg-[#232323] rounded-xl shadow-2xl border border-[#3a3a3a] p-6">
+      <div
+        class="w-[520px] max-w-[92vw] bg-[#232323] rounded-xl shadow-2xl border border-[#3a3a3a] p-6"
+      >
         <h2 class="text-xl font-bold text-white mb-5">Create playlist</h2>
 
         <div class="flex gap-5">
@@ -84,11 +86,30 @@ const create = () => {
             title="Choose a cover image"
           >
             <img v-if="cover" :src="cover" class="w-full h-full object-cover" alt="" />
-            <div v-else class="flex flex-col items-center gap-2 text-gray-500 group-hover:text-[var(--accent-color)] transition-colors">
-              <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+            <div
+              v-else
+              class="flex flex-col items-center gap-2 text-gray-500 group-hover:text-[var(--accent-color)] transition-colors"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="32"
+                height="32"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <line x1="12" y1="5" x2="12" y2="19"></line>
+                <line x1="5" y1="12" x2="19" y2="12"></line>
+              </svg>
               <span class="text-[11px]">Add cover</span>
             </div>
-            <div v-if="cover" class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs">
+            <div
+              v-if="cover"
+              class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs"
+            >
               Change
             </div>
           </button>

@@ -14,18 +14,19 @@ export const store = reactive({
   songs: [],
   roots: [],
   loading: false,
-  statusMessage: "Ready to scan",
-  selectedPath: "",
-  searchQuery: "",
+  statusMessage: 'Ready to scan',
+  selectedPath: '',
+  searchQuery: '',
   useParallelism: true,
   scanComplete: false,
-  scanDuration: "0",
+  scanDuration: '0',
   scanCount: 0,
 
   currentSong: null,
   isPlaying: false,
   isBuffering: false,
   volume: 1.0,
+  isMuted: false,
   currentTime: 0,
   duration: 0,
   queue: [],
@@ -52,7 +53,7 @@ export const store = reactive({
       await idbSet('library', JSON.parse(JSON.stringify(this.songs)));
       await idbSet('roots', [...this.roots]);
     } catch (e) {
-      console.error("Failed to persist library", e);
+      console.error('Failed to persist library', e);
     }
   },
 
@@ -69,13 +70,14 @@ export const store = reactive({
           positionSecs: this.currentTime || 0,
           queuePaths: this.queue.map((s) => s.path),
           volume: this.volume,
+          isMuted: this.isMuted,
           loopMode: this.loopMode,
           shuffleMode: this.shuffleMode,
           autoplayMode: this.autoplayMode,
         },
       });
     } catch (e) {
-      console.error("Failed to persist app state", e);
+      console.error('Failed to persist app state', e);
     }
   },
 
@@ -87,7 +89,7 @@ export const store = reactive({
         try {
           await idbSet('library', JSON.parse(legacy));
         } catch (e) {
-          console.error("Failed to migrate legacy library", e);
+          console.error('Failed to migrate legacy library', e);
         }
         localStorage.removeItem('music_library');
       }
@@ -108,7 +110,7 @@ export const store = reactive({
         try {
           await invoke('restore_roots', { roots: this.roots });
         } catch (e) {
-          console.error("Failed to restore roots", e);
+          console.error('Failed to restore roots', e);
         }
       }
 
@@ -121,7 +123,7 @@ export const store = reactive({
       // Restore likes, playlists and the last playback session.
       await this.restoreState();
     } catch (e) {
-      console.error("Failed to load library", e);
+      console.error('Failed to load library', e);
     }
   },
 
@@ -130,7 +132,7 @@ export const store = reactive({
     try {
       state = await idbGet('app_state');
     } catch (e) {
-      console.error("Failed to read app state", e);
+      console.error('Failed to read app state', e);
       return;
     }
     if (!state) return;
@@ -142,6 +144,7 @@ export const store = reactive({
     if (!pb) return;
 
     if (typeof pb.volume === 'number') this.volume = pb.volume;
+    if (typeof pb.isMuted === 'boolean') this.isMuted = pb.isMuted;
     this.loopMode = pb.loopMode || 0;
     this.shuffleMode = !!pb.shuffleMode;
     this.autoplayMode = !!pb.autoplayMode;
@@ -172,13 +175,13 @@ export const store = reactive({
     this.scanComplete = false;
     this.favorites = [];
     this.playlists = [];
-    this.statusMessage = "Library reset";
+    this.statusMessage = 'Library reset';
     try {
       await idbDelete('library');
       await idbDelete('roots');
       await idbDelete('app_state');
     } catch (e) {
-      console.error("Failed to reset library", e);
+      console.error('Failed to reset library', e);
     }
   },
 
@@ -196,26 +199,26 @@ export const store = reactive({
       }
     } catch (err) {
       console.error(err);
-      this.statusMessage = "Error opening dialog";
+      this.statusMessage = 'Error opening dialog';
     }
   },
 
   async scanMusic(path) {
     this.loading = true;
     this.scanComplete = false;
-    this.statusMessage = "Scanning...";
+    this.statusMessage = 'Scanning...';
 
     const startTime = performance.now();
 
     try {
-      const result = await invoke("scan_music_folder", { 
-        path, 
-        useParallelism: this.useParallelism 
+      const result = await invoke('scan_music_folder', {
+        path,
+        useParallelism: this.useParallelism,
       });
       const endTime = performance.now();
-      
-      const existingPaths = new Set(this.songs.map(s => s.path));
-      const newSongs = result.filter(s => !existingPaths.has(s.path));
+
+      const existingPaths = new Set(this.songs.map((s) => s.path));
+      const newSongs = result.filter((s) => !existingPaths.has(s.path));
 
       this.songs = sortTracks([...this.songs, ...newSongs]);
 
@@ -226,7 +229,7 @@ export const store = reactive({
 
       const timeSeconds = ((endTime - startTime) / 1000).toFixed(2);
       this.statusMessage = `Added ${newSongs.length} new tracks in ${timeSeconds}s`;
-      
+
       this.scanDuration = timeSeconds;
       this.scanCount = this.songs.length;
       this.scanComplete = true;
@@ -245,7 +248,7 @@ export const store = reactive({
     if (newQueue && newQueue.length > 0) {
       this.queue = [...newQueue];
     } else if (this.queue.length === 0) {
-        this.queue = [...this.songs];
+      this.queue = [...this.songs];
     }
     this.pendingSeek = null;
     this.pendingAutoplay = true;
@@ -425,11 +428,11 @@ export const store = reactive({
     if (!this.currentSong || this.queue.length === 0) return;
 
     if (this.loopMode === 2 && !userTriggered) {
-      return; 
+      return;
     }
-    
+
     let nextIndex;
-    const currentIndex = this.queue.findIndex(s => s.path === this.currentSong.path);
+    const currentIndex = this.queue.findIndex((s) => s.path === this.currentSong.path);
 
     if (this.shuffleMode) {
       nextIndex = Math.floor(Math.random() * this.queue.length);
@@ -464,14 +467,14 @@ export const store = reactive({
 
   prevSong() {
     if (!this.currentSong || this.queue.length === 0) return;
-    
+
     if (this.currentTime > 3) {
       this.currentTime = 0;
-      return; 
+      return;
     }
 
     let prevIndex;
-    const currentIndex = this.queue.findIndex(s => s.path === this.currentSong.path);
+    const currentIndex = this.queue.findIndex((s) => s.path === this.currentSong.path);
 
     if (this.shuffleMode) {
       prevIndex = Math.floor(Math.random() * this.queue.length);
@@ -480,11 +483,11 @@ export const store = reactive({
     }
 
     if (prevIndex < 0) {
-       if (this.loopMode === 1) {
-         prevIndex = this.queue.length - 1;
-       } else {
-         prevIndex = 0;
-       }
+      if (this.loopMode === 1) {
+        prevIndex = this.queue.length - 1;
+      } else {
+        prevIndex = 0;
+      }
     }
 
     this.pendingSeek = null;
@@ -495,7 +498,21 @@ export const store = reactive({
   },
 
   setVolume(val) {
-    this.volume = parseFloat(val);
+    const num = parseFloat(val);
+    this.volume = num;
+    if (num > 0 && this.isMuted) {
+      this.isMuted = false;
+    } else if (num === 0 && !this.isMuted) {
+      this.isMuted = true;
+    }
+  },
+
+  toggleMute() {
+    this.isMuted = !this.isMuted;
+    if (!this.isMuted && this.volume === 0) {
+      this.volume = 0.25; // Default volume when unmuting from 0
+    }
+    this.persistState();
   },
 
   setParallelism(val) {
@@ -529,12 +546,13 @@ export const store = reactive({
   get filteredSongs() {
     if (!this.searchQuery) return this.songs;
     const lower = this.searchQuery.toLowerCase();
-    return this.songs.filter(song => 
-      (song.title && song.title.toLowerCase().includes(lower)) ||
-      (song.artist && song.artist.toLowerCase().includes(lower)) ||
-      (song.album && song.album.toLowerCase().includes(lower))
+    return this.songs.filter(
+      (song) =>
+        (song.title && song.title.toLowerCase().includes(lower)) ||
+        (song.artist && song.artist.toLowerCase().includes(lower)) ||
+        (song.album && song.album.toLowerCase().includes(lower))
     );
-  }
+  },
 });
 
 store.loadLibrary();

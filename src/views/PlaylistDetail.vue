@@ -56,7 +56,9 @@ const removePlaylist = () => {
       />
 
       <div class="flex flex-col gap-1 pb-2 overflow-hidden flex-1">
-        <h4 class="text-sm font-bold text-[var(--accent-color)] uppercase tracking-wider mb-1">Playlist</h4>
+        <h4 class="text-sm font-bold text-[var(--accent-color)] uppercase tracking-wider mb-1">
+          Playlist
+        </h4>
 
         <input
           v-if="editing"
@@ -76,8 +78,15 @@ const removePlaylist = () => {
           {{ playlist.name }}
         </h1>
 
-        <p v-if="playlist.description" class="text-sm text-[var(--text-secondary)] mt-2 line-clamp-2 max-w-xl">{{ playlist.description }}</p>
-        <p class="text-xs text-[var(--text-secondary)] font-medium mt-2">{{ songs.length }} songs</p>
+        <p
+          v-if="playlist.description"
+          class="text-sm text-[var(--text-secondary)] mt-2 line-clamp-2 max-w-xl"
+        >
+          {{ playlist.description }}
+        </p>
+        <p class="text-xs text-[var(--text-secondary)] font-medium mt-2">
+          {{ songs.length }} songs
+        </p>
 
         <div class="flex gap-3 mt-6">
           <button
@@ -85,14 +94,38 @@ const removePlaylist = () => {
             :disabled="songs.length === 0"
             class="bg-[var(--accent-color)] text-white px-8 py-2 rounded-[4px] text-sm font-semibold hover:bg-red-500 transition flex items-center gap-2 shadow-lg disabled:opacity-40"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="currentColor"
+              stroke="none"
+            >
+              <polygon points="5 3 19 12 5 21 5 3"></polygon>
+            </svg>
             Play
           </button>
           <button
             @click="removePlaylist"
             class="bg-[#3a3a3a] text-[var(--text-secondary)] px-6 py-2 rounded-[4px] text-sm font-semibold hover:bg-[#444] hover:text-white transition flex items-center gap-2"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <polyline points="3 6 5 6 21 6"></polyline>
+              <path
+                d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+              ></path>
+            </svg>
             Delete
           </button>
         </div>

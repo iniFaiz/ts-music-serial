@@ -29,3 +29,62 @@ export async function navigateWithTransition(navigate, sourceEl, name = 'shared-
     sourceEl.style.viewTransitionName = prev;
   }
 }
+
+// Find a list cover by its data-cover-key (set on album/artist grid items). Used
+// on back-navigation to morph the detail cover into the matching list cover.
+// Iterates instead of using an attribute selector so odd characters in names
+// (quotes, brackets) can't break the query.
+function findCoverByKey(key) {
+  if (key == null) return null;
+  const nodes = document.querySelectorAll('[data-cover-key]');
+  for (const n of nodes) {
+    if (n.dataset.coverKey === String(key)) {
+      return n.querySelector('.cover-image') || n;
+    }
+  }
+  return null;
+}
+
+// Back-navigation counterpart of navigateWithTransition. The detail cover already
+// carries the shared name, so we just need to tag the destination list cover so
+// the API morphs the detail art back into its grid slot. Falls back to a plain
+// router.back() when the View Transition API is unavailable.
+export async function goBackWithTransition(router, name = 'shared-cover') {
+  const from = router.currentRoute.value;
+  const key = (from && from.params && (from.params.name ?? from.params.id)) ?? null;
+
+  if (typeof document === 'undefined' || !document.startViewTransition) {
+    router.back();
+    return;
+  }
+
+  let tagged = null;
+  const transition = document.startViewTransition(async () => {
+    // Wait until the route change actually settles (keep-alive restores the list
+    // DOM) before snapshotting, with a timeout so a no-op back can't hang.
+    await new Promise((resolve) => {
+      const off = router.afterEach(() => {
+        off();
+        resolve();
+      });
+      router.back();
+      setTimeout(resolve, 500);
+    });
+    await nextTick();
+    const el = findCoverByKey(key);
+    if (el) {
+      tagged = el;
+      tagged.dataset._prevVt = el.style.viewTransitionName || '';
+      el.style.viewTransitionName = name;
+    }
+  });
+
+  try {
+    await transition.finished;
+  } finally {
+    if (tagged) {
+      tagged.style.viewTransitionName = tagged.dataset._prevVt || '';
+      delete tagged.dataset._prevVt;
+    }
+  }
+}

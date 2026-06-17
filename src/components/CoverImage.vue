@@ -4,10 +4,10 @@ import { loadCover, getCachedCover, hasCachedCover } from '../coverCache';
 
 const props = defineProps({
   path: { type: String, required: true },
-  className: { type: String, default: "h-10 w-10 rounded" },
+  className: { type: String, default: 'h-10 w-10 rounded' },
   // When set, tags this cover with a view-transition-name so it can morph
   // to/from a matching cover on another page (shared-element transition).
-  transitionName: { type: String, default: "" }
+  transitionName: { type: String, default: '' },
 });
 
 // Hydrate synchronously from the shared cache so a previously seen cover renders
@@ -35,7 +35,10 @@ watch(() => props.path, resolveCover, { immediate: true });
 
 <template>
   <div
-    :class="[className, 'cover-image flex items-center justify-center overflow-hidden shrink-0 relative border border-white/5']"
+    :class="[
+      className,
+      'cover-image flex items-center justify-center overflow-hidden shrink-0 relative border border-white/5',
+    ]"
     :style="transitionName ? { viewTransitionName: transitionName } : null"
   >
     <img
@@ -46,8 +49,24 @@ watch(() => props.path, resolveCover, { immediate: true });
       loading="lazy"
       draggable="false"
     />
-    <div v-else class="w-full h-full bg-gradient-to-br from-gray-700 to-gray-800 flex items-center justify-center">
-      <svg xmlns="http://www.w3.org/2000/svg" class="w-1/2 h-1/2 text-gray-500 opacity-50" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
+    <div
+      v-else
+      class="w-full h-full bg-gradient-to-br from-gray-700 to-gray-800 flex items-center justify-center"
+    >
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        class="w-1/2 h-1/2 text-gray-500 opacity-50"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      >
+        <path d="M9 18V5l12-2v13"></path>
+        <circle cx="6" cy="18" r="3"></circle>
+        <circle cx="18" cy="16" r="3"></circle>
+      </svg>
     </div>
   </div>
 </template>
