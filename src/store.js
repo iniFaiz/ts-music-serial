@@ -417,6 +417,85 @@ export const store = reactive({
     }
   },
 
+  async deleteSong(path) {
+    try {
+      await invoke('player_delete_file', { path });
+    } catch (e) {
+      console.error('Failed to delete file from disk:', e);
+      throw e;
+    }
+
+    if (this.currentSong && this.currentSong.path === path) {
+      if (this.queue.length <= 1) {
+        this.isPlaying = false;
+        this.currentSong = null;
+        this.currentTime = 0;
+        this.duration = 0;
+        try {
+          await invoke('player_stop');
+        } catch (err) {
+          console.error(err);
+        }
+      } else {
+        this.nextSong(true);
+      }
+    }
+
+    this.queue = this.queue.filter((s) => s.path !== path);
+    this.songs = this.songs.filter((s) => s.path !== path);
+
+    const favIdx = this.favorites.indexOf(path);
+    if (favIdx >= 0) {
+      this.favorites.splice(favIdx, 1);
+    }
+
+    this.playlists.forEach((pl) => {
+      pl.paths = pl.paths.filter((p) => p !== path);
+    });
+
+    await this.persist();
+    await this.persistState();
+
+    this.scanCount = this.songs.length;
+    this.statusMessage = `Deleted file: ${path}`;
+  },
+
+  async removeSongFromLibrary(path) {
+    if (this.currentSong && this.currentSong.path === path) {
+      if (this.queue.length <= 1) {
+        this.isPlaying = false;
+        this.currentSong = null;
+        this.currentTime = 0;
+        this.duration = 0;
+        try {
+          await invoke('player_stop');
+        } catch (err) {
+          console.error(err);
+        }
+      } else {
+        this.nextSong(true);
+      }
+    }
+
+    this.queue = this.queue.filter((s) => s.path !== path);
+    this.songs = this.songs.filter((s) => s.path !== path);
+
+    const favIdx = this.favorites.indexOf(path);
+    if (favIdx >= 0) {
+      this.favorites.splice(favIdx, 1);
+    }
+
+    this.playlists.forEach((pl) => {
+      pl.paths = pl.paths.filter((p) => p !== path);
+    });
+
+    await this.persist();
+    await this.persistState();
+
+    this.scanCount = this.songs.length;
+    this.statusMessage = `Removed file from list: ${path}`;
+  },
+
   playlistSongs(id) {
     const pl = this.getPlaylist(id);
     if (!pl) return [];

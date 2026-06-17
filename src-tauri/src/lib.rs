@@ -916,6 +916,64 @@ fn smtc_set_metadata(
 #[tauri::command]
 fn smtc_set_playback(_playing: bool, _position: f64) {}
 
+#[tauri::command]
+fn player_show_in_folder(app: AppHandle, path: String) -> Result<(), String> {
+    use std::process::Command;
+    let path_buf = Path::new(&path);
+    if !is_allowed_audio(&app, path_buf) {
+        return Err("Path is not within an allowed music folder".to_string());
+    }
+    if !path_buf.exists() {
+        return Err("File does not exist".to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let path_win = path.replace('/', "\\");
+        Command::new("explorer")
+            .arg(format!("/select,{}", path_win))
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg("-R")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(parent) = path_buf.parent() {
+            Command::new("xdg-open")
+                .arg(parent)
+                .spawn()
+                .map_err(|e| e.to_string())?;
+        } else {
+            return Err("Parent directory not found".to_string());
+        }
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+fn player_delete_file(app: AppHandle, path: String) -> Result<(), String> {
+    let path_buf = Path::new(&path);
+    if !is_allowed_audio(&app, path_buf) {
+        return Err("Path is not within an allowed music folder".to_string());
+    }
+    if path_buf.exists() {
+        fs::remove_file(path_buf).map_err(|e| e.to_string())?;
+        Ok(())
+    } else {
+        Err("File not found".to_string())
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[allow(unused_mut)]
@@ -948,7 +1006,9 @@ pub fn run() {
             player_spectrum,
             player_set_spectrum_enabled,
             smtc_set_metadata,
-            smtc_set_playback
+            smtc_set_playback,
+            player_show_in_folder,
+            player_delete_file
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

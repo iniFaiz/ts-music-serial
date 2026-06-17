@@ -74,7 +74,7 @@ const checkWindowStatus = async () => {
     // The window is visible only if it is NOT minimized AND document is NOT hidden
     const visible = !minimized && !docHidden;
     updateVisibilityState(visible);
-  } catch (e) {
+  } catch {
     // ignore
   }
 };
@@ -203,7 +203,7 @@ onMounted(async () => {
   try {
     unlistenBlur = await appWindow.listen('tauri://blur', checkWindowStatus);
     unlistenFocus = await appWindow.listen('tauri://focus', checkWindowStatus);
-  } catch (e) {
+  } catch {
     // ignore
   }
 
