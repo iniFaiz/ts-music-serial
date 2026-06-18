@@ -59,8 +59,10 @@ const panelLines = computed(() => {
 
     if (isEmptyOrNote) {
       const nextLine = rawLines[i + 1];
+      // Skip gap at end of song (no next line)
+      if (!nextLine) continue;
       const gapStart = currentLine.time_ms;
-      const gapEnd = nextLine ? nextLine.time_ms - 1000 : gapStart + 4000;
+      const gapEnd = nextLine.time_ms - 1000;
       if (gapEnd > gapStart) {
         result.push({
           isGap: true,
@@ -77,9 +79,11 @@ const panelLines = computed(() => {
   return result;
 });
 
+const songDurationMs = computed(() => (store.duration || 0) * 1000);
+
 const activeIdx = computed(() => {
   if (!lyrics.value || !lyrics.value.synced) return -1;
-  return activeLineIndex(panelLines.value, currentTimeMs.value);
+  return activeLineIndex(panelLines.value, currentTimeMs.value, songDurationMs.value);
 });
 
 function getDotColor(line, dotIdx) {

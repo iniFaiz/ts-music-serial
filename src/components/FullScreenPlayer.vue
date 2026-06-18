@@ -106,8 +106,10 @@ const lines = computed(() => {
 
     if (isEmptyOrNote) {
       const nextLine = rawLines[i + 1];
+      // Skip gap at end of song (no next line)
+      if (!nextLine) continue;
       const gapStart = currentLine.time_ms;
-      const gapEnd = nextLine ? nextLine.time_ms - 1000 : gapStart + 4000;
+      const gapEnd = nextLine.time_ms - 1000;
       if (gapEnd > gapStart) {
         result.push({
           isGap: true,
@@ -126,8 +128,9 @@ const lines = computed(() => {
 
 // +50ms lookahead: compensates for the ~50ms average lag from the 100ms poll interval
 const currentMs = computed(() => (store.currentTime || 0) * 1000 + 50);
+const songDurationMs = computed(() => (store.duration || 0) * 1000);
 const activeIdx = computed(() =>
-  synced.value ? activeLineIndex(lines.value, currentMs.value) : -1
+  synced.value ? activeLineIndex(lines.value, currentMs.value, songDurationMs.value) : -1
 );
 
 function getDotColor(line, dotIdx) {

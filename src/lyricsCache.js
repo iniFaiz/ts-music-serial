@@ -53,9 +53,10 @@ export async function loadLyrics(song, { force = false } = {}) {
 }
 
 // Index of the lyric line that should be highlighted at `timeMs` (the last line
-// whose timestamp has passed). Returns -1 before the first line. Assumes lines
-// are sorted by time_ms (the backend guarantees this).
-export function activeLineIndex(lines, timeMs) {
+// whose timestamp has passed). Returns -1 before the first line or after the
+// last line's estimated end. Assumes lines are sorted by time_ms.
+// `songDurationMs` is the total song duration — used to cap the last line.
+export function activeLineIndex(lines, timeMs, songDurationMs = 0) {
   if (!lines || lines.length === 0) return -1;
   let lo = 0;
   let hi = lines.length - 1;
@@ -70,6 +71,43 @@ export function activeLineIndex(lines, timeMs) {
       hi = mid - 1;
     }
   }
+
+  // If the last line is active, check if time has exceeded its estimated end
+  if (ans >= 0 && ans === lines.length - 1 && lines.length >= 2) {
+    const lastLine = lines[ans];
+
+    // For gap lines, use their built-in endTimeMs
+    if (lastLine.endTimeMs && timeMs > lastLine.endTimeMs) return -1;
+
+    // Estimate end time from average duration of all preceding vocal lines
+    let totalDur = 0;
+    let count = 0;
+    for (let i = 0; i < lines.length - 1; i++) {
+      if (lines[i].isGap) continue;
+      // Duration of line i = start of next line - start of this line
+      let nextStart = null;
+      for (let j = i + 1; j < lines.length; j++) {
+        if (lines[j].time_ms != null) { nextStart = lines[j].time_ms; break; }
+      }
+      if (nextStart != null) {
+        totalDur += nextStart - lines[i].time_ms;
+        count++;
+      }
+    }
+
+    if (count > 0) {
+      const avgDuration = totalDur / count;
+      const estimatedEnd = lastLine.time_ms + avgDuration;
+      // Also respect song duration if available — use whichever is smaller
+      const cap = songDurationMs > 0
+        ? Math.min(estimatedEnd, songDurationMs)
+        : estimatedEnd;
+      if (timeMs > cap) return -1;
+    } else if (songDurationMs > 0 && timeMs > songDurationMs) {
+      return -1;
+    }
+  }
+
   return ans;
 }
 
