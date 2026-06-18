@@ -1,4 +1,4 @@
-﻿<script setup>
+<script setup>
 import { ref, computed, watch, nextTick, onUnmounted } from 'vue';
 import { store } from '../store';
 import { loadLyrics, activeLineIndex } from '../lyricsCache';
@@ -23,6 +23,12 @@ watch(() => store.currentSong, () => {
   lyrics.value = null;
   lyricsState.value = 'idle';
   if (store.lyricsPanelOpen) fetchLyrics();
+});
+
+watch(() => store.lyricsSource, () => {
+  lyrics.value = null;
+  lyricsState.value = 'idle';
+  if (store.lyricsPanelOpen) fetchLyrics(true);
 });
 
 // +50ms lookahead: compensates for the ~50ms average lag from the 100ms poll interval
@@ -160,7 +166,7 @@ function seekToLine(line) {
             :key="i"
             class="lp-line lp-active"
             :class="line.text === '' ? 'mt-5' : ''"
-          >{{ line.text || ' ' }}</div>
+          >{{ line.text || '\u00A0' }}</div>
         </div>
 
         <!-- Not found -->
@@ -220,7 +226,7 @@ function seekToLine(line) {
 
 /* Base line style */
 .lp-line {
-  font-size: 0.9375rem;
+  font-size: 1.125rem;
   font-weight: 600;
   line-height: 1.65;
   letter-spacing: -0.01em;

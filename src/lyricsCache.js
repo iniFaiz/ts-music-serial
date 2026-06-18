@@ -1,5 +1,10 @@
+import { watch } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { store } from './store';
+
+watch(() => store.lyricsSource, () => {
+  clearLyricsCache();
+});
 
 // Session cache of resolved lyrics, keyed by track path. Value is a Lyrics
 // object ({ synced, source, lines: [{ time_ms, text }] }) or null ("not found").

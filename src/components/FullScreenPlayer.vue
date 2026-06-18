@@ -69,6 +69,15 @@ watch(
     }
   }
 );
+watch(
+  () => store.lyricsSource,
+  () => {
+    lyrics.value = undefined;
+    if (store.fullscreenOpen) {
+      fetchLyrics(true);
+    }
+  }
+);
 
 const lines = computed(() => (lyrics.value && lyrics.value.lines) || []);
 const synced = computed(() => !!(lyrics.value && lyrics.value.synced));
@@ -492,7 +501,7 @@ const close = () => {
         >
           <div
             ref="linesEl"
-            class="flex-1 overflow-y-auto np-lyrics-scroll py-[35vh]"
+            class="flex-1 overflow-y-auto np-lyrics-scroll py-[35vh] w-full lg:w-[650px] lg:min-w-[650px]"
             @scroll.passive="() => { if (npIsAutoScrolling) return; npUserPausedUntil = Date.now() + 3000; if (npUserScrollTimer) clearTimeout(npUserScrollTimer); npUserScrollTimer = setTimeout(() => { npUserPausedUntil = 0; }, 3100); }"
           >
             <!-- Loading -->
@@ -637,6 +646,7 @@ input[type='range']::-webkit-slider-thumb {
     opacity   0.45s cubic-bezier(0.25, 1, 0.5, 1),
     transform 0.5s  cubic-bezier(0.34, 1.56, 0.64, 1);
   transform-origin: left center;
+  padding-right: 24px; /* Prevent text clipping on scale/translate */
 }
 .np-line-active {
   color: rgba(255, 255, 255, 0.97);

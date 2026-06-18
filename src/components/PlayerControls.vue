@@ -323,7 +323,7 @@ const handleTrackEnded = async () => {
 let pollTick = 0;
 
 const poll = async () => {
-  if (!store.currentSong) return;
+  if (!store.currentSong || store.isBuffering) return;
   try {
     const status = await invoke('player_status');
     if (status.duration > 0) store.duration = status.duration;
@@ -400,7 +400,7 @@ const formatTime = (seconds) => {
 
     <div class="h-24 flex items-center justify-between px-4">
       <!-- Controls -->
-      <div class="flex items-center gap-2 sm:gap-4 md:gap-5 w-1/3 pl-1 sm:pl-4">
+      <div class="flex items-center justify-start gap-1.5 sm:gap-3 md:gap-4.5 flex-1 min-w-[95px] sm:min-w-[150px] md:min-w-[180px] lg:min-w-[200px] pl-1 sm:pl-4">
         <!-- Shuffle -->
         <button
           @click="store.toggleShuffle()"
@@ -540,38 +540,59 @@ const formatTime = (seconds) => {
       </div>
 
       <!-- Progress bar -->
-      <div class="flex flex-col items-center w-1/3 px-1 sm:px-4">
+      <div class="flex flex-col items-center flex-1 min-w-[110px] sm:min-w-[180px] md:min-w-[220px] lg:min-w-[300px] px-1 sm:px-4">
         <div
           v-if="store.currentSong"
           class="flex items-center gap-2 md:gap-4 mb-1.5 md:mb-2 w-full justify-center"
         >
-          <!-- Group container: CoverImage on left, Lossless Badge on right, both aligned to top -->
-          <div class="hidden sm:flex items-start shrink-0 gap-1.5 relative">
-            <button
-              @click="openFullScreen()"
-              class="shrink-0 rounded overflow-hidden hover:opacity-90 transition focus:outline-none"
-              title="Open full screen (Ctrl+Shift+F)"
-            >
-              <CoverImage
-                :path="store.currentSong.path"
-                className="h-8 w-8 md:h-10 md:w-10 rounded shadow-sm bg-[#333]"
-              />
-            </button>
-
-            <!-- Lossless Badge Container -->
-            <div v-if="isLossless" class="relative mt-0.5 shrink-0">
+          <!-- Left spacer container: ensures the title/artist text is centered regardless of cover image size -->
+          <div class="w-[30px] sm:w-[60px] md:w-[75px] lg:w-[80px] flex items-center justify-start shrink-0">
+            <!-- Group container: CoverImage on left, Lossless Badge on right, both aligned to top -->
+            <div class="hidden sm:flex items-start shrink-0 gap-1.5 relative">
               <button
-                @click.stop="losslessPopupOpen = !losslessPopupOpen"
-                class="flex shrink-0 items-center justify-center text-gray-500 hover:text-gray-300 transition-colors focus:outline-none"
-                title="Lossless Audio"
+                @click="openFullScreen()"
+                class="shrink-0 rounded overflow-hidden relative group focus:outline-none"
+                title="Open full screen (Ctrl+Shift+F)"
               >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  viewBox="0 0 15 9"
-                  class="h-2.5 w-[17px] fill-current"
+                <CoverImage
+                  :path="store.currentSong.path"
+                  className="h-8 w-8 md:h-10 md:w-10 rounded shadow-sm bg-[#333]"
+                />
+                <div class="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none">
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2.5"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    class="text-white"
+                  >
+                    <polyline points="15 3 21 3 21 9" />
+                    <polyline points="9 21 3 21 3 15" />
+                    <line x1="21" y1="3" x2="14" y2="10" />
+                    <line x1="3" y1="21" x2="10" y2="14" />
+                  </svg>
+                </div>
+              </button>
+
+              <!-- Lossless Badge Container -->
+              <div v-if="isLossless" class="relative mt-0.5 shrink-0">
+                <button
+                  @click.stop="losslessPopupOpen = !losslessPopupOpen"
+                  class="flex shrink-0 items-center justify-center text-gray-500 hover:text-gray-300 transition-colors focus:outline-none"
+                  title="Lossless Audio"
                 >
-                  <path
-                    d="M8.184,0.35C9.944,0.35 10.703,3.296 11.338,5.238C11.673,3.842 11.497,3.542 11.857,3.542C11.99,3.542 12.126,3.633 12.126,3.798C12.126,3.809 12.123,3.839 12.117,3.883L12.091,4.058C12.02,4.522 11.845,5.494 11.654,6.144C13.198,10.191 14.345,4.861 14.474,3.772C14.493,3.615 14.612,3.542 14.731,3.542C14.891,3.542 15.022,3.662 14.997,3.843C14.72,5.605 14.295,8.35 12.547,8.35C11.582,8.35 11.04,7.595 10.611,6.73C9.54,4.626 9.047,1.093 7.997,1.093C7.66,1.093 7.411,1.444 7.394,1.444C7.362,1.444 7.337,1.301 7.023,0.909C7.322,0.567 7.734,0.35 8.184,0.35ZM2.458,0.354C5.211,0.354 5.456,7.618 7.014,7.618C7.197,7.618 7.394,7.507 7.61,7.256C7.729,7.458 7.851,7.638 7.978,7.796C7.667,8.151 7.28,8.35 6.795,8.35C5.054,8.349 4.306,5.434 3.663,3.466C3.511,4.097 3.432,4.669 3.402,4.925C3.382,5.088 3.263,5.163 3.143,5.163C3.009,5.163 2.874,5.071 2.874,4.908L2.874,4.908L2.877,4.87C2.966,4.223 3.146,3.243 3.347,2.56C3.079,1.858 2.745,1.091 2.252,1.091C1.257,1.091 0.687,3.591 0.527,4.925C0.508,5.088 0.388,5.163 0.268,5.163C0.135,5.163 0,5.071 0,4.908C0,4.896 0.001,4.883 0.002,4.87C0.283,2.836 0.808,0.354 2.458,0.354ZM5.315,0.35C5.809,0.35 6.339,0.608 6.797,1.211C6.822,1.241 7.078,1.639 7.159,1.777C8.277,3.802 8.818,7.627 9.881,7.627C10.065,7.627 10.264,7.513 10.484,7.256C10.604,7.458 10.726,7.638 10.852,7.796C10.542,8.15 10.155,8.35 9.67,8.35C6.933,8.349 6.636,1.09 5.128,1.09C4.788,1.09 4.536,1.444 4.519,1.444C4.487,1.444 4.462,1.301 4.148,0.909C4.455,0.558 4.87,0.35 5.315,0.35Z"
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    viewBox="0 0 15 9"
+                    class="h-2.5 w-[17px] fill-current"
+                  >
+                    <path
+                      d="M8.184,0.35C9.944,0.35 10.703,3.296 11.338,5.238C11.673,3.842 11.497,3.542 11.857,3.542C11.99,3.542 12.126,3.633 12.126,3.798C12.126,3.809 12.123,3.839 12.117,3.883L12.091,4.058C12.02,4.522 11.845,5.494 11.654,6.144C13.198,10.191 14.345,4.861 14.474,3.772C14.493,3.615 14.612,3.542 14.731,3.542C14.891,3.542 15.022,3.662 14.997,3.843C14.72,5.605 14.295,8.35 12.547,8.35C11.582,8.35 11.04,7.595 10.611,6.73C9.54,4.626 9.047,1.093 7.997,1.093C7.66,1.093 7.411,1.444 7.394,1.444C7.362,1.444 7.337,1.301 7.023,0.909C7.322,0.567 7.734,0.35 8.184,0.35ZM2.458,0.354C5.211,0.354 5.456,7.618 7.014,7.618C7.197,7.618 7.394,7.507 7.61,7.256C7.729,7.458 7.851,7.638 7.978,7.796C7.667,8.151 7.28,8.35 6.795,8.35C5.054,8.349 4.306,5.434 3.663,3.466C3.511,4.097 3.432,4.669 3.402,4.925C3.382,5.088 3.263,5.163 3.143,5.163C3.009,5.163 2.874,5.071 2.874,4.908L2.874,4.908L2.877,4.87C2.966,4.223 3.146,3.243 3.347,2.56C3.079,1.858 2.745,1.091 2.252,1.091C1.257,1.091 0.687,3.591 0.527,4.925C0.508,5.088 0.388,5.163 0.268,5.163C0.135,5.163 0,5.071 0,4.908C0,4.896 0.001,4.883 0.002,4.87C0.283,2.836 0.808,0.354 2.458,0.354ZM5.315,0.35C5.809,0.35 6.339,0.608 6.797,1.211C6.822,1.241 7.078,1.639 7.159,1.777C8.277,3.802 8.818,7.627 9.881,7.627C10.065,7.627 10.264,7.513 10.484,7.256C10.604,7.458 10.726,7.638 10.852,7.796C10.542,8.15 10.155,8.35 9.67,8.35C6.933,8.349 6.636,1.09 5.128,1.09C4.788,1.09 4.536,1.444 4.519,1.444C4.487,1.444 4.462,1.301 4.148,0.909C4.455,0.558 4.87,0.35 5.315,0.35Z"
                   />
                 </svg>
               </button>
@@ -616,46 +637,53 @@ const formatTime = (seconds) => {
               </div>
             </div>
           </div>
+        </div>
+
+          <!-- Song Title & Artist text container: set flex-1, text-center and min-w-0 -->
           <div class="flex flex-col overflow-hidden text-center min-w-0 flex-1">
             <span
-              class="text-xs md:text-sm font-medium text-white truncate max-w-[80px] sm:max-w-[180px] md:max-w-[260px]"
+              class="text-xs md:text-sm font-medium text-white truncate max-w-[80px] sm:max-w-[180px] md:max-w-[260px] lg:max-w-[360px] xl:max-w-[450px]"
               >{{ store.currentSong.title }}</span
             >
             <span
-              class="text-[10px] md:text-xs text-gray-400 truncate max-w-[80px] sm:max-w-[180px] md:max-w-[260px]"
+              class="text-[10px] md:text-xs text-gray-400 truncate max-w-[80px] sm:max-w-[180px] md:max-w-[260px] lg:max-w-[360px] xl:max-w-[450px]"
               >{{ store.currentSong.artist }}</span
             >
           </div>
-          <button
-            @click="store.toggleFavorite(store.currentSong.path)"
-            class="transition hover:scale-110 shrink-0"
-            :class="
-              store.isFavorite(store.currentSong.path)
-                ? 'text-[var(--accent-color)]'
-                : 'text-gray-400 hover:text-white'
-            "
-            :title="
-              store.isFavorite(store.currentSong.path)
-                ? 'Remove from Liked Songs'
-                : 'Add to Liked Songs'
-            "
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="18"
-              height="18"
-              viewBox="0 0 24 24"
-              :fill="store.isFavorite(store.currentSong.path) ? 'currentColor' : 'none'"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
+
+          <!-- Right spacer container: matches the width of the left container to center text perfectly -->
+          <div class="w-[30px] sm:w-[60px] md:w-[75px] lg:w-[80px] flex items-center justify-end shrink-0">
+            <button
+              @click="store.toggleFavorite(store.currentSong.path)"
+              class="transition hover:scale-110 shrink-0"
+              :class="
+                store.isFavorite(store.currentSong.path)
+                  ? 'text-[var(--accent-color)]'
+                  : 'text-gray-400 hover:text-white'
+              "
+              :title="
+                store.isFavorite(store.currentSong.path)
+                  ? 'Remove from Liked Songs'
+                  : 'Add to Liked Songs'
+              "
             >
-              <path
-                d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"
-              ></path>
-            </svg>
-          </button>
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                :fill="store.isFavorite(store.currentSong.path) ? 'currentColor' : 'none'"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path
+                  d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"
+                ></path>
+              </svg>
+            </button>
+          </div>
         </div>
         <div v-else class="h-10 mb-2 flex items-center text-gray-500 text-sm">Select a song</div>
 
@@ -666,11 +694,11 @@ const formatTime = (seconds) => {
           <input
             type="range"
             min="0"
-            :max="store.duration || 100"
-            v-model="seekValue"
+            :max="Math.max(store.duration || 100, seekValue)"
+            v-model.number="seekValue"
             @input="onSeekInput"
             @change="onSeekCommit"
-            class="flex-1 h-1 rounded-lg appearance-none cursor-pointer accent-[var(--accent-color)] hover:accent-white"
+            class="seeker-input flex-1 rounded-lg appearance-none cursor-pointer accent-[var(--accent-color)]"
             :style="{
               background: `linear-gradient(to right, var(--accent-color) ${progressPercentage}%, #4b5563 ${progressPercentage}%)`,
             }"
@@ -680,7 +708,7 @@ const formatTime = (seconds) => {
       </div>
 
       <!-- Volume -->
-      <div class="flex items-center justify-end gap-1.5 sm:gap-3 w-1/3 pr-1 sm:pr-4">
+      <div class="flex items-center justify-end gap-1.5 sm:gap-2.5 md:gap-3 flex-1 min-w-[70px] sm:min-w-[140px] md:min-w-[180px] lg:min-w-[220px] pr-1 sm:pr-4">
         <!-- Real-time audio visualizer (reacts to the playing track) -->
         <Visualizer v-if="store.visualizerEnabled && store.currentSong" />
 
@@ -830,13 +858,53 @@ const formatTime = (seconds) => {
 </template>
 
 <style scoped>
+/* Custom styled range slider thumb for generic sliders (e.g., volume) */
 input[type='range']::-webkit-slider-thumb {
   -webkit-appearance: none;
   height: 12px;
   width: 12px;
   border-radius: 50%;
-  background: currentColor;
+  background: #ffffff;
   margin-top: -4px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  transition: transform 0.15s ease-in-out, background-color 0.15s ease-in-out;
+}
+input[type='range']::-moz-range-thumb {
+  height: 12px;
+  width: 12px;
+  border: 0;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  transition: transform 0.15s ease-in-out;
+}
+
+/* Seeker progress bar specific hover animations */
+.seeker-input {
+  height: 4px;
+  transition: height 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.seeker-input::-webkit-slider-thumb {
+  transform: scale(0);
+  transition: transform 0.15s cubic-bezier(0.4, 0, 0.2, 1), margin-top 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.seeker-input::-moz-range-thumb {
+  transform: scale(0);
+  transition: transform 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.seeker-input:hover,
+.seeker-input:active {
+  height: 6px;
+}
+.seeker-input:hover::-webkit-slider-thumb,
+.seeker-input:active::-webkit-slider-thumb {
+  transform: scale(1);
+  margin-top: -3px;
+}
+.seeker-input:hover::-moz-range-thumb,
+.seeker-input:active::-moz-range-thumb {
+  transform: scale(1);
 }
 
 .animate-fade-in {

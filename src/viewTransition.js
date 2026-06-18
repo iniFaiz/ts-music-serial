@@ -117,3 +117,57 @@ export async function goBackWithTransition(router, name = 'shared-cover') {
     document.documentElement.classList.remove(transitionClass);
   }
 }
+
+// Forward-navigation counterpart of goBackWithTransition. Resolves the next route path
+// in history to locate the slot cover in the current list, tags it, and performs a
+// View Transition as the router navigates forward.
+export async function goForwardWithTransition(router, name = 'shared-cover') {
+  const forwardPath = window.history.state && window.history.state.forward;
+  if (!forwardPath || typeof document === 'undefined' || !document.startViewTransition) {
+    router.forward();
+    return;
+  }
+
+  let transitionClass = 'to-album-transition';
+  let key = null;
+  try {
+    const resolved = router.resolve(forwardPath);
+    if (resolved) {
+      if (resolved.name === 'ArtistDetail') {
+        transitionClass = 'to-artist-transition';
+      }
+      key = (resolved.params && (resolved.params.name ?? resolved.params.id)) ?? null;
+    }
+  } catch {
+    // ignore
+  }
+
+  document.documentElement.classList.add(transitionClass);
+  let tagged = findCoverByKey(key);
+  let prevVt = '';
+  if (tagged) {
+    prevVt = tagged.style.viewTransitionName || '';
+    tagged.style.viewTransitionName = name;
+  }
+
+  const transition = document.startViewTransition(async () => {
+    await new Promise((resolve) => {
+      const off = router.afterEach(() => {
+        off();
+        resolve();
+      });
+      router.forward();
+      setTimeout(resolve, 500);
+    });
+    await nextTick();
+  });
+
+  try {
+    await transition.finished;
+  } finally {
+    if (tagged) {
+      tagged.style.viewTransitionName = prevVt;
+    }
+    document.documentElement.classList.remove(transitionClass);
+  }
+}

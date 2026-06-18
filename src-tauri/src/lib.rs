@@ -1250,9 +1250,9 @@ async fn get_lyrics(
         return None;
     }
 
-    // Disk cache keyed by path+mtime+size. "null" = previously not found.
+    // Disk cache keyed by path+mtime+size+provider. "null" = previously not found.
     let cache_file = cover_cache_key(&path_buf)
-        .and_then(|k| lyrics_cache_dir(&app).map(|d| d.join(format!("{k}.json"))));
+        .and_then(|k| lyrics_cache_dir(&app).map(|d| d.join(format!("{k}_{lyrics_source}.json"))));
     if !force {
         if let Some(cf) = &cache_file {
             if let Ok(data) = fs::read_to_string(cf) {

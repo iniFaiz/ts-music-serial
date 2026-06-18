@@ -12,7 +12,7 @@ import PlaylistCover from './components/PlaylistCover.vue';
 import TitleBar from './components/TitleBar.vue';
 import FullScreenPlayer from './components/FullScreenPlayer.vue';
 import LyricsPanel from './components/LyricsPanel.vue';
-import { goBackWithTransition } from './viewTransition';
+import { goBackWithTransition, goForwardWithTransition } from './viewTransition';
 
 const router = useRouter();
 const appWindow = getCurrentWindow();
@@ -99,8 +99,8 @@ router.afterEach((to) => {
 });
 
 // Collapse the sidebar to an icon-only rail when the window gets too narrow.
-// Changed from 860 to 980 so the sidebar collapses before title bar text/logo collide.
-const COMPACT_BREAKPOINT = 980;
+// Changed from 980 to 1024 to collapse the sidebar earlier and give player controls more room on medium widths.
+const COMPACT_BREAKPOINT = 1125;
 const compact = ref(false);
 const updateCompact = () => {
   compact.value = window.innerWidth < COMPACT_BREAKPOINT;
@@ -113,17 +113,23 @@ const handleMouseUp = (e) => {
     if (canGoBack) {
       goBackWithTransition(router);
     }
+  } else if (e.button === 4) {
+    e.preventDefault();
+    const canGoForward = !!(window.history.state && window.history.state.forward);
+    if (canGoForward) {
+      goForwardWithTransition(router);
+    }
   }
 };
 
 const handleMouseDown = (e) => {
-  if (e.button === 3) {
+  if (e.button === 3 || e.button === 4) {
     e.preventDefault();
   }
 };
 
 const handleAuxClick = (e) => {
-  if (e.button === 3) {
+  if (e.button === 3 || e.button === 4) {
     e.preventDefault();
   }
 };
@@ -380,7 +386,7 @@ function newPlaylist() {
         </div>
 
         <!-- Playlists -->
-        <div class="space-y-1 overflow-hidden flex flex-col min-h-0 flex-1">
+        <div class="flex flex-col flex-1 min-h-0 space-y-1 overflow-hidden">
           <div
             class="flex items-center mb-1"
             :class="compact ? 'justify-center px-1' : 'justify-between px-3'"
@@ -392,7 +398,7 @@ function newPlaylist() {
             >
             <button
               @click="newPlaylist"
-              class="text-gray-500 hover:text-white transition"
+              class="text-gray-500 transition hover:text-white"
               title="New playlist"
             >
               <svg
@@ -411,7 +417,7 @@ function newPlaylist() {
               </svg>
             </button>
           </div>
-          <div class="overflow-auto flex-1 -mr-1 pr-1">
+          <div class="flex-1 pr-1 -mr-1 overflow-auto">
             <!-- Link to All Playlists -->
             <router-link
               to="/playlists"
@@ -571,7 +577,7 @@ function newPlaylist() {
         <div
           class="border-2 border-dashed border-[var(--accent-color)] rounded-2xl px-12 py-10 text-center"
         >
-          <div class="text-2xl font-bold text-white mb-1">Drop to add music</div>
+          <div class="mb-1 text-2xl font-bold text-white">Drop to add music</div>
           <div class="text-sm text-gray-300">Folders and audio files are added to your library</div>
         </div>
       </div>
