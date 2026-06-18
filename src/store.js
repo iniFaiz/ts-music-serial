@@ -75,7 +75,7 @@ export const store = reactive({
   // Optional Musixmatch community user token for the lyrics fallback chain.
   musixmatchToken: '',
   // Selected lyrics provider: 'lrclib' | 'local' | 'netease' | 'musixmatch' | 'none'
-  lyricsSource: 'lrclib',
+  lyricsSource: 'netease',
 
   // Fullscreen Now-Playing overlay (Apple Music style cover + synced lyrics).
   fullscreenOpen: false,
@@ -525,7 +525,7 @@ export const store = reactive({
     this.persistState();
   },
   setLyricsSource(v) {
-    this.lyricsSource = String(v || 'lrclib');
+    this.lyricsSource = String(v || 'netease');
     this.persistState();
   },
 

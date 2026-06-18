@@ -224,9 +224,9 @@ const transitionOptions = [
 ];
 
 const lyricsOptions = [
-  { value: 'lrclib', label: 'LRCLIB (Default)' },
+  { value: 'netease', label: 'NetEase (Default)' },
+  { value: 'lrclib', label: 'LRCLIB' },
   { value: 'local', label: 'Local (Embedded tag / .lrc file)' },
-  { value: 'netease', label: 'NetEase' },
   { value: 'musixmatch', label: 'Musixmatch' },
   { value: 'none', label: 'Off / Disabled' },
 ];

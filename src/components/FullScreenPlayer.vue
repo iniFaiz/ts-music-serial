@@ -79,13 +79,70 @@ watch(
   }
 );
 
-const lines = computed(() => (lyrics.value && lyrics.value.lines) || []);
 const synced = computed(() => !!(lyrics.value && lyrics.value.synced));
+
+const lines = computed(() => {
+  const rawLines = (lyrics.value && lyrics.value.lines) || [];
+  if (!synced.value || rawLines.length === 0) {
+    return rawLines;
+  }
+
+  const result = [];
+  
+  // 1. Check if there's an intro gap before the first line
+  if (rawLines[0] && rawLines[0].time_ms > 6000) {
+    result.push({
+      isGap: true,
+      time_ms: 2000,
+      endTimeMs: rawLines[0].time_ms - 1000,
+      text: '• • •'
+    });
+  }
+
+  for (let i = 0; i < rawLines.length; i++) {
+    const currentLine = rawLines[i];
+    const textTrimmed = currentLine.text.trim();
+    const isEmptyOrNote = textTrimmed === '' || textTrimmed === '♪' || textTrimmed === '🎵';
+
+    if (isEmptyOrNote) {
+      const nextLine = rawLines[i + 1];
+      const gapStart = currentLine.time_ms;
+      const gapEnd = nextLine ? nextLine.time_ms - 1000 : gapStart + 4000;
+      if (gapEnd > gapStart) {
+        result.push({
+          isGap: true,
+          time_ms: gapStart,
+          endTimeMs: gapEnd,
+          text: '• • •'
+        });
+      }
+    } else {
+      result.push(currentLine);
+    }
+  }
+
+  return result;
+});
+
 // +50ms lookahead: compensates for the ~50ms average lag from the 100ms poll interval
 const currentMs = computed(() => (store.currentTime || 0) * 1000 + 50);
 const activeIdx = computed(() =>
   synced.value ? activeLineIndex(lines.value, currentMs.value) : -1
 );
+
+function getDotColor(line, dotIdx) {
+  if (!line.isGap) return 'rgba(255, 255, 255, 0.2)';
+  const duration = line.endTimeMs - line.time_ms;
+  const now = currentMs.value;
+  const elapsed = Math.max(0, Math.min(duration, now - line.time_ms));
+  const p = elapsed / duration;
+  
+  const startRange = dotIdx * 0.33;
+  const dotProgress = Math.max(0, Math.min(1, (p - startRange) / 0.33));
+  const opacity = 0.2 + (0.95 - 0.2) * dotProgress;
+  
+  return `rgba(255, 255, 255, ${opacity.toFixed(3)})`;
+}
 
 
 
@@ -119,6 +176,7 @@ function npSmoothScrollTo(container, target, duration = 650) {
 function npScrollToLine(idx) {
   const container = linesEl.value;
   if (!container) return;
+  
   const el = container.querySelector(`[data-line="${idx}"]`);
   if (!el) return;
   const h = container.clientHeight;
@@ -126,10 +184,47 @@ function npScrollToLine(idx) {
   npSmoothScrollTo(container, target, 650);
 }
 
-watch(activeIdx, (idx) => {
+watch(activeIdx, (idx, oldIdx) => {
   if (idx < 0 || idx === npLastScrolledIdx) return;
   if (Date.now() < npUserPausedUntil) return;
   npLastScrolledIdx = idx;
+
+  const currentLine = lines.value[idx];
+
+  // If current line is a gap, scroll to it immediately
+  if (currentLine && currentLine.isGap) {
+    nextTick(() => npScrollToLine(idx));
+    return;
+  }
+
+  // If previous line was a gap, wait for its collapse transition to finish
+  // so the layout is stable before we calculate scroll position
+  const prevLine = (oldIdx >= 0 && oldIdx < lines.value.length) ? lines.value[oldIdx] : null;
+  if (prevLine && prevLine.isGap) {
+    nextTick(() => {
+      const container = linesEl.value;
+      if (!container) return;
+      const gapEl = container.querySelector(`[data-line="${oldIdx}"]`);
+      if (gapEl) {
+        let done = false;
+        const doScroll = () => {
+          if (done) return;
+          done = true;
+          gapEl.removeEventListener('transitionend', onEnd);
+          npScrollToLine(idx);
+        };
+        const onEnd = (e) => { if (e.propertyName === 'height') doScroll(); };
+        gapEl.addEventListener('transitionend', onEnd);
+        // Safety fallback if transitionend doesn't fire
+        setTimeout(doScroll, 500);
+      } else {
+        npScrollToLine(idx);
+      }
+    });
+    return;
+  }
+
+  // Normal scroll
   nextTick(() => npScrollToLine(idx));
 });
 
@@ -514,13 +609,25 @@ const close = () => {
                 :key="i"
                 :data-line="i"
                 @click="seekToLine(line)"
-                class="np-line text-2xl sm:text-3xl font-semibold leading-relaxed tracking-tight mb-4"
+                class="np-line text-2xl sm:text-3xl font-semibold leading-relaxed tracking-tight"
                 :class="[
                   synced ? 'cursor-pointer' : '',
                   i === activeIdx ? 'np-line-active' : 'np-line-dim',
+                  line.isGap ? 'np-line-gap' : 'mb-4',
                 ]"
               >
-                <span>{{ line.text || (synced ? '♪' : '') }}</span>
+                <span
+                  v-if="line.isGap"
+                  class="np-gap-dots"
+                  :class="{ 'np-gap-dots-active': i === activeIdx }"
+                >
+                  <span class="dots-wrapper">
+                    <span :style="{ color: i === activeIdx ? getDotColor(line, 0) : 'rgba(255,255,255,0.2)' }">•</span>
+                    <span :style="{ color: i === activeIdx ? getDotColor(line, 1) : 'rgba(255,255,255,0.2)' }">•</span>
+                    <span :style="{ color: i === activeIdx ? getDotColor(line, 2) : 'rgba(255,255,255,0.2)' }">•</span>
+                  </span>
+                </span>
+                <span v-else>{{ line.text }}</span>
               </p>
             </template>
 
@@ -770,5 +877,48 @@ input[type='range']::-webkit-slider-thumb {
   100% {
     transform: translate(60px, -30px) scale(0.95);
   }
+}
+
+.np-gap-dots {
+  opacity: 0;
+  transition: opacity 0.35s ease;
+  pointer-events: none;
+  display: inline-block;
+}
+
+.np-gap-dots-active {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.dots-wrapper {
+  display: inline-flex;
+  gap: 0.6rem;
+  font-size: 2.25rem;
+  line-height: 1;
+  vertical-align: middle;
+  font-weight: 800;
+}
+
+.dots-wrapper span {
+  transition: color 0.25s linear;
+}
+
+.np-line-gap {
+  height: 0;
+  margin: 0 !important;
+  padding: 0 !important;
+  opacity: 0;
+  overflow: hidden;
+  transition: 
+    height 0.4s cubic-bezier(0.25, 1, 0.5, 1),
+    margin 0.4s cubic-bezier(0.25, 1, 0.5, 1),
+    opacity 0.4s cubic-bezier(0.25, 1, 0.5, 1);
+}
+
+.np-line-gap.np-line-active {
+  height: 3.5rem;
+  margin-bottom: 1rem !important;
+  opacity: 1;
 }
 </style>

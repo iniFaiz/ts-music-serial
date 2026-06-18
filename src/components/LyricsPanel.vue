@@ -34,10 +34,67 @@ watch(() => store.lyricsSource, () => {
 // +50ms lookahead: compensates for the ~50ms average lag from the 100ms poll interval
 const currentTimeMs = computed(() => Math.floor(store.currentTime * 1000) + 50);
 
+const panelLines = computed(() => {
+  const rawLines = (lyrics.value && lyrics.value.lines) || [];
+  if (!lyrics.value || !lyrics.value.synced || rawLines.length === 0) {
+    return rawLines;
+  }
+
+  const result = [];
+  
+  // 1. Check if there's an intro gap before the first line
+  if (rawLines[0] && rawLines[0].time_ms > 6000) {
+    result.push({
+      isGap: true,
+      time_ms: 2000,
+      endTimeMs: rawLines[0].time_ms - 1000,
+      text: '• • •'
+    });
+  }
+
+  for (let i = 0; i < rawLines.length; i++) {
+    const currentLine = rawLines[i];
+    const textTrimmed = currentLine.text.trim();
+    const isEmptyOrNote = textTrimmed === '' || textTrimmed === '♪' || textTrimmed === '🎵';
+
+    if (isEmptyOrNote) {
+      const nextLine = rawLines[i + 1];
+      const gapStart = currentLine.time_ms;
+      const gapEnd = nextLine ? nextLine.time_ms - 1000 : gapStart + 4000;
+      if (gapEnd > gapStart) {
+        result.push({
+          isGap: true,
+          time_ms: gapStart,
+          endTimeMs: gapEnd,
+          text: '• • •'
+        });
+      }
+    } else {
+      result.push(currentLine);
+    }
+  }
+
+  return result;
+});
+
 const activeIdx = computed(() => {
   if (!lyrics.value || !lyrics.value.synced) return -1;
-  return activeLineIndex(lyrics.value.lines, currentTimeMs.value);
+  return activeLineIndex(panelLines.value, currentTimeMs.value);
 });
+
+function getDotColor(line, dotIdx) {
+  if (!line.isGap) return 'rgba(255, 255, 255, 0.2)';
+  const duration = line.endTimeMs - line.time_ms;
+  const now = currentTimeMs.value;
+  const elapsed = Math.max(0, Math.min(duration, now - line.time_ms));
+  const p = elapsed / duration;
+  
+  const startRange = dotIdx * 0.33;
+  const dotProgress = Math.max(0, Math.min(1, (p - startRange) / 0.33));
+  const opacity = 0.2 + (0.95 - 0.2) * dotProgress;
+  
+  return `rgba(255, 255, 255, ${opacity.toFixed(3)})`;
+}
 
 // ---- Smooth scroll --------------------------------------------------------
 
@@ -82,6 +139,7 @@ function smoothScrollTo(container, targetTop, duration = 550) {
 function scrollToLine(idx) {
   const container = scrollRef.value;
   if (!container) return;
+  
   const el = container.querySelector(`[data-line="${idx}"]`);
   if (!el) return;
 
@@ -102,10 +160,47 @@ function onScroll() {
 }
 
 // Trigger scroll whenever the active line changes
-watch(activeIdx, async (idx) => {
+watch(activeIdx, async (idx, oldIdx) => {
   if (idx < 0 || idx === lastScrolledIdx) return;
   if (Date.now() < userPausedUntil) return; // user is in control
   lastScrolledIdx = idx;
+
+  const currentLine = panelLines.value[idx];
+
+  // If current line is a gap, scroll to it immediately
+  if (currentLine && currentLine.isGap) {
+    await nextTick();
+    scrollToLine(idx);
+    return;
+  }
+
+  // If previous line was a gap, wait for its collapse transition to finish
+  // so the layout is stable before we calculate scroll position
+  const prevLine = (oldIdx >= 0 && oldIdx < panelLines.value.length) ? panelLines.value[oldIdx] : null;
+  if (prevLine && prevLine.isGap) {
+    await nextTick();
+    const container = scrollRef.value;
+    if (!container) return;
+    const gapEl = container.querySelector(`[data-line="${oldIdx}"]`);
+    if (gapEl) {
+      let done = false;
+      const doScroll = () => {
+        if (done) return;
+        done = true;
+        gapEl.removeEventListener('transitionend', onEnd);
+        scrollToLine(idx);
+      };
+      const onEnd = (e) => { if (e.propertyName === 'height') doScroll(); };
+      gapEl.addEventListener('transitionend', onEnd);
+      // Safety fallback if transitionend doesn't fire
+      setTimeout(doScroll, 500);
+    } else {
+      scrollToLine(idx);
+    }
+    return;
+  }
+
+  // Normal scroll
   await nextTick();
   scrollToLine(idx);
 });
@@ -150,13 +245,29 @@ function seekToLine(line) {
         <!-- Synced lyrics -->
         <div v-else-if="lyrics && lyrics.synced" class="py-[45%]">
           <div
-            v-for="(line, i) in lyrics.lines"
+            v-for="(line, i) in panelLines"
             :key="i"
             :data-line="i"
             @click="seekToLine(line)"
             class="lp-line cursor-pointer"
-            :class="i === activeIdx ? 'lp-active' : 'lp-dim'"
-          >{{ line.text }}</div>
+            :class="[
+              i === activeIdx ? 'lp-active' : 'lp-dim',
+              line.isGap ? 'lp-line-gap' : '',
+            ]"
+          >
+            <span
+              v-if="line.isGap"
+              class="lp-gap-dots"
+              :class="{ 'lp-gap-dots-active': i === activeIdx }"
+            >
+              <span class="dots-wrapper">
+                <span :style="{ color: i === activeIdx ? getDotColor(line, 0) : 'rgba(255,255,255,0.2)' }">•</span>
+                <span :style="{ color: i === activeIdx ? getDotColor(line, 1) : 'rgba(255,255,255,0.2)' }">•</span>
+                <span :style="{ color: i === activeIdx ? getDotColor(line, 2) : 'rgba(255,255,255,0.2)' }">•</span>
+              </span>
+            </span>
+            <span v-else>{{ line.text }}</span>
+          </div>
         </div>
 
         <!-- Plain lyrics -->
@@ -254,5 +365,47 @@ function seekToLine(line) {
 }
 .lp-dim:hover {
   color: rgba(255, 255, 255, 0.5);
+}
+
+.lp-gap-dots {
+  opacity: 0;
+  transition: opacity 0.35s ease;
+  pointer-events: none;
+  display: inline-block;
+}
+
+.lp-gap-dots-active {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.dots-wrapper {
+  display: inline-flex;
+  gap: 0.35rem;
+  font-size: 1.5rem;
+  line-height: 1;
+  vertical-align: middle;
+  font-weight: 800;
+}
+
+.dots-wrapper span {
+  transition: color 0.25s linear;
+}
+
+.lp-line-gap {
+  height: 0;
+  margin: 0 !important;
+  padding: 0 !important;
+  opacity: 0;
+  overflow: hidden;
+  transition: 
+    height 0.4s cubic-bezier(0.25, 1, 0.5, 1),
+    margin 0.4s cubic-bezier(0.25, 1, 0.5, 1),
+    opacity 0.4s cubic-bezier(0.25, 1, 0.5, 1);
+}
+
+.lp-line-gap.lp-active {
+  height: 2.2rem;
+  opacity: 1;
 }
 </style>
