@@ -3,7 +3,6 @@ import { ref, computed, watch, nextTick, onUnmounted } from 'vue';
 import { store } from '../store';
 import { loadCover, getCachedCover, hasCachedCover } from '../coverCache';
 import { loadLyrics, activeLineIndex } from '../lyricsCache';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useRouter } from 'vue-router';
 import LyricContent from './LyricContent.vue';
 
@@ -13,7 +12,6 @@ const coverUrl = ref(null);
 const lyrics = ref(undefined);
 const linesEl = ref(null);
 const lyricsLoading = ref(false);
-const appWindow = getCurrentWindow();
 const showLyricsOption = ref(true);
 
 const song = computed(() => store.currentSong);
@@ -375,14 +373,7 @@ watch(coverUrl, async (newUrl) => {
 }, { immediate: true });
 
 const close = () => {
-  store.closeFullscreen();
-  setTimeout(() => {
-    try {
-      appWindow.setFullscreen(false);
-    } catch (e) {
-      console.warn("Tauri fullscreen restore error:", e);
-    }
-  }, 50);
+  store.exitFullscreenWithTransition();
 };
 
 const goToArtist = (artistName) => {

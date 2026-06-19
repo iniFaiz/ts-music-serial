@@ -3,13 +3,11 @@ import { ref, watch, onMounted, onUnmounted, computed } from 'vue';
 import { store } from '../store';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useRouter } from 'vue-router';
 import CoverImage from './CoverImage.vue';
 import Visualizer from './Visualizer.vue';
 import { navigateWithTransition } from '../viewTransition';
 
-const appWindow = getCurrentWindow();
 const router = useRouter();
 const playerCoverRef = ref(null);
 
@@ -27,25 +25,7 @@ const navigateToArtist = (artistName) => {
 const losslessPopupOpen = ref(false);
 
 const openFullScreen = () => {
-  if (store.fullscreenOpen) {
-    store.closeFullscreen();
-    setTimeout(() => {
-      try {
-        appWindow.setFullscreen(false);
-      } catch (err) {
-        console.warn("Tauri fullscreen restore error:", err);
-      }
-    }, 50);
-  } else {
-    store.openFullscreen();
-    setTimeout(() => {
-      try {
-        appWindow.setFullscreen(true);
-      } catch (err) {
-        console.warn("Tauri fullscreen error:", err);
-      }
-    }, 50);
-  }
+  store.toggleFullscreen();
 };
 
 const isLossless = computed(() => {

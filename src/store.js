@@ -1,8 +1,11 @@
 import { reactive } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { idbGet, idbSet, idbDelete } from './libraryStore';
 import { sortTracks } from './sortTracks';
+
+const appWindow = getCurrentWindow();
 
 // Directory portion of a file path (handles both / and \ separators).
 function dirName(path) {
@@ -83,6 +86,7 @@ export const store = reactive({
 
   // Fullscreen Now-Playing overlay (Apple Music style cover + synced lyrics).
   fullscreenOpen: false,
+  fullscreenOverlayVisible: false,
   // Currently selected/active album for keyboard shortcut actions.
   selectedAlbum: null,
   // Drop-overlay visibility while a drag is over the window.
@@ -574,15 +578,60 @@ export const store = reactive({
 
   // ---- Fullscreen Now-Playing --------------------------------------------
 
-  openFullscreen() {
-    if (this.currentSong) this.fullscreenOpen = true;
+  async enterFullscreenWithTransition() {
+    if (!this.currentSong || this.fullscreenOpen) return;
+    this.fullscreenOverlayVisible = true;
+    
+    // Wait for the fade-in transition (300ms)
+    await new Promise(r => setTimeout(r, 300));
+    
+    this.fullscreenOpen = true;
+    try {
+      await appWindow.setFullscreen(true);
+    } catch (err) {
+      console.warn("Tauri fullscreen error:", err);
+    }
+    
+    // Wait slightly for OS window sizing transition to settle
+    await new Promise(r => setTimeout(r, 150));
+    
+    this.fullscreenOverlayVisible = false;
   },
-  closeFullscreen() {
+
+  async exitFullscreenWithTransition() {
+    if (!this.fullscreenOpen) return;
+    this.fullscreenOverlayVisible = true;
+    
+    // Wait for the fade-in transition (300ms)
+    await new Promise(r => setTimeout(r, 300));
+    
     this.fullscreenOpen = false;
+    try {
+      await appWindow.setFullscreen(false);
+    } catch (err) {
+      console.warn("Tauri fullscreen restore error:", err);
+    }
+    
+    // Wait slightly for OS window sizing transition to settle
+    await new Promise(r => setTimeout(r, 150));
+    
+    this.fullscreenOverlayVisible = false;
   },
+
+  openFullscreen() {
+    this.enterFullscreenWithTransition();
+  },
+
+  closeFullscreen() {
+    this.exitFullscreenWithTransition();
+  },
+
   toggleFullscreen() {
-    if (this.fullscreenOpen) this.fullscreenOpen = false;
-    else this.openFullscreen();
+    if (this.fullscreenOpen) {
+      this.exitFullscreenWithTransition();
+    } else {
+      this.enterFullscreenWithTransition();
+    }
   },
 
   closePopup() {

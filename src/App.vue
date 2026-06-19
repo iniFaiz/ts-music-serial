@@ -2,7 +2,6 @@
 import { ref, onMounted, onUnmounted, nextTick } from 'vue';
 import { useRouter } from 'vue-router';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
 import { store } from './store';
 import PlayerControls from './components/PlayerControls.vue';
@@ -15,51 +14,17 @@ import LyricsPanel from './components/LyricsPanel.vue';
 import { goBackWithTransition, goForwardWithTransition } from './viewTransition';
 
 const router = useRouter();
-const appWindow = getCurrentWindow();
 
 // ---- Global keyboard shortcuts ----
 const handleKeydown = (e) => {
   // Ctrl+Shift+F toggles the fullscreen Now-Playing view and enters native monitor fullscreen.
   if (e.ctrlKey && e.shiftKey && (e.key === 'F' || e.key === 'f')) {
     e.preventDefault();
-    if (store.fullscreenOpen) {
-      store.closeFullscreen();
-      setTimeout(() => {
-        try {
-          appWindow.setFullscreen(false);
-        } catch (err) {
-          console.warn("Tauri fullscreen restore error:", err);
-        }
-      }, 50);
-    } else {
-      store.openFullscreen();
-      setTimeout(() => {
-        try {
-          appWindow.setFullscreen(true)
-            .then(() => {
-              store.statusMessage = "Tauri Fullscreen: SUCCESS";
-            })
-            .catch(err => {
-              store.statusMessage = "Tauri Fullscreen ERR: " + err;
-              console.warn("Tauri fullscreen promise error:", err);
-            });
-        } catch (err) {
-          store.statusMessage = "Tauri Fullscreen CATCH: " + err;
-          console.warn("Tauri fullscreen catch error:", err);
-        }
-      }, 50);
-    }
+    store.toggleFullscreen();
     return;
   }
   if (e.key === 'Escape' && store.fullscreenOpen) {
-    store.closeFullscreen();
-    setTimeout(() => {
-      try {
-        appWindow.setFullscreen(false);
-      } catch (err) {
-        console.warn("Tauri fullscreen restore error:", err);
-      }
-    }, 50);
+    store.exitFullscreenWithTransition();
   }
 };
 
@@ -568,6 +533,14 @@ function newPlaylist() {
     <!-- Fullscreen Now-Playing + lyrics (global overlay) -->
     <FullScreenPlayer />
 
+    <!-- Fullscreen black transition overlay -->
+    <Transition name="fullscreen-fade">
+      <div
+        v-if="store.fullscreenOverlayVisible"
+        class="fixed inset-0 bg-black z-[999999] pointer-events-none"
+      ></div>
+    </Transition>
+
     <!-- Drag & drop hint -->
     <Transition name="fade">
       <div
@@ -592,6 +565,15 @@ function newPlaylist() {
 }
 .fade-enter-from,
 .fade-leave-to {
+  opacity: 0;
+}
+
+.fullscreen-fade-enter-active,
+.fullscreen-fade-leave-active {
+  transition: opacity 0.3s ease;
+}
+.fullscreen-fade-enter-from,
+.fullscreen-fade-leave-to {
   opacity: 0;
 }
 </style>
