@@ -8,6 +8,7 @@
 const props = defineProps({
   line: { type: Object, required: true },
   active: { type: Boolean, default: false },
+  isPast: { type: Boolean, default: false },
   // Playhead position (ms). Parents pass the live value only for the active
   // line (0 otherwise) so non-active lines don't re-render every poll tick.
   currentMs: { type: Number, default: 0 },
@@ -16,6 +17,7 @@ const props = defineProps({
 
 // State of one karaoke word relative to the playhead.
 function wordClass(w) {
+  if (props.isPast && props.currentMs === 0) return 'lc-word lc-sung';
   const now = props.currentMs;
   if (now >= w.time_ms + w.duration_ms) return 'lc-word lc-sung';
   if (now < w.time_ms) return 'lc-word';
@@ -25,6 +27,7 @@ function wordClass(w) {
 // Drives the left→right gradient wipe. background-size is 200%, so position
 // 100% = fully dim, 0% = fully lit; a CSS transition smooths between ticks.
 function wordStyle(w) {
+  if (props.isPast && props.currentMs === 0) return { backgroundPositionX: '0%' };
   const now = props.currentMs;
   if (now >= w.time_ms + w.duration_ms) return { backgroundPositionX: '0%' };
   if (now < w.time_ms) return { backgroundPositionX: '100%' };
@@ -35,7 +38,7 @@ function wordStyle(w) {
 
 <template>
   <span class="lc">
-    <span v-if="active && line.words && line.words.length" class="lc-karaoke"><span
+    <span v-if="(active || isPast) && line.words && line.words.length" class="lc-karaoke"><span
         v-for="(w, wi) in line.words"
         :key="wi"
         :class="wordClass(w)"

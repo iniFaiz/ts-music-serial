@@ -669,7 +669,8 @@ const goToAlbum = (albumName) => {
                   v-else
                   :line="line"
                   :active="i === activeIdx"
-                  :current-ms="i === activeIdx ? currentMs : 0"
+                  :is-past="i < activeIdx"
+                  :current-ms="(i === activeIdx || i === activeIdx - 1) ? currentMs : 0"
                   :show-romaji="store.showRomaji"
                 />
               </p>
@@ -805,12 +806,12 @@ input[type='range']::-webkit-slider-thumb {
   transform: translateX(6px) scale(1.015);
 }
 .np-line-dim {
-  color: rgba(255, 255, 255, 0.28);
-  opacity: 1;
+  color: rgba(255, 255, 255, 0.97);
+  opacity: 0.28;
   transform: translateX(0) scale(1);
 }
 .np-line-dim:hover {
-  color: rgba(255, 255, 255, 0.55);
+  opacity: 0.55;
 }
 
 /* Open / close transition: fade the backdrop, lift + scale the panel. */

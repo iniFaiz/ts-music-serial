@@ -300,7 +300,8 @@ function seekToLine(line) {
               v-else
               :line="line"
               :active="i === activeIdx"
-              :current-ms="i === activeIdx ? currentTimeMs : 0"
+              :is-past="i < activeIdx"
+              :current-ms="(i === activeIdx || i === activeIdx - 1) ? currentTimeMs : 0"
               :show-romaji="store.showRomaji"
             />
           </div>
@@ -395,12 +396,12 @@ function seekToLine(line) {
 
 /* Dim lines */
 .lp-dim {
-  color: rgba(255, 255, 255, 0.22);
-  opacity: 1;
+  color: rgba(255, 255, 255, 0.96);
+  opacity: 0.22;
   transform: translateX(0) scale(1);
 }
 .lp-dim:hover {
-  color: rgba(255, 255, 255, 0.5);
+  opacity: 0.5;
 }
 
 .lp-gap-dots {
