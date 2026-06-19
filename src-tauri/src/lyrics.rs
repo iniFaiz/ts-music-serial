@@ -9,11 +9,26 @@
 
 use serde::{Deserialize, Serialize};
 
+// One karaoke word/syllable with its own absolute start + duration (ms). Present
+// only for providers that expose word-level timing (e.g. NetEase `yrc`).
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct LyricWord {
+    pub time_ms: u64,
+    pub duration_ms: u64,
+    pub text: String,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct LyricLine {
     // Milliseconds from the start of the track. None for unsynced (plain) lyrics.
     pub time_ms: Option<u64>,
     pub text: String,
+    // Per-word timing for karaoke (word-by-word) rendering, when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub words: Option<Vec<LyricWord>>,
+    // Romanization (e.g. romaji) of this line, when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub romaji: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -21,6 +36,12 @@ pub struct Lyrics {
     pub synced: bool,
     pub source: String,
     pub lines: Vec<LyricLine>,
+    // True when at least one line carries word-level (karaoke) timing.
+    #[serde(default)]
+    pub word_synced: bool,
+    // True when at least one line carries a romanization.
+    #[serde(default)]
+    pub has_romaji: bool,
 }
 
 // Parse a single LRC time tag body ("mm:ss.xx" / "mm:ss") into milliseconds.
@@ -71,6 +92,8 @@ pub fn parse_lrc(text: &str) -> Vec<LyricLine> {
             lines.push(LyricLine {
                 time_ms: Some(ms),
                 text: content.clone(),
+                words: None,
+                romaji: None,
             });
         }
     }
@@ -84,6 +107,8 @@ pub fn make_plain(text: &str) -> Vec<LyricLine> {
         .map(|l| LyricLine {
             time_ms: None,
             text: l.trim_end().to_string(),
+            words: None,
+            romaji: None,
         })
         .collect()
 }
@@ -101,6 +126,8 @@ pub fn lyrics_from_text(text: &str, source: &str) -> Option<Lyrics> {
             synced: true,
             source: source.to_string(),
             lines: synced,
+            word_synced: false,
+            has_romaji: false,
         });
     }
     let plain = make_plain(t);
@@ -109,6 +136,8 @@ pub fn lyrics_from_text(text: &str, source: &str) -> Option<Lyrics> {
             synced: false,
             source: source.to_string(),
             lines: plain,
+            word_synced: false,
+            has_romaji: false,
         })
     } else {
         None
@@ -250,6 +279,122 @@ pub fn is_netease_metadata(line: &LyricLine) -> bool {
     false
 }
 
+const NETEASE_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+
+// Parse NetEase `yrc` (verbatim/word-by-word) lyrics into word-timed lines.
+//
+// Each line is `[lineStartMs,lineDurationMs]` followed by word tokens
+// `(wordStartMs,wordDurationMs,0)wordText`, where the word start is absolute ms
+// from the track start. Leading JSON metadata lines (`{...}`) are skipped.
+fn parse_yrc(text: &str) -> Vec<LyricLine> {
+    let mut out: Vec<LyricLine> = Vec::new();
+    for raw in text.lines() {
+        let line = raw.trim();
+        // Skip blanks and the JSON metadata header lines yrc sometimes carries.
+        if line.is_empty() || !line.starts_with('[') {
+            continue;
+        }
+        let close = match line.find(']') {
+            Some(i) => i,
+            None => continue,
+        };
+        let line_start = match line[1..close]
+            .split(',')
+            .next()
+            .and_then(|s| s.trim().parse::<u64>().ok())
+        {
+            Some(v) => v,
+            None => continue,
+        };
+
+        let mut rest = &line[close + 1..];
+        let mut words: Vec<LyricWord> = Vec::new();
+        let mut full = String::new();
+        // Walk each `(start,dur,0)text` token. `(`/`)` are ASCII, so all the
+        // byte-index slicing below lands on valid UTF-8 boundaries.
+        while let Some(op) = rest.find('(') {
+            let cl = match rest[op..].find(')') {
+                Some(i) => op + i,
+                None => break,
+            };
+            let mut meta = rest[op + 1..cl].split(',');
+            let w_start = meta.next().and_then(|s| s.trim().parse::<u64>().ok());
+            let w_dur = meta.next().and_then(|s| s.trim().parse::<u64>().ok());
+            // Word text runs from after this `)` up to the next `(`.
+            let after = &rest[cl + 1..];
+            let next = after.find('(').unwrap_or(after.len());
+            let word_text = &after[..next];
+            if let (Some(ws), Some(wd)) = (w_start, w_dur) {
+                if !word_text.is_empty() {
+                    full.push_str(word_text);
+                    words.push(LyricWord {
+                        time_ms: ws,
+                        duration_ms: wd,
+                        text: word_text.to_string(),
+                    });
+                }
+            }
+            rest = &after[next..];
+        }
+
+        let text_join = full.trim().to_string();
+        if words.is_empty() || text_join.is_empty() {
+            continue;
+        }
+        out.push(LyricLine {
+            time_ms: Some(line_start),
+            text: text_join,
+            words: Some(words),
+            romaji: None,
+        });
+    }
+    out.sort_by_key(|l| l.time_ms.unwrap_or(0));
+    out
+}
+
+// Attach a romanization to each main line, pairing by index when the two line
+// lists line up (the usual NetEase case), else by nearest timestamp. Romaji that
+// merely repeats the original (Latin-script songs) is ignored. Returns whether
+// any romaji was actually attached.
+fn attach_romaji(main: &mut [LyricLine], romaji: &[LyricLine]) -> bool {
+    if romaji.is_empty() {
+        return false;
+    }
+    let mut attached = false;
+    if romaji.len() == main.len() {
+        for (m, r) in main.iter_mut().zip(romaji.iter()) {
+            let rt = r.text.trim();
+            if !rt.is_empty() && rt != m.text.trim() {
+                m.romaji = Some(rt.to_string());
+                attached = true;
+            }
+        }
+    } else {
+        for m in main.iter_mut() {
+            let mt = match m.time_ms {
+                Some(t) => t as i64,
+                None => continue,
+            };
+            let mut best: Option<(i64, &str)> = None;
+            for r in romaji {
+                if let Some(rt_ms) = r.time_ms {
+                    let d = (rt_ms as i64 - mt).abs();
+                    if best.map(|(bd, _)| d < bd).unwrap_or(true) {
+                        best = Some((d, r.text.trim()));
+                    }
+                }
+            }
+            if let Some((d, rt)) = best {
+                if d <= 1500 && !rt.is_empty() && rt != m.text.trim() {
+                    m.romaji = Some(rt.to_string());
+                    attached = true;
+                }
+            }
+        }
+    }
+    attached
+}
+
 pub async fn from_netease(client: &reqwest::Client, title: &str, artist: &str) -> Option<Lyrics> {
     let q = format!("{title} {artist}");
     let search = client
@@ -261,7 +406,7 @@ pub async fn from_netease(client: &reqwest::Client, title: &str, artist: &str) -
             ("offset", "0"),
         ])
         .header("Referer", "https://music.163.com")
-        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        .header("User-Agent", NETEASE_UA)
         .send()
         .await
         .ok()?;
@@ -270,23 +415,164 @@ pub async fn from_netease(client: &reqwest::Client, title: &str, artist: &str) -
     let id = songs.first()?.get("id")?.as_i64()?;
     let ids = id.to_string();
 
+    // Prefer the encrypted eapi (the only endpoint that serves word-by-word
+    // `yrc`); fall back to the plain v1 GET (line-level `lrc` + romaji), then the
+    // classic endpoint (`lrc` only).
+    if let Some(l) = netease_lyric_eapi(client, &ids).await {
+        return Some(l);
+    }
+    if let Some(l) = netease_lyric_v1(client, &ids).await {
+        return Some(l);
+    }
+    netease_lyric_classic(client, &ids).await
+}
+
+// v1 endpoint: returns lrc, romalrc (line romaji), yrc (word-by-word) and
+// yromalrc (word-by-word romaji). Builds the richest Lyrics it can.
+async fn netease_lyric_v1(client: &reqwest::Client, ids: &str) -> Option<Lyrics> {
+    let resp = client
+        .get("https://music.163.com/api/song/lyric/v1")
+        .query(&[
+            ("id", ids),
+            ("cp", "false"),
+            ("lv", "0"),
+            ("kv", "0"),
+            ("tv", "0"),
+            ("rv", "0"),
+            ("yv", "0"),
+            ("ytv", "0"),
+            ("yrv", "0"),
+        ])
+        .header("Referer", "https://music.163.com")
+        .header("User-Agent", NETEASE_UA)
+        .send()
+        .await
+        .ok()?;
+    let v: serde_json::Value = resp.json().await.ok()?;
+    build_netease_lyrics(&v)
+}
+
+// Build the richest Lyrics from a NetEase lyric response (eapi or v1 GET):
+// word-by-word `yrc` when present (else line-level `lrc`), plus a romaji
+// sub-line from `yromalrc`/`romalrc` when available.
+fn build_netease_lyrics(v: &serde_json::Value) -> Option<Lyrics> {
+    let field = |k: &str| {
+        v.get(k)
+            .and_then(|x| x.get("lyric"))
+            .and_then(|x| x.as_str())
+            .map(|s| s.to_string())
+            .filter(|s| !s.trim().is_empty())
+    };
+    let lrc = field("lrc");
+    let yrc = field("yrc");
+    let romalrc = field("romalrc");
+    let yromalrc = field("yromalrc");
+
+    // Main lines: prefer word-by-word yrc, else line-level lrc.
+    let (mut lines, word_synced) = match yrc.as_ref().map(|y| parse_yrc(y)) {
+        Some(p) if !p.is_empty() => (p, true),
+        _ => (Vec::new(), false),
+    };
+    if lines.is_empty() {
+        if let Some(l) = lrc.as_ref() {
+            lines = parse_lrc(l);
+        }
+    }
+    if lines.is_empty() {
+        return None;
+    }
+
+    // Romaji: align with the form we used for the main lines.
+    let romaji_lines: Option<Vec<LyricLine>> = if word_synced {
+        yromalrc
+            .as_ref()
+            .map(|s| parse_yrc(s))
+            .filter(|v| !v.is_empty())
+            .or_else(|| romalrc.as_ref().map(|s| parse_lrc(s)).filter(|v| !v.is_empty()))
+    } else {
+        romalrc
+            .as_ref()
+            .map(|s| parse_lrc(s))
+            .filter(|v| !v.is_empty())
+            .or_else(|| yromalrc.as_ref().map(|s| parse_yrc(s)).filter(|v| !v.is_empty()))
+    };
+    let has_romaji = match romaji_lines.as_ref() {
+        Some(r) => attach_romaji(&mut lines, r),
+        None => false,
+    };
+
+    let mut lyrics = Lyrics {
+        synced: true,
+        source: "NetEase".to_string(),
+        lines,
+        word_synced,
+        has_romaji,
+    };
+    lyrics.lines.retain(|line| !is_netease_metadata(line));
+    if lyrics.lines.is_empty() {
+        return None;
+    }
+    Some(lyrics)
+}
+
+// AES-128-ECB + MD5 request signing for NetEase's eapi. Produces the hex
+// `params` body the eapi endpoints expect. Both the digest and the embedded
+// payload use the same `json` string, so the server's digest check passes.
+fn eapi_params(path: &str, json: &str) -> String {
+    use aes::Aes128;
+    use ecb::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyInit};
+    use md5::{Digest, Md5};
+
+    let message = format!("nobody{path}use{json}md5forencrypt");
+    let digest = hex::encode(Md5::digest(message.as_bytes()));
+    let data = format!("{path}-36cd479b6b5-{json}-36cd479b6b5-{digest}");
+
+    let enc = ecb::Encryptor::<Aes128>::new_from_slice(b"e82ckenh8dichen8").unwrap();
+    let ct = enc.encrypt_padded_vec_mut::<Pkcs7>(data.as_bytes());
+    hex::encode_upper(ct)
+}
+
+// eapi endpoint: the encrypted interface that (unlike the web API) returns
+// word-by-word `yrc`/`yromalrc` for songs that have them.
+async fn netease_lyric_eapi(client: &reqwest::Client, ids: &str) -> Option<Lyrics> {
+    let path = "/api/song/lyric/v1";
+    let json = format!(
+        "{{\"id\":\"{ids}\",\"cp\":false,\"lv\":0,\"kv\":0,\"tv\":0,\"rv\":0,\"yv\":0,\"ytv\":0,\"yrv\":0,\"os\":\"pc\"}}"
+    );
+    let body = format!("params={}", eapi_params(path, &json));
+    let resp = client
+        .post("https://interface3.music.163.com/eapi/song/lyric/v1")
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .header("Referer", "https://music.163.com")
+        .header("User-Agent", NETEASE_UA)
+        .header("Cookie", "os=pc; appver=2.9.7")
+        .body(body)
+        .send()
+        .await
+        .ok()?;
+    let v: serde_json::Value = resp.json().await.ok()?;
+    build_netease_lyrics(&v)
+}
+
+// Classic endpoint fallback: line-level lrc only (the previous behaviour).
+async fn netease_lyric_classic(client: &reqwest::Client, ids: &str) -> Option<Lyrics> {
     let lyric = client
         .get("https://music.163.com/api/song/lyric")
         .query(&[
             ("os", "pc"),
-            ("id", ids.as_str()),
+            ("id", ids),
             ("lv", "-1"),
             ("kv", "-1"),
             ("tv", "-1"),
         ])
         .header("Referer", "https://music.163.com")
-        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        .header("User-Agent", NETEASE_UA)
         .send()
         .await
         .ok()?;
     let lv: serde_json::Value = lyric.json().await.ok()?;
     let lrc = lv.get("lrc")?.get("lyric")?.as_str()?;
-    
+
     if let Some(mut lyrics) = lyrics_from_text(lrc, "NetEase") {
         lyrics.lines.retain(|line| !is_netease_metadata(line));
         Some(lyrics)
@@ -455,7 +741,96 @@ async fn fetch_musixmatch_fuzzy(
     resp.json().await.ok()
 }
 
+// Parse Musixmatch "richsync" (word-by-word) into word-timed lines.
+//
+// `richsync_body` is a JSON-encoded string holding an array of lines, each:
+// `{ "ts": lineStartSec, "te": lineEndSec, "x": "full text",
+//    "l": [ { "c": "chunk", "o": offsetSecFromTs }, ... ] }`.
+fn parse_musixmatch_richsync(body: &str) -> Vec<LyricLine> {
+    let arr: serde_json::Value = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    let arr = match arr.as_array() {
+        Some(a) => a,
+        None => return Vec::new(),
+    };
+
+    let mut out: Vec<LyricLine> = Vec::new();
+    for item in arr {
+        let ts = item.get("ts").and_then(|x| x.as_f64()).unwrap_or(0.0);
+        let te = item.get("te").and_then(|x| x.as_f64()).unwrap_or(ts);
+        let x = item.get("x").and_then(|x| x.as_str()).unwrap_or("");
+
+        let mut words: Vec<LyricWord> = Vec::new();
+        if let Some(chunks) = item.get("l").and_then(|x| x.as_array()) {
+            for (i, ch) in chunks.iter().enumerate() {
+                let c = ch.get("c").and_then(|x| x.as_str()).unwrap_or("");
+                if c.is_empty() {
+                    continue;
+                }
+                let o = ch.get("o").and_then(|x| x.as_f64()).unwrap_or(0.0);
+                // The chunk ends where the next one starts (or at the line end).
+                let next_o = chunks
+                    .get(i + 1)
+                    .and_then(|n| n.get("o"))
+                    .and_then(|x| x.as_f64())
+                    .unwrap_or(te - ts);
+                let start_ms = ((ts + o) * 1000.0).max(0.0) as u64;
+                let dur_ms = ((next_o - o) * 1000.0).max(0.0) as u64;
+                words.push(LyricWord {
+                    time_ms: start_ms,
+                    duration_ms: dur_ms,
+                    text: c.to_string(),
+                });
+            }
+        }
+
+        let line_text = if !x.trim().is_empty() {
+            x.to_string()
+        } else {
+            words.iter().map(|w| w.text.as_str()).collect::<String>()
+        };
+        if words.is_empty() && line_text.trim().is_empty() {
+            continue;
+        }
+        out.push(LyricLine {
+            time_ms: Some((ts * 1000.0).max(0.0) as u64),
+            text: line_text.trim().to_string(),
+            words: if words.is_empty() { None } else { Some(words) },
+            romaji: None,
+        });
+    }
+    out.sort_by_key(|l| l.time_ms.unwrap_or(0));
+    out
+}
+
 fn parse_musixmatch_value(v: &serde_json::Value) -> Option<Lyrics> {
+    // 0. Prefer word-by-word richsync when present (the lyrics_richsynched
+    //    namespace returns it for songs Musixmatch has aligned per word).
+    if let Some(body) = v
+        .get("message")
+        .and_then(|m| m.get("body"))
+        .and_then(|b| b.get("macro_calls"))
+        .and_then(|mc| mc.get("track.richsync.get"))
+        .and_then(|tr| tr.get("message"))
+        .and_then(|m| m.get("body"))
+        .and_then(|b| b.get("richsync"))
+        .and_then(|r| r.get("richsync_body"))
+        .and_then(|x| x.as_str())
+    {
+        let lines = parse_musixmatch_richsync(body);
+        if !lines.is_empty() {
+            return Some(Lyrics {
+                synced: true,
+                source: "Musixmatch".to_string(),
+                lines,
+                word_synced: true,
+                has_romaji: false,
+            });
+        }
+    }
+
     // 1. Try to extract synced subtitles first
     if let Some(subtitle) = v
         .get("message")

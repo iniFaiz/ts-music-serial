@@ -4,6 +4,7 @@ import { store } from '../store';
 import { loadCover, getCachedCover, hasCachedCover } from '../coverCache';
 import { loadLyrics, activeLineIndex } from '../lyricsCache';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import LyricContent from './LyricContent.vue';
 
 const coverUrl = ref(null);
 // undefined = loading, null = not found, object = resolved lyrics
@@ -80,6 +81,8 @@ watch(
 );
 
 const synced = computed(() => !!(lyrics.value && lyrics.value.synced));
+// Whether the current lyrics carry a romanization (enables the romaji toggle).
+const hasRomaji = computed(() => !!(lyrics.value && lyrics.value.has_romaji));
 
 const lines = computed(() => {
   const rawLines = (lyrics.value && lyrics.value.lines) || [];
@@ -425,6 +428,19 @@ const close = () => {
             <line x1="6" y1="6" x2="18" y2="18"></line>
           </svg>
         </button>
+
+        <!-- Romaji show/hide toggle (top-right), only when romanization exists -->
+        <button
+          v-if="hasRomaji && showLyricsColumn"
+          @click="store.toggleRomaji()"
+          class="ml-auto flex items-center justify-center w-9 h-9 rounded-full text-white transition-all active:scale-95"
+          :class="store.showRomaji ? 'bg-white/25' : 'bg-white/10 hover:bg-white/20'"
+          :title="store.showRomaji ? 'Hide romaji' : 'Show romaji'"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="m5 8 6 6" /><path d="m4 14 6-6 2-3" /><path d="M2 5h12" /><path d="M7 2h1" /><path d="m22 22-5-10-5 10" /><path d="M14 18h6" />
+          </svg>
+        </button>
       </div>
 
       <!-- Content -->
@@ -630,7 +646,13 @@ const close = () => {
                     <span :style="{ color: i === activeIdx ? getDotColor(line, 2) : 'rgba(255,255,255,0.2)' }">•</span>
                   </span>
                 </span>
-                <span v-else>{{ line.text }}</span>
+                <LyricContent
+                  v-else
+                  :line="line"
+                  :active="i === activeIdx"
+                  :current-ms="i === activeIdx ? currentMs : 0"
+                  :show-romaji="store.showRomaji"
+                />
               </p>
             </template>
 

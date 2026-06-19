@@ -1755,8 +1755,10 @@ async fn get_lyrics(
     }
 
     // Disk cache keyed by path+mtime+size+provider. "null" = previously not found.
+    // `_v2` schema tag: bumped when LyricLine gained word-level timing + romaji,
+    // so stale line-only cache entries are re-fetched instead of reused.
     let cache_file = cover_cache_key(&path_buf)
-        .and_then(|k| lyrics_cache_dir(&app).map(|d| d.join(format!("{k}_{lyrics_source}.json"))));
+        .and_then(|k| lyrics_cache_dir(&app).map(|d| d.join(format!("{k}_{lyrics_source}_v2.json"))));
     if !force {
         if let Some(cf) = &cache_file {
             if let Ok(data) = fs::read_to_string(cf) {

@@ -77,6 +77,9 @@ export const store = reactive({
   musixmatchToken: '',
   // Selected lyrics provider: 'lrclib' | 'local' | 'netease' | 'musixmatch' | 'none'
   lyricsSource: 'netease',
+  // Show the romanization (romaji) sub-line under lyrics when one is available.
+  // Shared by the fullscreen player and the lyrics sidebar toggles.
+  showRomaji: false,
 
   // Fullscreen Now-Playing overlay (Apple Music style cover + synced lyrics).
   fullscreenOpen: false,
@@ -123,6 +126,7 @@ export const store = reactive({
           crossfadeSecs: this.crossfadeSecs,
           musixmatchToken: this.musixmatchToken,
           lyricsSource: this.lyricsSource,
+          showRomaji: this.showRomaji,
         },
         playback: {
           songPath: this.currentSong ? this.currentSong.path : null,
@@ -213,6 +217,7 @@ export const store = reactive({
       if (typeof s.crossfadeSecs === 'number') this.crossfadeSecs = s.crossfadeSecs;
       if (typeof s.musixmatchToken === 'string') this.musixmatchToken = s.musixmatchToken;
       if (typeof s.lyricsSource === 'string') this.lyricsSource = s.lyricsSource;
+      if (typeof s.showRomaji === 'boolean') this.showRomaji = s.showRomaji;
 
       // Re-select the saved output device (the audio thread starts on default).
       if (this.outputDevice) {
@@ -553,6 +558,10 @@ export const store = reactive({
   },
   setLyricsSource(v) {
     this.lyricsSource = String(v || 'netease');
+    this.persistState();
+  },
+  toggleRomaji() {
+    this.showRomaji = !this.showRomaji;
     this.persistState();
   },
 
