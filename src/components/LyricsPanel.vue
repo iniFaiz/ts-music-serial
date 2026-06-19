@@ -83,6 +83,15 @@ const panelLines = computed(() => {
   return result;
 });
 
+const hasLyrics = computed(() => {
+  if (!lyrics.value) return false;
+  if (lyrics.value.synced) {
+    return panelLines.value.length > 0;
+  } else {
+    return lyrics.value.lines && lyrics.value.lines.length > 0;
+  }
+});
+
 const songDurationMs = computed(() => (store.duration || 0) * 1000);
 
 const activeIdx = computed(() => {
@@ -264,7 +273,7 @@ function seekToLine(line) {
         </div>
 
         <!-- Synced lyrics -->
-        <div v-else-if="lyrics && lyrics.synced" class="py-[45%]">
+        <div v-else-if="hasLyrics && lyrics && lyrics.synced" class="py-[45%]">
           <div
             v-for="(line, i) in panelLines"
             :key="i"
@@ -298,7 +307,7 @@ function seekToLine(line) {
         </div>
 
         <!-- Plain lyrics -->
-        <div v-else-if="lyrics && !lyrics.synced" class="py-[45%]">
+        <div v-else-if="hasLyrics && lyrics && !lyrics.synced" class="py-[45%]">
           <div
             v-for="(line, i) in lyrics.lines"
             :key="i"
@@ -308,7 +317,7 @@ function seekToLine(line) {
         </div>
 
         <!-- Not found -->
-        <div v-else-if="lyricsState === 'done' && !lyrics" class="flex flex-col items-center justify-center h-full gap-3 text-center px-4">
+        <div v-else-if="lyricsState === 'done' && (!lyrics || !hasLyrics)" class="flex flex-col items-center justify-center h-full gap-3 text-center px-4">
           <svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="text-gray-700">
             <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
           </svg>

@@ -18,7 +18,7 @@ const song = computed(() => store.currentSong);
 
 const hasLyrics = computed(() => lines.value && lines.value.length > 0);
 const showLyricsColumn = computed(() => {
-  return showLyricsOption.value && (lyricsLoading.value || hasLyrics.value);
+  return showLyricsOption.value;
 });
 
 async function resolveCover(path) {
@@ -701,7 +701,6 @@ const goToAlbum = (albumName) => {
 
       <!-- Bottom-right lyrics toggle button -->
       <div
-        v-if="lines.length > 0"
         class="absolute bottom-6 right-6 z-30"
       >
         <button

@@ -228,50 +228,89 @@ pub fn is_netease_metadata(line: &LyricLine) -> bool {
     }
 
     let t_lower = t.to_lowercase();
-    if t_lower.starts_with("by:") 
-        || t_lower.starts_with("lrc:") 
-        || t_lower.starts_with("translator:") 
-        || t_lower.starts_with("lyrics by") 
-        || t_lower.starts_with("composed by") 
-        || t_lower.starts_with("produced by")
-        || t_lower.starts_with("arranged by")
-        || t_lower.starts_with("remix by")
-        || t_lower.starts_with("vocals by")
-        || t_lower.starts_with("instrumental by")
-    {
+    
+    // 1. Starts with english/common prefix patterns
+    let prefix_patterns = &[
+        "by:", "lrc:", "translator:", "lyrics by", "composed by", "produced by",
+        "arranged by", "remix by", "vocals by", "instrumental by", "lyrics:",
+        "composer:", "vocals:", "music:", "music by", "translation:",
+        "translated by", "synced by", "timing by", "timed by", "lrc by",
+        "romaji by", "romanized by"
+    ];
+    if prefix_patterns.iter().any(|&pat| t_lower.starts_with(pat)) {
         return true;
     }
 
-    // Chinese metadata keywords. If they contain a separator (colon, slash, space, hyphen, etc.)
-    // or if the line starts with them and is short.
-    let separators = &[':', '：', '/', '-', '—', '|', ' '];
-    let keywords = &[
+    // 2. Safe keywords that can have soft separators (including space if short)
+    let separators = &[':', '：', '/', '-', '—', '|', '='];
+    let safe_keywords = &[
+        // Chinese
         "作词", "作曲", "编曲", "制作人", "监制", "和声", "混音", "母带", 
-        "录音", "吉他", "贝斯", "鼓", "键盘", "策划", "宣发", "发卡", "设计",
-        "原唱", "翻唱", "伴奏", "后期", "音响", "企划", "统筹", "出品", "发行"
+        "录音", "策划", "宣发", "发卡", "设计", "原唱", "翻唱", "伴奏", 
+        "后期", "音响", "企划", "统筹", "出品", "发行",
+        // Japanese
+        "作詞", "作曲", "編曲", "訳詞", "プロデュース", "プロデューサー", 
+        "マスタリング", "翻訳", "制作", "音響", "録音", "動画",
+        // Korean
+        "작사", "작곡", "편곡", "번역", "개사", "프로듀서", "일러스트", 
+        "제작", "협력", "제공", "유통", "기획", "영상",
+        // English
+        "lyricist", "composer", "arranger", "translator", "translation", 
+        "producer", "mixing", "mastering"
     ];
 
-    for &k in keywords {
-        if t.contains(k) {
-            let idx = t.find(k).unwrap();
-            let after_k = &t[idx + k.len()..];
+    for &k in safe_keywords {
+        if t_lower.contains(k) {
+            let idx = t_lower.find(k).unwrap();
+            let after_k = &t_lower[idx + k.len()..];
             let after_trimmed = after_k.trim_start();
-            if after_trimmed.starts_with(|c| separators.contains(&c)) || after_k.starts_with(' ') || after_k.is_empty() {
+            if after_trimmed.starts_with(|c| separators.contains(&c)) 
+                || after_k.starts_with(' ') 
+                || after_k.is_empty() 
+            {
                 return true;
             }
         }
     }
 
-    // Highly specific terms (watermarks or contributor labels) that don't need separators to be safe
+    // 3. Keywords requiring a hard separator
+    let hard_keywords = &[
+        "노래", "가수", "보컬", "세션", "기타", "베이스", "드럼", "키보드",
+        "歌", "唄", "ボーカル", "コーラス", "vocal", "vocals", "singer", 
+        "chorus", "guitar", "bass", "drums", "keyboard"
+    ];
+    for &k in hard_keywords {
+        if t_lower.contains(k) {
+            let idx = t_lower.find(k).unwrap();
+            let after_k = &t_lower[idx + k.len()..];
+            let after_trimmed = after_k.trim_start();
+            if after_trimmed.starts_with(|c| separators.contains(&c)) {
+                return true;
+            }
+        }
+    }
+
+    // 4. Specific watermark and contributor keywords (case-insensitive substring match)
     let specific_keywords = &[
+        // Chinese
         "歌词贡献", "翻译贡献", "贡献者", "歌词及翻译", "网易云", "网易首发",
         "时间轴", "和声编写", "歌词制作", "制作歌词", "歌词由", "本歌词由", 
-        "此歌词由", "感谢您的支持", "感谢您支持", "QQ音乐", "腾讯音乐", 
+        "此歌词由", "感谢您的支持", "感谢您支持", "qq音乐", "腾讯音乐", 
         "酷狗", "酷我", "虾米音乐", "提供", "上传", "校对", "同步", 
-        "有疑问请联系", "lrc制作", "lrc下载", "歌词下载"
+        "有疑问请联系", "lrc制作", "lrc下载", "歌词下载", "词与曲",
+        // Japanese
+        "歌詞提供", "対訳", "翻訳者", "歌詞制作", "タイムライン", "音源", 
+        "初音ミクwiki", "ボカロ中文wiki",
+        // Korean
+        "가사 제공", "가사 번역", "가사 제작", "싱크 조절", "싱크 제작", 
+        "시간축", "번역자", "개사자", "출처", "공식 유튜브",
+        // English
+        "lyrics translation", "english lyrics", "romanized by", "romaji by", 
+        "transliterated by", "provided by", "corrected by", "edited by", 
+        "lyrics support"
     ];
     for &k in specific_keywords {
-        if t.contains(k) {
+        if t_lower.contains(k) {
             return true;
         }
     }
