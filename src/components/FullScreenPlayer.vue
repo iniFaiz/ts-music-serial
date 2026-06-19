@@ -396,16 +396,16 @@ const goToAlbum = (albumName) => {
       class="fixed inset-0 z-[200] overflow-hidden text-white select-none bg-[#060606]"
     >
       <!-- Animated gradient backdrop (not see-through) -->
-      <div class="absolute inset-0 bg-[#060606] overflow-hidden">
-        <div class="absolute inset-0 opacity-75 filter blur-[30px] transform scale-[4.0] origin-center pointer-events-none">
+      <div class="absolute inset-0 bg-[#0a0a0a] overflow-hidden">
+        <div class="absolute inset-0 opacity-90 filter blur-[80px] transform scale-[2.2] origin-center pointer-events-none">
           <div class="blob blob-1" :style="{ backgroundColor: colors[0] }"></div>
           <div class="blob blob-2" :style="{ backgroundColor: colors[1] }"></div>
           <div class="blob blob-3" :style="{ backgroundColor: colors[2] }"></div>
           <div class="blob blob-4" :style="{ backgroundColor: colors[0] }"></div>
         </div>
         <!-- Dark overlay to ensure text contrast (removed expensive backdrop-blur) -->
-        <div class="absolute inset-0 bg-[#060606]/55"></div>
-        <div class="absolute inset-0 bg-gradient-to-t from-[#060606] via-transparent to-black/20"></div>
+        <div class="absolute inset-0 bg-[#0a0a0a]/38"></div>
+        <div class="absolute inset-0 bg-gradient-to-t from-[#0a0a0a] via-[#0a0a0a]/20 to-[#0a0a0a]/10"></div>
       </div>
 
       <!-- Draggable top strip + close button -->
@@ -797,6 +797,7 @@ input[type='range']::-webkit-slider-thumb {
     transform 0.5s  cubic-bezier(0.34, 1.56, 0.64, 1);
   transform-origin: left center;
   padding-right: 24px; /* Prevent text clipping on scale/translate */
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 2px 6px rgba(0, 0, 0, 0.15);
 }
 .np-line-active {
   color: rgba(255, 255, 255, 0.97);
@@ -837,40 +838,40 @@ input[type='range']::-webkit-slider-thumb {
   position: absolute;
   border-radius: 50%;
   mix-blend-mode: screen;
-  transition: background-color 1.5s ease-in-out;
-  opacity: 0.6;
+  transition: background-color 1.8s ease-in-out;
+  opacity: 0.95;
   will-change: transform;
 }
 
 .blob-1 {
-  width: 30%;
-  height: 30%;
-  left: 5%;
-  top: 5%;
+  width: 55%;
+  height: 55%;
+  left: -10%;
+  top: -10%;
   animation: blob-move-1 28s infinite alternate ease-in-out;
 }
 
 .blob-2 {
-  width: 25%;
-  height: 25%;
-  right: 8%;
-  bottom: 8%;
+  width: 50%;
+  height: 50%;
+  right: -5%;
+  bottom: -5%;
   animation: blob-move-2 33s infinite alternate ease-in-out;
 }
 
 .blob-3 {
-  width: 20%;
-  height: 20%;
-  left: 35%;
-  top: 35%;
+  width: 45%;
+  height: 45%;
+  left: 20%;
+  top: 20%;
   animation: blob-move-3 30s infinite alternate ease-in-out;
 }
 
 .blob-4 {
-  width: 22%;
-  height: 22%;
-  right: 15%;
-  top: 5%;
+  width: 48%;
+  height: 48%;
+  right: 5%;
+  top: -5%;
   animation: blob-move-4 25s infinite alternate ease-in-out;
 }
 

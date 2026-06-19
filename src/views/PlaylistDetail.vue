@@ -81,6 +81,7 @@ watch(
         :cover="playlist.cover"
         :size="208"
         className="h-52 w-52 rounded-md shadow-2xl"
+        style="view-transition-name: shared-cover"
       />
 
       <div class="flex flex-col gap-1 pb-2 overflow-hidden flex-1">

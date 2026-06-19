@@ -95,6 +95,17 @@ export async function navigateWithTransition(
 // on back-navigation to morph the detail cover into the matching list cover.
 // Iterates instead of using an attribute selector so odd characters in names
 // (quotes, brackets) can't break the query.
+function getRouteKey(route) {
+  if (!route || !route.params) return null;
+  if (route.name === 'PlaylistDetail') {
+    return route.params.id ?? null;
+  }
+  if (route.name === 'AlbumDetail' || route.name === 'ArtistDetail') {
+    return route.params.name ?? null;
+  }
+  return route.params.name ?? route.params.id ?? null;
+}
+
 function findCoverByKey(key) {
   if (key == null) return null;
   const nodes = document.querySelectorAll('[data-cover-key]');
@@ -112,7 +123,7 @@ function findCoverByKey(key) {
 // router.back() when the View Transition API is unavailable.
 export async function goBackWithTransition(router, name = 'shared-cover') {
   const from = router.currentRoute.value;
-  const key = (from && from.params && (from.params.name ?? from.params.id)) ?? null;
+  const key = getRouteKey(from);
 
   if (typeof document === 'undefined' || !document.startViewTransition) {
     router.back();
@@ -187,7 +198,7 @@ export async function goForwardWithTransition(router, name = 'shared-cover') {
       if (resolved.name === 'ArtistDetail' || resolved.name === 'ArtistsView') {
         transitionClass = 'to-artist-transition';
       }
-      key = (resolved.params && (resolved.params.name ?? resolved.params.id)) ?? null;
+      key = getRouteKey(resolved);
     }
   } catch {
     // ignore
