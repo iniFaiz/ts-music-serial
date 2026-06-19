@@ -40,6 +40,21 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "publisher": "TS Music",
+    "shortDescription": "A music player built with Tauri",
+    "windows": {
+      "nsis": {
+        "installMode": "both",
+        "displayLanguageSelector": false,
+        "installerIcon": "icons/icon.ico",
+        "headerImage": "icons/nsis-header.bmp",
+        "sidebarImage": "icons/nsis-sidebar.bmp"
+      },
+      "wix": {
+        "dialogImagePath": "icons/wix-dialog.bmp",
+        "bannerPath": "icons/wix-banner.bmp"
+      }
+    }
   }
 }

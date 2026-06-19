@@ -40,6 +40,19 @@ ecb = { version = "0.1", features = ["alloc"] }
 md-5 = "0.10"
 hex = "0.4"
 
+# Windows-only: native Taskbar thumbnail toolbar buttons (ITaskbarList3).
+# Pinned to the same `windows` major already pulled in by tauri/tao/wry so the
+# crate is shared (only a few extra feature modules compile).
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_Registry",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
 # Optimize dependencies even in debug/dev builds. Audio codecs (symphonia) are
 # math-heavy and unusably slow when compiled unoptimized — that is what made
 # `tauri dev` take ~30s to start a track (the whole song is decoded up front).

@@ -21,6 +21,8 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use walkdir::WalkDir;
 
 mod lyrics;
+#[cfg(target_os = "windows")]
+mod thumbbar;
 
 const SUPPORTED_EXTS: [&str; 6] = ["mp3", "flac", "wav", "m4a", "ogg", "aac"];
 // Cover art is downscaled to this maximum edge (px) before being sent to the
@@ -2041,6 +2043,9 @@ fn smtc_set_playback(
             }
         }
     });
+
+    // Keep the taskbar thumbnail's Play/Pause button in sync with playback.
+    thumbbar::set_playing(&app, playing);
 }
 
 // Non-Windows stubs so the frontend can call these unconditionally.
@@ -2140,13 +2145,18 @@ pub fn run() {
 
     #[cfg(target_os = "windows")]
     {
-        builder = builder.manage(Arc::new(MediaController(Mutex::new(None))));
+        builder = builder
+            .manage(Arc::new(MediaController(Mutex::new(None))))
+            .manage(thumbbar::ThumbbarController::new());
     }
 
     builder
         .setup(move |_app| {
             #[cfg(target_os = "windows")]
-            init_media_controls(_app.handle());
+            {
+                init_media_controls(_app.handle());
+                thumbbar::init(_app.handle());
+            }
             // Start the debounced filesystem-change → library-changed pump.
             if let Some(rx) = fs_rx.lock().unwrap().take() {
                 spawn_fs_coalescer(_app.handle().clone(), rx);
