@@ -368,11 +368,35 @@ enum AudioCommand {
     // Open the output device with the given name, or the system default (None).
     // The reply channel is signalled once the device is open.
     OpenDevice(Option<String>, mpsc::Sender<()>),
+    CreateSink(mpsc::Sender<Result<Arc<Sink>, String>>),
+}
+
+#[allow(dead_code)]
+struct ActiveTrack {
+    path: String,
+    sink: Arc<Sink>,
+    duration: f64,
+    start_time: Instant,
+}
+
+#[allow(dead_code)]
+struct FadingTrack {
+    sink: Arc<Sink>,
+    fade_end: Instant,
+    fade_duration: Duration,
+    initial_volume: f32,
+}
+
+struct PreparedTrack {
+    path: String,
+    decoder: Decoder<Cursor<Vec<u8>>>,
+    duration: f64,
+    gain_db: Option<f32>,
+    peak: Option<f32>,
 }
 
 struct AudioPlayer {
-    // The active sink. Wrapped in a Mutex<Option<..>> so the audio thread can
-    // swap it when the output device changes; None when no device is available.
+    // The active default sink handle from device stream builder
     sink: Arc<Mutex<Option<Arc<Sink>>>>,
     // Duration of the currently loaded track, in seconds.
     duration: Arc<Mutex<f64>>,
@@ -393,16 +417,48 @@ struct AudioPlayer {
     last_volume: Arc<Mutex<f32>>,
     // Channel to the audio thread for device-management commands.
     cmd_tx: mpsc::Sender<AudioCommand>,
-    // Pre-decoded next track (path + ready decoder) for near-gapless playback.
-    // player_load consumes this when the loaded path matches, skipping the disk
-    // read + decoder setup so the transition has no audible decode gap.
-    prepared: Arc<Mutex<Option<(String, Decoder<Cursor<Vec<u8>>>)>>>,
+    // Pre-decoded next track details
+    prepared: Arc<Mutex<Option<PreparedTrack>>>,
+    // Target path currently being prepared (prevents race conditions)
+    prepared_target_path: Arc<Mutex<Option<String>>>,
+    // Transition mode and crossfade settings
+    transition_mode: Arc<Mutex<String>>,
+    crossfade_secs: Arc<Mutex<f64>>,
+    // Normalization configuration
+    normalization_enabled: Arc<Mutex<bool>>,
+    normalization_preamp_db: Arc<Mutex<f64>>,
+    // Current primary track and fading tracks
+    current_track: Arc<Mutex<Option<ActiveTrack>>>,
+    fading_tracks: Arc<Mutex<Vec<FadingTrack>>>,
+}
+
+impl Clone for AudioPlayer {
+    fn clone(&self) -> Self {
+        AudioPlayer {
+            sink: self.sink.clone(),
+            current_track: self.current_track.clone(),
+            fading_tracks: self.fading_tracks.clone(),
+            duration: self.duration.clone(),
+            active: self.active.clone(),
+            generation: self.generation.clone(),
+            spectrum: self.spectrum.clone(),
+            norm_factor: self.norm_factor.clone(),
+            last_volume: self.last_volume.clone(),
+            cmd_tx: self.cmd_tx.clone(),
+            prepared: self.prepared.clone(),
+            prepared_target_path: self.prepared_target_path.clone(),
+            transition_mode: self.transition_mode.clone(),
+            crossfade_secs: self.crossfade_secs.clone(),
+            normalization_enabled: self.normalization_enabled.clone(),
+            normalization_preamp_db: self.normalization_preamp_db.clone(),
+        }
+    }
 }
 
 impl AudioPlayer {
     // Clone out the current sink handle (if any) without holding the lock.
     fn sink(&self) -> Option<Arc<Sink>> {
-        self.sink.lock().unwrap().clone()
+        self.current_track.lock().unwrap().as_ref().map(|t| t.sink.clone())
     }
     // Effective sink volume = user volume * normalization factor. Capped above
     // 1.0 (≈ +12 dB) so normalization can boost quiet tracks; rodio amplifies
@@ -421,6 +477,7 @@ struct PlayerStatus {
     duration: f64,
     playing: bool,
     finished: bool,
+    path: Option<String>,
 }
 
 // Read a file into memory and build a *seekable* decoder. Decoding stays lazy
@@ -545,6 +602,8 @@ fn fft_in_place(re: &mut [f32], im: &mut [f32]) {
 struct SpectrumSource<S> {
     inner: S,
     shared: Arc<SpectrumShared>,
+    player_gen: Arc<AtomicU64>,
+    my_gen: u64,
     channels: u16,
     frame_sum: f32,
     frame_ch: u16,
@@ -557,7 +616,7 @@ struct SpectrumSource<S> {
 }
 
 impl<S: Source> SpectrumSource<S> {
-    fn new(inner: S, shared: Arc<SpectrumShared>) -> Self {
+    fn new(inner: S, shared: Arc<SpectrumShared>, player_gen: Arc<AtomicU64>, my_gen: u64) -> Self {
         let channels = inner.channels().max(1);
         let sr = inner.sample_rate().max(1) as f32;
         // Six log-spaced bands spanning sub-bass → presence.
@@ -575,6 +634,8 @@ impl<S: Source> SpectrumSource<S> {
         SpectrumSource {
             inner,
             shared,
+            player_gen,
+            my_gen,
             channels,
             frame_sum: 0.0,
             frame_ch: 0,
@@ -637,7 +698,7 @@ impl<S: Source> Iterator for SpectrumSource<S> {
     #[inline]
     fn next(&mut self) -> Option<f32> {
         let s = self.inner.next()?;
-        if self.shared.enabled.load(Ordering::Relaxed) {
+        if self.shared.enabled.load(Ordering::Relaxed) && self.my_gen == self.player_gen.load(Ordering::Relaxed) {
             self.frame_sum += s;
             self.frame_ch += 1;
             if self.frame_ch >= self.channels {
@@ -707,10 +768,43 @@ async fn player_load(
         return Err("Path is not within an allowed music folder".to_string());
     }
 
-    let sink = match player.sink() {
-        Some(s) => s,
-        None => return Err("No audio output device".to_string()),
-    };
+    // Stop all active sinks and clear fading list
+    {
+        let mut fading_guard = player.fading_tracks.lock().unwrap();
+        for t in fading_guard.drain(..) {
+            t.sink.stop();
+        }
+        let mut current_guard = player.current_track.lock().unwrap();
+        if let Some(t) = current_guard.take() {
+            if let Some(secs) = fade_in_secs {
+                if secs > 0.0 {
+                    fading_guard.push(FadingTrack {
+                        sink: t.sink.clone(),
+                        fade_end: Instant::now() + Duration::from_secs_f64(secs),
+                        fade_duration: Duration::from_secs_f64(secs),
+                        initial_volume: player.effective_volume(),
+                    });
+                } else {
+                    t.sink.stop();
+                }
+            } else {
+                t.sink.stop();
+            }
+        }
+    }
+
+    // Create a new sink via the audio thread
+    let (reply_tx, reply_rx) = mpsc::channel();
+    player
+        .cmd_tx
+        .send(AudioCommand::CreateSink(reply_tx))
+        .map_err(|e| format!("Audio thread unavailable: {e}"))?;
+    
+    // Wait up to 2 seconds for a sink
+    let sink = reply_rx
+        .recv_timeout(Duration::from_secs(2))
+        .map_err(|e| format!("Failed to create sink: {e}"))??;
+
     // Clone the shared handles out so we never hold the State guard across .await.
     let generation = player.generation.clone();
     let duration_slot = player.duration.clone();
@@ -724,35 +818,43 @@ async fn player_load(
     // player inactive during the load gap prevents the now-empty sink from
     // being misread as "track finished" (which would auto-skip to the next one).
     let my_gen = generation.fetch_add(1, Ordering::SeqCst) + 1;
-    sink.clear();
     active.store(false, Ordering::SeqCst);
     spectrum.reset(); // clear the visualizer during the load gap
     // Apply the requested volume together with the active normalization factor.
     let user_vol = volume.clamp(0.0, 1.0) as f32;
     *last_volume.lock().unwrap() = user_vol;
     let factor = *norm_factor.lock().unwrap();
-    sink.set_volume((user_vol * factor).clamp(0.0, 4.0));
+    sink.set_volume(user_vol * factor);
 
     // Reuse a pre-decoded next track when it matches (near-gapless); otherwise
     // read + decode on the blocking pool.
     let prepared_decoder = {
         let mut g = prepared.lock().unwrap();
-        if g.as_ref().map(|(p, _)| p == &path).unwrap_or(false) {
-            g.take().map(|(_, d)| d)
+        let mut target_g = player.prepared_target_path.lock().unwrap();
+        if g.as_ref().map(|p| p.path == path).unwrap_or(false) {
+            *target_g = None;
+            g.take()
         } else {
+            *g = None;
+            *target_g = None;
             None
         }
     };
     let (decoder, decoded_duration) = match prepared_decoder {
-        Some(dec) => {
-            let dur = dec.total_duration().map(|d| d.as_secs_f64()).unwrap_or(0.0);
-            (dec, dur)
+        Some(prep) => {
+            (prep.decoder, prep.duration)
         }
         None => {
             let path_buf_clone = path_buf.clone();
-            tauri::async_runtime::spawn_blocking(move || build_decoder(&path_buf_clone))
+            let (dec, raw_dur) = tauri::async_runtime::spawn_blocking(move || build_decoder(&path_buf_clone))
                 .await
-                .map_err(|e| format!("Decode task failed: {e}"))??
+                .map_err(|e| format!("Decode task failed: {e}"))??;
+            let dur = if raw_dur > 0.0 {
+                raw_dur
+            } else {
+                duration_hint.max(0.0)
+            };
+            (dec, dur)
         }
     };
 
@@ -775,7 +877,7 @@ async fn player_load(
     *duration_slot.lock().unwrap() = duration;
     // Tap the decoded samples for the visualizer on their way to the sink.
     // In crossfade mode each track is eased in with a fade.
-    let tapped = SpectrumSource::new(decoder, spectrum);
+    let tapped = SpectrumSource::new(decoder, spectrum, player.generation.clone(), my_gen);
     match fade_in_secs {
         Some(secs) if secs > 0.0 => {
             sink.append(tapped.fade_in(Duration::from_secs_f64(secs.min(12.0))));
@@ -802,6 +904,17 @@ async fn player_load(
     }
     active.store(true, Ordering::SeqCst);
 
+    // Save as current track
+    {
+        let mut current_guard = player.current_track.lock().unwrap();
+        *current_guard = Some(ActiveTrack {
+            path: path.clone(),
+            sink: sink.clone(),
+            duration,
+            start_time: Instant::now(),
+        });
+    }
+
     // Read properties via lofty
     let mut sample_rate = None;
     let mut bit_depth = None;
@@ -820,34 +933,78 @@ async fn player_load(
 
 // Pre-decode the next track for near-gapless playback. The ready decoder is
 // stored and consumed by the upcoming player_load (when paths match), skipping
-// its disk read + decode pass so the transition has no audible decode gap.
+// its disk read + decoder setup so the transition has no audible decode gap.
 #[tauri::command]
 async fn player_prepare_next(
     app: AppHandle,
     player: State<'_, AudioPlayer>,
     path: String,
+    duration_hint: Option<f64>,
 ) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     if !is_allowed_audio(&app, &path_buf) {
         return Err("Path is not within an allowed music folder".to_string());
     }
-    // Already prepared for this path — nothing to do.
-    if player
-        .prepared
-        .lock()
-        .unwrap()
-        .as_ref()
-        .map(|(p, _)| p == &path)
-        .unwrap_or(false)
+    
+    // Set target path and clear any stale prepared track
     {
-        return Ok(());
+        let mut target_g = player.prepared_target_path.lock().unwrap();
+        if target_g.as_ref() == Some(&path) {
+            return Ok(());
+        }
+        *target_g = Some(path.clone());
+        *player.prepared.lock().unwrap() = None;
     }
+
     let prepared = player.prepared.clone();
+    let prepared_target_path = player.prepared_target_path.clone();
     let pb = path_buf.clone();
-    if let Ok(Ok((dec, _dur))) =
+    let path_clone = path.clone();
+    if let Ok(Ok((dec, raw_dur))) =
         tauri::async_runtime::spawn_blocking(move || build_decoder(&pb)).await
     {
-        *prepared.lock().unwrap() = Some((path, dec));
+        // Check if this path is still the target before continuing with RG tags and saving
+        {
+            let target_g = prepared_target_path.lock().unwrap();
+            if target_g.as_ref() != Some(&path_clone) {
+                return Ok(());
+            }
+        }
+
+        // Parse ReplayGain tags of the prepared track
+        let mut gain_db = None;
+        let mut peak = None;
+        if let Ok(tagged_file) = Probe::open(&path_buf).and_then(|p| p.read()) {
+            let tag = tagged_file.primary_tag().or_else(|| tagged_file.first_tag());
+            gain_db = tag
+                .and_then(|t| t.get_string(&ItemKey::ReplayGainTrackGain))
+                .and_then(parse_rg_db);
+            peak = tag
+                .and_then(|t| t.get_string(&ItemKey::ReplayGainTrackPeak))
+                .and_then(|s| s.trim().parse::<f32>().ok());
+        }
+
+        let dur = if raw_dur > 0.0 {
+            raw_dur
+        } else {
+            duration_hint.unwrap_or(0.0)
+        };
+
+        // Check again after metadata read
+        {
+            let target_g = prepared_target_path.lock().unwrap();
+            if target_g.as_ref() != Some(&path_clone) {
+                return Ok(());
+            }
+        }
+
+        *prepared.lock().unwrap() = Some(PreparedTrack {
+            path: path_clone,
+            decoder: dec,
+            duration: dur,
+            gain_db,
+            peak,
+        });
     }
     Ok(())
 }
@@ -857,6 +1014,11 @@ fn player_pause(player: State<AudioPlayer>) {
     if let Some(sink) = player.sink() {
         sink.pause();
     }
+    // Also pause all fading tracks!
+    let fading = player.fading_tracks.lock().unwrap();
+    for track in fading.iter() {
+        track.sink.pause();
+    }
 }
 
 #[tauri::command]
@@ -864,19 +1026,36 @@ fn player_resume(player: State<AudioPlayer>) {
     if let Some(sink) = player.sink() {
         sink.play();
     }
+    // Also resume all fading tracks!
+    let fading = player.fading_tracks.lock().unwrap();
+    for track in fading.iter() {
+        track.sink.play();
+    }
 }
 
 #[tauri::command]
 fn player_set_volume(player: State<AudioPlayer>, volume: f64) {
     let user_vol = volume.clamp(0.0, 1.0) as f32;
     *player.last_volume.lock().unwrap() = user_vol;
+    let eff_vol = player.effective_volume();
     if let Some(sink) = player.sink() {
-        sink.set_volume(player.effective_volume());
+        sink.set_volume(eff_vol);
+    }
+    let mut fading = player.fading_tracks.lock().unwrap();
+    for track in fading.iter_mut() {
+        track.initial_volume = eff_vol;
     }
 }
 
 #[tauri::command]
 fn player_seek(player: State<AudioPlayer>, position: f64) -> Result<(), String> {
+    // Stop all fading tracks on manual seek
+    {
+        let mut fading_guard = player.fading_tracks.lock().unwrap();
+        for t in fading_guard.drain(..) {
+            t.sink.stop();
+        }
+    }
     if let Some(sink) = player.sink() {
         let duration = *player.duration.lock().unwrap();
         // Keep the target inside the track; seeking to/past the end can error.
@@ -893,8 +1072,15 @@ fn player_seek(player: State<AudioPlayer>, position: f64) -> Result<(), String> 
 
 #[tauri::command]
 fn player_stop(player: State<AudioPlayer>) {
-    if let Some(sink) = player.sink() {
-        sink.clear();
+    {
+        let mut fading_guard = player.fading_tracks.lock().unwrap();
+        for t in fading_guard.drain(..) {
+            t.sink.stop();
+        }
+        let mut current_guard = player.current_track.lock().unwrap();
+        if let Some(t) = current_guard.take() {
+            t.sink.stop();
+        }
     }
     player.active.store(false, Ordering::SeqCst);
 }
@@ -904,11 +1090,13 @@ fn player_status(player: State<AudioPlayer>) -> PlayerStatus {
     match player.sink() {
         Some(sink) => {
             let empty = sink.empty();
+            let path = player.current_track.lock().unwrap().as_ref().map(|t| t.path.clone());
             PlayerStatus {
                 position: sink.get_pos().as_secs_f64(),
                 duration: *player.duration.lock().unwrap(),
                 playing: !sink.is_paused() && !empty,
                 finished: player.active.load(Ordering::SeqCst) && empty,
+                path,
             }
         }
         None => PlayerStatus {
@@ -916,8 +1104,25 @@ fn player_status(player: State<AudioPlayer>) -> PlayerStatus {
             duration: 0.0,
             playing: false,
             finished: false,
+            path: None,
         },
     }
+}
+
+#[tauri::command]
+fn player_set_transition(player: State<AudioPlayer>, mode: String, crossfade_secs: f64) {
+    *player.transition_mode.lock().unwrap() = mode;
+    *player.crossfade_secs.lock().unwrap() = crossfade_secs;
+}
+
+#[tauri::command]
+fn player_set_normalization_settings(
+    player: State<AudioPlayer>,
+    enabled: bool,
+    preamp_db: f64,
+) {
+    *player.normalization_enabled.lock().unwrap() = enabled;
+    *player.normalization_preamp_db.lock().unwrap() = preamp_db;
 }
 
 // Latest six frequency-band levels (0..1), low → high. Returns all-zero when no
@@ -1020,6 +1225,14 @@ fn init_audio_player() -> AudioPlayer {
                     _stream = open_device_stream(name.as_deref(), &slot_t, &lv_t, &nf_t);
                     let _ = reply.send(());
                 }
+                AudioCommand::CreateSink(reply) => {
+                    let res = if let Some(ref stream) = _stream {
+                        Ok(Arc::new(Sink::connect_new(stream.mixer())))
+                    } else {
+                        Err("No active audio stream".to_string())
+                    };
+                    let _ = reply.send(res);
+                }
             }
         }
     });
@@ -1038,7 +1251,298 @@ fn init_audio_player() -> AudioPlayer {
         last_volume,
         cmd_tx,
         prepared: Arc::new(Mutex::new(None)),
+        prepared_target_path: Arc::new(Mutex::new(None)),
+        transition_mode: Arc::new(Mutex::new("off".to_string())),
+        crossfade_secs: Arc::new(Mutex::new(6.0)),
+        normalization_enabled: Arc::new(Mutex::new(false)),
+        normalization_preamp_db: Arc::new(Mutex::new(0.0)),
+        current_track: Arc::new(Mutex::new(None)),
+        fading_tracks: Arc::new(Mutex::new(Vec::new())),
     }
+}
+
+// True-gapless lead: how early (seconds before the current track ends) the next
+// track is appended onto the SAME sink. rodio plays queued sources back-to-back
+// with zero gap, so this lead only needs to clear the ~20ms ticker tick and the
+// audio output buffer. Kept short so a last-moment queue edit has the smallest
+// possible window to race the already-queued track.
+const GAPLESS_LEAD_SECS: f64 = 0.3;
+
+// A next track appended onto the *currently playing* sink's queue for true
+// gapless playback, waiting for the active source to finish. The ticker promotes
+// it to the current track the instant rodio advances the queue to it.
+struct GaplessQueued {
+    path: String,
+    duration: f64,
+    gain_db: Option<f32>,
+    peak: Option<f32>,
+    sink: Arc<Sink>,
+}
+
+fn spawn_player_ticker(app: AppHandle, player: AudioPlayer) {
+    std::thread::spawn(move || {
+        let mut transition_triggered_for_gen = 0;
+        // Next track queued onto the live sink for true-gapless playback (None
+        // when nothing is waiting ahead).
+        let mut gapless_queued: Option<GaplessQueued> = None;
+        loop {
+            std::thread::sleep(Duration::from_millis(20));
+
+            // 1. Process fading tracks (MUST run even if active is false, so fading tracks fade out and stop!)
+            {
+                let mut fading = match player.fading_tracks.lock() {
+                    Ok(f) => f,
+                    Err(_) => continue,
+                };
+                let now = Instant::now();
+                fading.retain(|track| {
+                    if now >= track.fade_end {
+                        track.sink.stop();
+                        false
+                    } else {
+                        let total_secs = track.fade_duration.as_secs_f64();
+                        let remaining_ratio = if total_secs > 0.0 {
+                            (track.fade_end - now).as_secs_f64() / total_secs
+                        } else {
+                            0.0
+                        };
+                        let fade_vol = track.initial_volume * (remaining_ratio as f32).clamp(0.0, 1.0);
+                        track.sink.set_volume(fade_vol);
+                        true
+                    }
+                });
+            }
+
+            // 2. Process automatic transitions
+            let active = player.active.load(Ordering::SeqCst);
+            if !active {
+                continue;
+            }
+
+            let current_gen = player.generation.load(Ordering::SeqCst);
+
+            let (current_sink, position, duration, empty) = {
+                let current_guard = match player.current_track.lock() {
+                    Ok(g) => g,
+                    Err(_) => continue,
+                };
+                if let Some(ref track) = *current_guard {
+                    let pos = track.sink.get_pos().as_secs_f64();
+                    let dur = track.duration;
+                    let empty = track.sink.empty();
+                    (track.sink.clone(), pos, dur, empty)
+                } else {
+                    continue;
+                }
+            };
+
+            let mode = {
+                match player.transition_mode.lock() {
+                    Ok(m) => m.clone(),
+                    Err(_) => "off".to_string(),
+                }
+            };
+            let crossfade_secs = {
+                match player.crossfade_secs.lock() {
+                    Ok(s) => *s,
+                    Err(_) => 6.0,
+                }
+            };
+
+            // --- True-gapless boundary: promote a queued next track ----------
+            // When a next track was appended ahead onto the shared sink, watch
+            // its queue: once the previous source drains (only the queued track
+            // remains) rodio is already playing it seamlessly, so promote it to
+            // the current track, fix up duration/normalization, and announce it.
+            if let Some(q) = gapless_queued.take() {
+                if !Arc::ptr_eq(&q.sink, &current_sink) {
+                    // A manual load replaced the sink (and stopped the queued
+                    // track with it) — drop the now-stale entry.
+                } else if q.sink.len() <= 1 {
+                    let user_vol = *player.last_volume.lock().unwrap();
+                    let norm_enabled = *player.normalization_enabled.lock().unwrap();
+                    let preamp_db = *player.normalization_preamp_db.lock().unwrap();
+                    let factor = if norm_enabled {
+                        let total_db = q.gain_db.map(|g| g as f64).unwrap_or(0.0) + preamp_db;
+                        let mut f = 10f64.powf(total_db / 20.0);
+                        if let Some(pk) = q.peak {
+                            if pk > 0.0 {
+                                f = f.min(1.0 / pk as f64);
+                            }
+                        }
+                        (f as f32).clamp(0.0, 4.0)
+                    } else {
+                        1.0
+                    };
+                    *player.norm_factor.lock().unwrap() = factor;
+                    q.sink.set_volume(user_vol * factor);
+                    *player.duration.lock().unwrap() = q.duration;
+                    if let Ok(mut cg) = player.current_track.lock() {
+                        *cg = Some(ActiveTrack {
+                            path: q.path.clone(),
+                            sink: q.sink.clone(),
+                            duration: q.duration,
+                            start_time: Instant::now(),
+                        });
+                    }
+                    let _ = app.emit("track-changed", serde_json::json!({ "path": q.path }));
+                    // Re-read fresh state next tick rather than acting on the
+                    // outgoing track's stale position/duration this iteration.
+                    continue;
+                } else {
+                    // Current source still playing — keep waiting.
+                    gapless_queued = Some(q);
+                }
+            }
+
+            if mode == "crossfade" && (duration > crossfade_secs && position >= (duration - crossfade_secs) || empty) {
+                if transition_triggered_for_gen != current_gen {
+                    let has_prep = {
+                        if let Ok(p_guard) = player.prepared.lock() {
+                            p_guard.is_some()
+                        } else {
+                            false
+                        }
+                    };
+
+                    if has_prep {
+                        let prepared_opt = {
+                            let mut p_guard = match player.prepared.lock() {
+                                Ok(g) => g,
+                                Err(_) => continue,
+                            };
+                            p_guard.take()
+                        };
+                        // Consuming the prepared track invalidates the "currently
+                        // preparing" marker; clear it so the next prepare_next call
+                        // (for the track after this one) is never mistaken for a no-op.
+                        if let Ok(mut t) = player.prepared_target_path.lock() {
+                            *t = None;
+                        }
+
+                        if let Some(prep) = prepared_opt {
+                            let (reply_tx, reply_rx) = mpsc::channel();
+                            if player.cmd_tx.send(AudioCommand::CreateSink(reply_tx)).is_ok() {
+                                if let Ok(Ok(new_sink)) = reply_rx.recv_timeout(Duration::from_secs(2)) {
+                                    let mut current_guard = match player.current_track.lock() {
+                                        Ok(g) => g,
+                                        Err(_) => continue,
+                                    };
+                                    if let Some(ref old_track) = *current_guard {
+                                        let mut fading_guard = match player.fading_tracks.lock() {
+                                            Ok(g) => g,
+                                            Err(_) => continue,
+                                        };
+                                        fading_guard.push(FadingTrack {
+                                            sink: old_track.sink.clone(),
+                                            fade_end: Instant::now() + Duration::from_secs_f64(crossfade_secs),
+                                            fade_duration: Duration::from_secs_f64(crossfade_secs),
+                                            initial_volume: player.effective_volume(),
+                                        });
+                                    }
+
+                                    let new_gen = player.generation.fetch_add(1, Ordering::SeqCst) + 1;
+                                    // Mark the *outgoing* track's generation as handled — NOT the
+                                    // new one. The new track starts via the `track-changed` event,
+                                    // which the frontend handles with `skipNextLoad` and so never
+                                    // calls `player_load` to bump the generation. Tagging `new_gen`
+                                    // here left the guard equal to the new track's live generation
+                                    // for its entire playback, blocking *its* transition — so
+                                    // crossfade only fired on every other track. Keying on
+                                    // `current_gen` lets each track transition exactly once.
+                                    transition_triggered_for_gen = current_gen;
+
+                                    let next_dur = prep.duration;
+                                    *player.duration.lock().unwrap() = next_dur;
+
+                                    // Apply normalization to the new sink
+                                    let norm_enabled = *player.normalization_enabled.lock().unwrap();
+                                    let preamp_db = *player.normalization_preamp_db.lock().unwrap();
+                                    let factor = if norm_enabled {
+                                        let total_db = prep.gain_db.map(|g| g as f64).unwrap_or(0.0) + preamp_db;
+                                        let mut f = 10f64.powf(total_db / 20.0);
+                                        if let Some(pk) = prep.peak {
+                                            if pk > 0.0 {
+                                                f = f.min(1.0 / pk as f64);
+                                            }
+                                        }
+                                        (f as f32).clamp(0.0, 4.0)
+                                    } else {
+                                        1.0
+                                    };
+                                    *player.norm_factor.lock().unwrap() = factor;
+
+                                    let tapped = SpectrumSource::new(prep.decoder, player.spectrum.clone(), player.generation.clone(), new_gen);
+                                    new_sink.append(tapped.fade_in(Duration::from_secs_f64(crossfade_secs)));
+
+                                    let user_vol = *player.last_volume.lock().unwrap();
+                                    new_sink.set_volume(user_vol * factor);
+                                    new_sink.play();
+
+                                    *current_guard = Some(ActiveTrack {
+                                        path: prep.path.clone(),
+                                        sink: new_sink,
+                                        duration: next_dur,
+                                        start_time: Instant::now(),
+                                    });
+
+                                    let _ = app.emit("track-changed", serde_json::json!({ "path": prep.path }));
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if mode == "gapless"
+                && gapless_queued.is_none()
+                && transition_triggered_for_gen != current_gen
+                && ((duration > 0.0 && position >= (duration - GAPLESS_LEAD_SECS)) || empty)
+            {
+                // True gapless: append the pre-decoded next track straight onto
+                // the live sink. rodio plays queued sources back-to-back, so it
+                // starts the instant the current source ends — one continuous
+                // sink, no fade, no gap. The boundary handler above promotes it
+                // to the current track once it actually begins.
+                let prepared_opt = {
+                    let mut p_guard = match player.prepared.lock() {
+                        Ok(g) => g,
+                        Err(_) => continue,
+                    };
+                    p_guard.take()
+                };
+                if let Some(prep) = prepared_opt {
+                    // Consuming the prepared track invalidates the "currently
+                    // preparing" marker; clear it so the next prepare_next call
+                    // (for the track after this one) is never mistaken for a no-op.
+                    if let Ok(mut t) = player.prepared_target_path.lock() {
+                        *t = None;
+                    }
+                    // Reserve the generation now so this track's spectrum tap is
+                    // live the moment it becomes the active source. (The outgoing
+                    // track's visualizer goes quiet for the short lead window —
+                    // imperceptible at a track's tail.)
+                    let new_gen = player.generation.fetch_add(1, Ordering::SeqCst) + 1;
+                    // Mark the *outgoing* track's generation as handled so we
+                    // append exactly once per track (see the crossfade branch for
+                    // why this keys on current_gen, not new_gen).
+                    transition_triggered_for_gen = current_gen;
+                    let tapped = SpectrumSource::new(
+                        prep.decoder,
+                        player.spectrum.clone(),
+                        player.generation.clone(),
+                        new_gen,
+                    );
+                    current_sink.append(tapped);
+                    gapless_queued = Some(GaplessQueued {
+                        path: prep.path.clone(),
+                        duration: prep.duration,
+                        gain_db: prep.gain_db,
+                        peak: prep.peak,
+                        sink: current_sink.clone(),
+                    });
+                }
+            }
+        }
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -1645,6 +2149,11 @@ pub fn run() {
             if let Some(rx) = fs_rx.lock().unwrap().take() {
                 spawn_fs_coalescer(_app.handle().clone(), rx);
             }
+            
+            // Spawn the audio player tick thread for crossfade/gapless transitions
+            let player = _app.state::<AudioPlayer>().inner().clone();
+            spawn_player_ticker(_app.handle().clone(), player);
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1672,7 +2181,9 @@ pub fn run() {
             smtc_set_metadata,
             smtc_set_playback,
             player_show_in_folder,
-            player_delete_file
+            player_delete_file,
+            player_set_transition,
+            player_set_normalization_settings
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -39,6 +39,7 @@ export const store = reactive({
   scanCount: 0,
 
   currentSong: null,
+  preselectedNextSong: null,
   currentSampleRate: null,
   currentBitDepth: null,
   isPlaying: false,
@@ -218,6 +219,16 @@ export const store = reactive({
         invoke('set_output_device', { name: this.outputDevice }).catch(() => {});
       }
     }
+
+    // Sync restored/default transition and normalization settings with backend
+    invoke('player_set_transition', {
+      mode: this.transitionMode,
+      crossfadeSecs: this.crossfadeSecs
+    }).catch(() => {});
+    invoke('player_set_normalization_settings', {
+      enabled: this.normalizationEnabled,
+      preampDb: this.normalizationPreampDb
+    }).catch(() => {});
 
     const pb = state.playback;
     if (!pb) return;
@@ -507,18 +518,34 @@ export const store = reactive({
   setNormalizationEnabled(v) {
     this.normalizationEnabled = !!v;
     this.persistState();
+    invoke('player_set_normalization_settings', {
+      enabled: this.normalizationEnabled,
+      preampDb: this.normalizationPreampDb,
+    }).catch(() => {});
   },
   setNormalizationPreamp(v) {
     this.normalizationPreampDb = Number(v) || 0;
     this.persistState();
+    invoke('player_set_normalization_settings', {
+      enabled: this.normalizationEnabled,
+      preampDb: this.normalizationPreampDb,
+    }).catch(() => {});
   },
   setTransitionMode(v) {
     this.transitionMode = v;
     this.persistState();
+    invoke('player_set_transition', {
+      mode: this.transitionMode,
+      crossfadeSecs: this.crossfadeSecs,
+    }).catch(() => {});
   },
   setCrossfadeSecs(v) {
     this.crossfadeSecs = Math.max(1, Math.min(12, Number(v) || 6));
     this.persistState();
+    invoke('player_set_transition', {
+      mode: this.transitionMode,
+      crossfadeSecs: this.crossfadeSecs,
+    }).catch(() => {});
   },
   setMusixmatchToken(v) {
     this.musixmatchToken = String(v || '').trim();
@@ -547,6 +574,7 @@ export const store = reactive({
   },
 
   playSong(song, newQueue = null) {
+    this.preselectedNextSong = null;
     if (newQueue && newQueue.length > 0) {
       this.queue = [...newQueue];
     } else if (this.queue.length === 0) {
@@ -580,6 +608,7 @@ export const store = reactive({
       const idx = this.currentQueueIndex();
       this.queue.splice(idx + 1, 0, entry);
     }
+    this.preselectedNextSong = null;
     this.persistState();
   },
 
@@ -589,12 +618,14 @@ export const store = reactive({
       this.queue = [this.currentSong];
     }
     this.queue.push(...list);
+    this.preselectedNextSong = null;
     this.persistState();
   },
 
   removeFromQueue(index) {
     if (index < 0 || index >= this.queue.length) return;
     this.queue.splice(index, 1);
+    this.preselectedNextSong = null;
     this.persistState();
   },
 
@@ -604,11 +635,13 @@ export const store = reactive({
     if (to < 0 || to >= this.queue.length) return;
     const [item] = this.queue.splice(from, 1);
     this.queue.splice(to, 0, item);
+    this.preselectedNextSong = null;
     this.persistState();
   },
 
   playQueueIndex(index) {
     if (index < 0 || index >= this.queue.length) return;
+    this.preselectedNextSong = null;
     if (this.pendingSeek === null) {
       this.pendingSeek = null;
     }
@@ -621,6 +654,7 @@ export const store = reactive({
 
   clearQueue() {
     this.queue = this.currentSong ? [this.currentSong] : [];
+    this.preselectedNextSong = null;
     this.persistState();
   },
 
@@ -813,6 +847,7 @@ export const store = reactive({
 
   toggleLoop() {
     this.loopMode = (this.loopMode + 1) % 3;
+    this.preselectedNextSong = null;
     this.persistState();
   },
 
@@ -826,10 +861,23 @@ export const store = reactive({
     let nextIndex;
     const currentIndex = this.queue.findIndex((s) => s.path === this.currentSong.path);
 
-    if (this.shuffleMode) {
-      nextIndex = Math.floor(Math.random() * this.queue.length);
-    } else {
-      nextIndex = currentIndex + 1;
+    if (this.preselectedNextSong) {
+      const idx = this.queue.findIndex((s) => s.path === this.preselectedNextSong.path);
+      if (idx >= 0) {
+        nextIndex = idx;
+      } else if (this.autoplayMode) {
+        this.queue.push(this.preselectedNextSong);
+        nextIndex = this.queue.length - 1;
+      }
+      this.preselectedNextSong = null; // consume
+    }
+
+    if (nextIndex === undefined) {
+      if (this.shuffleMode) {
+        nextIndex = Math.floor(Math.random() * this.queue.length);
+      } else {
+        nextIndex = currentIndex + 1;
+      }
     }
 
     if (nextIndex >= this.queue.length) {
@@ -865,6 +913,7 @@ export const store = reactive({
 
   prevSong() {
     if (!this.currentSong || this.queue.length === 0) return;
+    this.preselectedNextSong = null;
 
     if (this.currentTime > 3) {
       this.pendingSeek = 0;
@@ -944,11 +993,13 @@ export const store = reactive({
 
   toggleShuffle() {
     this.shuffleMode = !this.shuffleMode;
+    this.preselectedNextSong = null;
     this.persistState();
   },
 
   toggleAutoplay() {
     this.autoplayMode = !this.autoplayMode;
+    this.preselectedNextSong = null;
     this.persistState();
   },
 
@@ -984,13 +1035,42 @@ export const store = reactive({
   nextUpPath() {
     if (!this.currentSong || this.queue.length === 0) return null;
     if (this.loopMode === 2) return this.currentSong.path; // repeat-one
-    if (this.shuffleMode) return null;
+    
+    if (this.preselectedNextSong) {
+      return this.preselectedNextSong.path;
+    }
+    
+    if (this.shuffleMode) {
+      const currentIndex = this.queue.findIndex((s) => s.path === this.currentSong.path);
+      let nextIndex;
+      if (this.queue.length > 1) {
+        let tries = 0;
+        do {
+          nextIndex = Math.floor(Math.random() * this.queue.length);
+        } while (nextIndex === currentIndex && ++tries < 10);
+      } else {
+        nextIndex = 0;
+      }
+      this.preselectedNextSong = this.queue[nextIndex];
+      return this.preselectedNextSong.path;
+    }
+    
     const i = this.queue.findIndex((s) => s.path === this.currentSong.path);
     if (i < 0) return null;
     let n = i + 1;
     if (n >= this.queue.length) {
-      if (this.loopMode === 1) n = 0;
-      else return null; // end of queue (autoplay picks a random track)
+      if (this.loopMode === 1) {
+        n = 0;
+      } else if (this.autoplayMode) {
+        const song = this.pickRandomSong();
+        if (song) {
+          this.preselectedNextSong = { ...song };
+          return this.preselectedNextSong.path;
+        }
+        return null;
+      } else {
+        return null;
+      }
     }
     return this.queue[n] ? this.queue[n].path : null;
   },

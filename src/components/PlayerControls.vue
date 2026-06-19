@@ -88,6 +88,17 @@ watch(
     playbackError.value = null;
     endedHandledFor = null;
 
+    if (store.skipNextLoad) {
+      store.skipNextLoad = false;
+      store.isBuffering = false;
+      store.duration = song.duration_secs || 0;
+      store.currentSampleRate = song.sample_rate;
+      store.currentBitDepth = song.bit_depth;
+      pushMediaMetadata(song);
+      pushMediaPlayback();
+      return;
+    }
+
     // Consume the one-shot load hints (set by resume-on-launch / normal plays).
     const startAt = store.pendingSeek;
     const autoplay = store.pendingAutoplay;
@@ -105,7 +116,7 @@ watch(
     await applyNormalization(song);
 
     try {
-      const fadeIn = store.transitionMode === 'crossfade' ? store.crossfadeSecs : 0;
+      const fadeIn = 0; // Manual plays/skips are always instant (no crossfade). Crossfade only happens on auto-transitions!
       const info = await invoke('player_load', {
         path: song.path,
         volume: store.isMuted ? 0 : store.volume,
@@ -124,12 +135,13 @@ watch(
       pushMediaMetadata(song);
       pushMediaPlayback();
 
-      // Gapless/crossfade: pre-decode the next track so the upcoming switch has
-      // no decode gap. No-op for shuffle / end-of-queue (unpredictable next).
+      // Trigger next track preparation since player_load clears/consumes the backend prepared state
       if (store.transitionMode !== 'off') {
         const np = store.nextUpPath();
         if (np && np !== song.path) {
-          invoke('player_prepare_next', { path: np }).catch(() => {});
+          const nextSong = store.queue.find(s => s.path === np) || store.songs.find(s => s.path === np);
+          const hint = nextSong ? (nextSong.duration_secs || 0) : 0;
+          invoke('player_prepare_next', { path: np, durationHint: hint }).catch(() => {});
         }
       }
     } catch (err) {
@@ -138,6 +150,19 @@ watch(
       store.isPlaying = false;
     } finally {
       if (token === loadToken) store.isBuffering = false;
+    }
+  },
+  { immediate: true }
+);
+
+// Reactively prepare the next track whenever the transition settings, queue, or next track path changes
+watch(
+  () => store.transitionMode !== 'off' ? store.nextUpPath() : null,
+  (np) => {
+    if (np && store.currentSong && np !== store.currentSong.path) {
+      const nextSong = store.queue.find(s => s.path === np) || store.songs.find(s => s.path === np);
+      const hint = nextSong ? (nextSong.duration_secs || 0) : 0;
+      invoke('player_prepare_next', { path: np, durationHint: hint }).catch(() => {});
     }
   },
   { immediate: true }
@@ -227,6 +252,7 @@ watch(
 );
 
 let unlistenMedia = null;
+let unlistenTrackChanged = null;
 
 const handleMediaControl = (payload) => {
   const action = payload && payload.action;
@@ -321,6 +347,7 @@ const handleTrackEnded = async () => {
 };
 
 let pollTick = 0;
+let finishedTicks = 0;
 
 const poll = async () => {
   if (!store.currentSong || store.isBuffering) return;
@@ -337,7 +364,13 @@ const poll = async () => {
       }
     }
     if (status.finished) {
-      await handleTrackEnded();
+      finishedTicks++;
+      if (store.transitionMode === 'off' || finishedTicks > 5) {
+        await handleTrackEnded();
+        finishedTicks = 0;
+      }
+    } else {
+      finishedTicks = 0;
     }
     // Keep the OS media overlay's timeline roughly in sync (~every 2s).
     if (++pollTick % 7 === 0 && !store.isBuffering) {
@@ -367,12 +400,37 @@ onMounted(async () => {
   } catch {
     // ignore — media controls are best-effort
   }
+
+  // Listen for backend automatic track-changed transitions (gapless/crossfade)
+  try {
+    unlistenTrackChanged = await listen('track-changed', (e) => {
+      if (e.payload && e.payload.path) {
+        store.preselectedNextSong = null;
+        let nextSong = store.queue.find(s => s.path === e.payload.path);
+        if (!nextSong) {
+          nextSong = store.songs.find(s => s.path === e.payload.path);
+          if (nextSong && store.autoplayMode) {
+            store.queue.push({ ...nextSong });
+          }
+        }
+        if (nextSong) {
+          store.skipNextLoad = true;
+          store.currentSong = nextSong;
+          store.isPlaying = true;
+          endedHandledFor = null;
+        }
+      }
+    });
+  } catch (err) {
+    console.error("Failed to listen to track-changed:", err);
+  }
 });
 
 onUnmounted(() => {
   if (pollTimer) clearInterval(pollTimer);
   if (stateTimer) clearInterval(stateTimer);
   if (unlistenMedia) unlistenMedia();
+  if (unlistenTrackChanged) unlistenTrackChanged();
   window.removeEventListener('beforeunload', flushState);
   document.removeEventListener('click', closeLosslessPopup);
 });
