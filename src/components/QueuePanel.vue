@@ -1,7 +1,11 @@
 <script setup>
 import { ref } from 'vue';
 import { store } from '../store';
+import { useRouter } from 'vue-router';
 import CoverImage from './CoverImage.vue';
+import { navigateWithTransition } from '../viewTransition';
+
+const router = useRouter();
 
 // Stable per-entry key (by object identity) so TransitionGroup can FLIP-animate
 // the reorder. The same references stay in the array across a reorder — only
@@ -51,6 +55,14 @@ const onDragEnd = () => {
 };
 
 const isCurrent = (song) => store.currentSong && store.currentSong.path === song.path;
+
+const navigateToArtist = (artistName) => {
+  if (!artistName || artistName === 'Unknown Artist') return;
+  const navigate = () => router.push({ name: 'ArtistDetail', params: { name: artistName } });
+
+  store.queuePanelOpen = false;
+  navigateWithTransition(navigate, null);
+};
 </script>
 
 <template>
@@ -133,7 +145,12 @@ const isCurrent = (song) => store.currentSong && store.currentSong.path === song
               >
                 {{ song.title }}
               </div>
-              <div class="text-xs text-[var(--text-secondary)] truncate">{{ song.artist }}</div>
+              <div
+                @click.stop="navigateToArtist(song.artist)"
+                class="text-xs text-[var(--text-secondary)] hover:text-[var(--accent-color)] hover:underline cursor-pointer truncate transition-colors"
+              >
+                {{ song.artist }}
+              </div>
             </div>
             <button
               @click.stop="store.removeFromQueue(index)"

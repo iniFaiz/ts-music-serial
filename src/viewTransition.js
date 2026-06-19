@@ -9,31 +9,55 @@ import { nextTick } from 'vue';
 //   name      - the shared view-transition-name (matched on the destination cover)
 export async function navigateWithTransition(
   navigate,
-  sourceEl,
+  sourceEl = null,
   name = 'shared-cover',
   transitionClass = 'to-artist-transition'
 ) {
-  if (typeof document === 'undefined' || !document.startViewTransition || !sourceEl) {
+  if (typeof document === 'undefined' || !document.startViewTransition) {
     await navigate();
     return;
   }
 
+  if (!sourceEl) {
+    try {
+      const transition = document.startViewTransition(async () => {
+        await navigate();
+        await nextTick();
+      });
+      await transition.finished;
+    } catch {
+      await navigate();
+    }
+    return;
+  }
+
   document.documentElement.classList.add(transitionClass);
-  const prev = sourceEl.style.viewTransitionName;
-  sourceEl.style.viewTransitionName = name;
+  const prev = sourceEl.style.getPropertyValue('view-transition-name') || '';
+  sourceEl.style.setProperty('view-transition-name', name);
 
   // Temporarily strip viewTransitionName from any other element on the page
   // to avoid duplicates when we tag the sourceEl.
   const activeTaggedEls = [];
-  const allElements = document.querySelectorAll('*');
+  const allElements = document.querySelectorAll('[style*="view-transition-name"]');
   for (const el of allElements) {
-    if (
-      el !== sourceEl &&
-      (el.style.viewTransitionName === name || el.style.viewTransitionName === 'shared-cover')
-    ) {
-      activeTaggedEls.push({ el, prevName: el.style.viewTransitionName });
-      el.style.viewTransitionName = '';
+    if (el === sourceEl) continue;
+    const vtName = (el.style.getPropertyValue('view-transition-name') || '').trim();
+    if (vtName === name || vtName === 'shared-cover') {
+      activeTaggedEls.push({ el, prevName: vtName });
+      el.style.removeProperty('view-transition-name');
     }
+  }
+
+  // Temporarily strip viewTransitionName from any ancestor of sourceEl to allow it to animate independently
+  const ancestorTaggedEls = [];
+  let curr = sourceEl.parentElement;
+  while (curr) {
+    const vtName = (curr.style.getPropertyValue('view-transition-name') || '').trim();
+    if (vtName) {
+      ancestorTaggedEls.push({ el: curr, prevName: vtName });
+      curr.style.removeProperty('view-transition-name');
+    }
+    curr = curr.parentElement;
   }
 
   try {
@@ -46,10 +70,22 @@ export async function navigateWithTransition(
     await transition.finished;
   } finally {
     // Release the name so the list element can't clash on the next capture.
-    sourceEl.style.viewTransitionName = prev;
+    if (prev) {
+      sourceEl.style.setProperty('view-transition-name', prev);
+    } else {
+      sourceEl.style.removeProperty('view-transition-name');
+    }
     // Restore the transition names for the elements we stripped
     for (const item of activeTaggedEls) {
-      item.el.style.viewTransitionName = item.prevName;
+      if (item.prevName) {
+        item.el.style.setProperty('view-transition-name', item.prevName);
+      }
+    }
+    // Restore the transition names for the ancestor elements we stripped
+    for (const item of ancestorTaggedEls) {
+      if (item.prevName) {
+        item.el.style.setProperty('view-transition-name', item.prevName);
+      }
     }
     document.documentElement.classList.remove(transitionClass);
   }
@@ -63,7 +99,7 @@ function findCoverByKey(key) {
   if (key == null) return null;
   const nodes = document.querySelectorAll('[data-cover-key]');
   for (const n of nodes) {
-    if (n.dataset.coverKey === String(key)) {
+    if (n.dataset.coverKey === String(key) || n.dataset.artistKey === String(key)) {
       return n.querySelector('.cover-image') || n;
     }
   }
@@ -83,8 +119,19 @@ export async function goBackWithTransition(router, name = 'shared-cover') {
     return;
   }
 
-  const transitionClass =
-    from && from.name === 'ArtistDetail' ? 'to-artist-transition' : 'to-album-transition';
+  const backPath = window.history.state && window.history.state.back;
+  let transitionClass = 'to-album-transition';
+  if (backPath) {
+    try {
+      const resolved = router.resolve(backPath);
+      if (resolved && (resolved.name === 'ArtistDetail' || resolved.name === 'ArtistsView')) {
+        transitionClass = 'to-artist-transition';
+      }
+    } catch {
+      // ignore
+    }
+  }
+
   document.documentElement.classList.add(transitionClass);
   let tagged = null;
   const transition = document.startViewTransition(async () => {
@@ -102,8 +149,8 @@ export async function goBackWithTransition(router, name = 'shared-cover') {
     const el = findCoverByKey(key);
     if (el) {
       tagged = el;
-      tagged.dataset._prevVt = el.style.viewTransitionName || '';
-      el.style.viewTransitionName = name;
+      tagged.dataset._prevVt = el.style.getPropertyValue('view-transition-name') || '';
+      el.style.setProperty('view-transition-name', name);
     }
   });
 
@@ -111,7 +158,11 @@ export async function goBackWithTransition(router, name = 'shared-cover') {
     await transition.finished;
   } finally {
     if (tagged) {
-      tagged.style.viewTransitionName = tagged.dataset._prevVt || '';
+      if (tagged.dataset._prevVt) {
+        tagged.style.setProperty('view-transition-name', tagged.dataset._prevVt);
+      } else {
+        tagged.style.removeProperty('view-transition-name');
+      }
       delete tagged.dataset._prevVt;
     }
     document.documentElement.classList.remove(transitionClass);
@@ -133,7 +184,7 @@ export async function goForwardWithTransition(router, name = 'shared-cover') {
   try {
     const resolved = router.resolve(forwardPath);
     if (resolved) {
-      if (resolved.name === 'ArtistDetail') {
+      if (resolved.name === 'ArtistDetail' || resolved.name === 'ArtistsView') {
         transitionClass = 'to-artist-transition';
       }
       key = (resolved.params && (resolved.params.name ?? resolved.params.id)) ?? null;
@@ -146,8 +197,8 @@ export async function goForwardWithTransition(router, name = 'shared-cover') {
   let tagged = findCoverByKey(key);
   let prevVt = '';
   if (tagged) {
-    prevVt = tagged.style.viewTransitionName || '';
-    tagged.style.viewTransitionName = name;
+    prevVt = tagged.style.getPropertyValue('view-transition-name') || '';
+    tagged.style.setProperty('view-transition-name', name);
   }
 
   const transition = document.startViewTransition(async () => {
@@ -166,7 +217,11 @@ export async function goForwardWithTransition(router, name = 'shared-cover') {
     await transition.finished;
   } finally {
     if (tagged) {
-      tagged.style.viewTransitionName = prevVt;
+      if (prevVt) {
+        tagged.style.setProperty('view-transition-name', prevVt);
+      } else {
+        tagged.style.removeProperty('view-transition-name');
+      }
     }
     document.documentElement.classList.remove(transitionClass);
   }

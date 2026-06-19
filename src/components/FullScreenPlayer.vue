@@ -4,8 +4,10 @@ import { store } from '../store';
 import { loadCover, getCachedCover, hasCachedCover } from '../coverCache';
 import { loadLyrics, activeLineIndex } from '../lyricsCache';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { useRouter } from 'vue-router';
 import LyricContent from './LyricContent.vue';
 
+const router = useRouter();
 const coverUrl = ref(null);
 // undefined = loading, null = not found, object = resolved lyrics
 const lyrics = ref(undefined);
@@ -382,6 +384,18 @@ const close = () => {
     }
   }, 50);
 };
+
+const goToArtist = (artistName) => {
+  if (!artistName || artistName === 'Unknown Artist') return;
+  close();
+  router.push({ name: 'ArtistDetail', params: { name: artistName } });
+};
+
+const goToAlbum = (albumName) => {
+  if (!albumName || albumName === 'Unknown Album') return;
+  close();
+  router.push({ name: 'AlbumDetail', params: { name: albumName } });
+};
 </script>
 
 <template>
@@ -483,7 +497,21 @@ const close = () => {
             <div class="min-w-0">
               <div class="text-xl font-bold truncate">{{ song.title }}</div>
               <div class="text-sm text-white/60 truncate">
-                {{ song.artist }}<span v-if="song.album"> — {{ song.album }}</span>
+                <span
+                  @click="goToArtist(song.artist)"
+                  class="hover:text-[var(--accent-color)] hover:underline cursor-pointer transition-colors"
+                >
+                  {{ song.artist }}
+                </span>
+                <span v-if="song.album">
+                  — 
+                  <span
+                    @click="goToAlbum(song.album)"
+                    class="hover:text-[var(--accent-color)] hover:underline cursor-pointer transition-colors"
+                  >
+                    {{ song.album }}
+                  </span>
+                </span>
               </div>
             </div>
             <button

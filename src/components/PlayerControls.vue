@@ -4,15 +4,25 @@ import { store } from '../store';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { useRouter } from 'vue-router';
 import CoverImage from './CoverImage.vue';
 import Visualizer from './Visualizer.vue';
+import { navigateWithTransition } from '../viewTransition';
 
 const appWindow = getCurrentWindow();
+const router = useRouter();
+const playerCoverRef = ref(null);
 
 // Playback is handled natively in Rust (rodio + symphonia). This component just
 // issues commands and polls the backend for the current position/duration.
 const seekValue = ref(0);
 const playbackError = ref(null);
+
+const navigateToArtist = (artistName) => {
+  if (!artistName || artistName === 'Unknown Artist') return;
+  const navigate = () => router.push({ name: 'ArtistDetail', params: { name: artistName } });
+  navigateWithTransition(navigate, null);
+};
 
 const losslessPopupOpen = ref(false);
 
@@ -63,6 +73,7 @@ const formatLosslessSpecs = () => {
 };
 
 const progressPercentage = computed(() => {
+  if (!store.currentSong) return 0;
   const max = store.duration || 100;
   const val = Number(seekValue.value) || 0;
   return Math.min(Math.max((val / max) * 100, 0), 100);
@@ -83,7 +94,21 @@ let loadToken = 0; // guards against a stale load winning after a rapid skip
 watch(
   () => store.currentSong,
   async (song) => {
-    if (!song) return;
+    if (!song) {
+      losslessPopupOpen.value = false;
+      playbackError.value = null;
+      endedHandledFor = null;
+      store.isPlaying = false;
+      store.duration = 0;
+      store.currentTime = 0;
+      seekValue.value = 0;
+      try {
+        await invoke('player_stop');
+      } catch (err) {
+        console.warn("Failed to stop player:", err);
+      }
+      return;
+    }
     losslessPopupOpen.value = false;
     playbackError.value = null;
     endedHandledFor = null;
@@ -353,6 +378,7 @@ const poll = async () => {
   if (!store.currentSong || store.isBuffering) return;
   try {
     const status = await invoke('player_status');
+    if (!store.currentSong || store.isBuffering) return;
     if (status.duration > 0) store.duration = status.duration;
     if (Date.now() - store.lastSeekAt > 500) {
       if (status.finished) {
@@ -462,10 +488,11 @@ const formatTime = (seconds) => {
         <!-- Shuffle -->
         <button
           @click="store.toggleShuffle()"
-          class="transition hidden sm:block"
+          class="transition hidden sm:block disabled:opacity-30 disabled:cursor-not-allowed disabled:pointer-events-none"
           :class="
             store.shuffleMode ? 'text-[var(--accent-color)]' : 'text-gray-400 hover:text-white'
           "
+          :disabled="!store.currentSong"
           title="Shuffle"
         >
           <svg
@@ -484,7 +511,11 @@ const formatTime = (seconds) => {
         </button>
 
         <!-- Prev -->
-        <button @click="store.prevSong()" class="text-gray-300 hover:text-white transition">
+        <button
+          @click="store.prevSong()"
+          class="text-gray-300 hover:text-white transition disabled:opacity-30 disabled:cursor-not-allowed disabled:pointer-events-none"
+          :disabled="!store.currentSong"
+        >
           <svg
             xmlns="http://www.w3.org/2000/svg"
             width="24"
@@ -501,7 +532,8 @@ const formatTime = (seconds) => {
         <!-- Play/Pause -->
         <button
           @click="store.togglePlay()"
-          class="bg-white text-black rounded-full p-2 hover:scale-105 transition flex items-center justify-center"
+          class="bg-white text-black rounded-full p-2 hover:scale-105 transition flex items-center justify-center disabled:opacity-30 disabled:cursor-not-allowed disabled:pointer-events-none"
+          :disabled="!store.currentSong"
         >
           <svg
             v-if="store.isBuffering"
@@ -552,7 +584,11 @@ const formatTime = (seconds) => {
         </button>
 
         <!-- Next -->
-        <button @click="store.nextSong(true)" class="text-gray-300 hover:text-white transition">
+        <button
+          @click="store.nextSong(true)"
+          class="text-gray-300 hover:text-white transition disabled:opacity-30 disabled:cursor-not-allowed disabled:pointer-events-none"
+          :disabled="!store.currentSong"
+        >
           <svg
             xmlns="http://www.w3.org/2000/svg"
             width="24"
@@ -569,10 +605,11 @@ const formatTime = (seconds) => {
         <!-- Loop -->
         <button
           @click="store.toggleLoop()"
-          class="transition relative hidden sm:block"
+          class="transition relative hidden sm:block disabled:opacity-30 disabled:cursor-not-allowed disabled:pointer-events-none"
           :class="
             store.loopMode > 0 ? 'text-[var(--accent-color)]' : 'text-gray-400 hover:text-white'
           "
+          :disabled="!store.currentSong"
           title="Loop"
         >
           <svg
@@ -608,6 +645,7 @@ const formatTime = (seconds) => {
             <!-- Group container: CoverImage on left, Lossless Badge on right, both aligned to top -->
             <div class="hidden sm:flex items-start shrink-0 gap-1.5 relative">
               <button
+                ref="playerCoverRef"
                 @click="openFullScreen()"
                 class="shrink-0 rounded overflow-hidden relative group focus:outline-none"
                 title="Open full screen (Ctrl+Shift+F)"
@@ -704,7 +742,8 @@ const formatTime = (seconds) => {
               >{{ store.currentSong.title }}</span
             >
             <span
-              class="text-[10px] md:text-xs text-gray-400 truncate max-w-[80px] sm:max-w-[180px] md:max-w-[260px] lg:max-w-[360px] xl:max-w-[450px]"
+              @click="navigateToArtist(store.currentSong.artist)"
+              class="text-[10px] md:text-xs text-gray-400 hover:text-[var(--accent-color)] hover:underline cursor-pointer truncate max-w-[80px] sm:max-w-[180px] md:max-w-[260px] lg:max-w-[360px] xl:max-w-[450px] transition-colors"
               >{{ store.currentSong.artist }}</span
             >
           </div>
@@ -756,10 +795,11 @@ const formatTime = (seconds) => {
             v-model.number="seekValue"
             @input="onSeekInput"
             @change="onSeekCommit"
-            class="seeker-input flex-1 rounded-lg appearance-none cursor-pointer accent-[var(--accent-color)]"
+            class="seeker-input flex-1 rounded-lg appearance-none cursor-pointer accent-[var(--accent-color)] disabled:opacity-30 disabled:cursor-not-allowed disabled:pointer-events-none"
             :style="{
               background: `linear-gradient(to right, var(--accent-color) ${progressPercentage}%, #4b5563 ${progressPercentage}%)`,
             }"
+            :disabled="!store.currentSong"
           />
           <span>{{ formatTime(store.duration) }}</span>
         </div>

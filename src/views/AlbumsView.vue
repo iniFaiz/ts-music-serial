@@ -44,6 +44,20 @@ function playAlbum(albumName) {
     store.playSong(songs[0], songs);
   }
 }
+
+function goToArtist(artistName, event = null) {
+  if (!artistName || artistName === 'Unknown Artist') return;
+  const navigate = () => router.push({ name: 'ArtistDetail', params: { name: artistName } });
+
+  const cardEl = event ? event.currentTarget.closest('.group') : null;
+  const coverEl = cardEl ? cardEl.querySelector('.cover-image') : null;
+
+  if (coverEl) {
+    navigateWithTransition(navigate, coverEl, 'shared-cover', 'to-artist-transition');
+  } else {
+    navigate();
+  }
+}
 </script>
 
 <template>
@@ -57,6 +71,7 @@ function playAlbum(albumName) {
         v-for="album in albums"
         :key="album.name"
         :data-cover-key="album.name"
+        :data-artist-key="album.artist"
         @click="openAlbum(album.name, $event)"
         class="cursor-pointer group"
       >
@@ -90,7 +105,12 @@ function playAlbum(albumName) {
         <h3 class="text-[13px] font-medium text-white truncate pr-2 leading-snug">
           {{ album.name }}
         </h3>
-        <p class="text-[13px] text-[var(--text-secondary)] truncate">{{ album.artist }}</p>
+        <p
+          @click.stop="goToArtist(album.artist, $event)"
+          class="text-[13px] text-[var(--text-secondary)] truncate hover:text-[var(--accent-color)] hover:underline cursor-pointer inline-block max-w-full transition-colors"
+        >
+          {{ album.artist }}
+        </p>
       </div>
     </div>
   </div>

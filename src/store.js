@@ -267,12 +267,19 @@ export const store = reactive({
     this.roots = [];
     this.scanCount = 0;
     this.currentSong = null;
+    this.currentTime = 0;
+    this.duration = 0;
     this.queue = [];
     this.isPlaying = false;
     this.scanComplete = false;
     this.favorites = [];
     this.playlists = [];
     this.statusMessage = 'Library reset';
+    try {
+      await invoke('player_stop');
+    } catch (e) {
+      console.error('Failed to stop player during reset', e);
+    }
     try {
       await idbDelete('library');
       await idbDelete('roots');
@@ -847,6 +854,7 @@ export const store = reactive({
   },
 
   togglePlay() {
+    if (!this.currentSong) return;
     if (this.playbackFinished && this.currentSong) {
       this.playSong(this.currentSong);
     } else {
@@ -855,6 +863,7 @@ export const store = reactive({
   },
 
   toggleLoop() {
+    if (!this.currentSong) return;
     this.loopMode = (this.loopMode + 1) % 3;
     this.preselectedNextSong = null;
     this.persistState();
@@ -1001,6 +1010,7 @@ export const store = reactive({
   },
 
   toggleShuffle() {
+    if (!this.currentSong) return;
     this.shuffleMode = !this.shuffleMode;
     this.preselectedNextSong = null;
     this.persistState();
