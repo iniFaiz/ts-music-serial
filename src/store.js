@@ -677,6 +677,18 @@ export const store = reactive({
     this.persistState();
   },
 
+  playNextSongs(songs) {
+    const list = songs.map((s) => ({ ...s }));
+    if (this.queue.length === 0) {
+      this.queue = this.currentSong ? [this.currentSong, ...list] : [...list];
+    } else {
+      const idx = this.currentQueueIndex();
+      this.queue.splice(idx + 1, 0, ...list);
+    }
+    this.preselectedNextSong = null;
+    this.persistState();
+  },
+
   addToQueue(songs) {
     const list = (Array.isArray(songs) ? songs : [songs]).map((s) => ({ ...s }));
     if (this.queue.length === 0 && this.currentSong) {
@@ -738,8 +750,17 @@ export const store = reactive({
   },
 
   get favoriteSongs() {
-    const set = new Set(this.favorites);
-    return this.songs.filter((s) => set.has(s.path));
+    const byPath = new Map(this.songs.map((s) => [s.path, s]));
+    return this.favorites.map((p) => byPath.get(p)).filter(Boolean);
+  },
+
+  moveInFavorites(from, to) {
+    if (from === to) return;
+    if (from < 0 || from >= this.favorites.length) return;
+    if (to < 0 || to >= this.favorites.length) return;
+    const [item] = this.favorites.splice(from, 1);
+    this.favorites.splice(to, 0, item);
+    this.persistState();
   },
 
   // ---- Playlists --------------------------------------------------------
@@ -758,17 +779,21 @@ export const store = reactive({
     return playlist;
   },
 
-  // Playlist-create modal (opened from the sidebar "+" and song context menu).
-  playlistModal: { open: false, pendingSongPath: null },
+  // Playlist-create/edit modal.
+  playlistModal: { open: false, pendingSongPath: null, mode: 'create', playlistId: null },
 
-  openPlaylistModal(pendingSongPath = null) {
+  openPlaylistModal(pendingSongPath = null, mode = 'create', playlistId = null) {
     this.playlistModal.pendingSongPath = pendingSongPath;
+    this.playlistModal.mode = mode;
+    this.playlistModal.playlistId = playlistId;
     this.playlistModal.open = true;
   },
 
   closePlaylistModal() {
     this.playlistModal.open = false;
     this.playlistModal.pendingSongPath = null;
+    this.playlistModal.mode = 'create';
+    this.playlistModal.playlistId = null;
   },
 
   deletePlaylist(id) {
@@ -783,6 +808,18 @@ export const store = reactive({
     const pl = this.playlists.find((p) => p.id === id);
     if (pl && name && name.trim()) {
       pl.name = name.trim();
+      this.persistState();
+    }
+  },
+
+  updatePlaylist(id, name, description, cover) {
+    const pl = this.playlists.find((p) => p.id === id);
+    if (pl) {
+      pl.name = (name || '').trim() || 'New Playlist';
+      pl.description = (description || '').trim();
+      if (cover !== undefined) {
+        pl.cover = cover;
+      }
       this.persistState();
     }
   },

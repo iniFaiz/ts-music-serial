@@ -10,6 +10,7 @@ const props = defineProps({
   songs: { type: Array, required: true },
   // When this list belongs to a playlist, rows offer "Remove from playlist".
   playlistId: { type: String, default: '' },
+  isFavorites: { type: Boolean, default: false },
 });
 
 const router = useRouter();
@@ -17,8 +18,8 @@ const router = useRouter();
 const sortKey = ref(null);
 const sortOrder = ref('asc');
 
-// Whether drag-to-reorder is available (only for playlists with no active sort)
-const canReorder = computed(() => !!props.playlistId && !sortKey.value);
+// Whether drag-to-reorder is available (only for playlists/favorites with no active sort)
+const canReorder = computed(() => (!!props.playlistId || props.isFavorites) && !sortKey.value);
 
 const toggleSort = (key) => {
   if (sortKey.value === key) {
@@ -115,7 +116,11 @@ const onPlMouseMove = (e) => {
 
 const onPlMouseUp = () => {
   if (plDragActive.value && plDragIndex.value !== -1 && plOverIndex.value !== -1 && plDragIndex.value !== plOverIndex.value) {
-    store.moveInPlaylist(props.playlistId, plDragIndex.value, plOverIndex.value);
+    if (props.isFavorites) {
+      store.moveInFavorites(plDragIndex.value, plOverIndex.value);
+    } else {
+      store.moveInPlaylist(props.playlistId, plDragIndex.value, plOverIndex.value);
+    }
     plDragDidReorder = true;
   }
   plDragIndex.value = -1;

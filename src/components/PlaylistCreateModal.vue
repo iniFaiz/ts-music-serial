@@ -12,10 +12,19 @@ const fileInput = ref(null);
 const titleField = ref(null);
 
 // Focus the title when the modal opens; clear fields when it closes.
+// Focus the title when the modal opens; pre-fill fields if editing, or clear if creating.
 watch(
   () => store.playlistModal.open,
   async (open) => {
     if (open) {
+      if (store.playlistModal.mode === 'edit' && store.playlistModal.playlistId) {
+        const pl = store.getPlaylist(store.playlistModal.playlistId);
+        if (pl) {
+          title.value = pl.name;
+          description.value = pl.description || '';
+          cover.value = pl.cover || null;
+        }
+      }
       await nextTick();
       titleField.value?.focus();
     } else {
@@ -56,12 +65,17 @@ const downscale = (dataUrl) => {
 
 const cancel = () => store.closePlaylistModal();
 
-const create = () => {
-  const pl = store.createPlaylist(title.value, description.value, cover.value);
-  const pending = store.playlistModal.pendingSongPath;
-  if (pending) store.addToPlaylist(pl.id, pending);
-  store.closePlaylistModal();
-  router.push('/playlists/' + pl.id);
+const save = () => {
+  if (store.playlistModal.mode === 'edit' && store.playlistModal.playlistId) {
+    store.updatePlaylist(store.playlistModal.playlistId, title.value, description.value, cover.value);
+    store.closePlaylistModal();
+  } else {
+    const pl = store.createPlaylist(title.value, description.value, cover.value);
+    const pending = store.playlistModal.pendingSongPath;
+    if (pending) store.addToPlaylist(pl.id, pending);
+    store.closePlaylistModal();
+    router.push('/playlists/' + pl.id);
+  }
 };
 </script>
 
@@ -76,7 +90,7 @@ const create = () => {
       <div
         class="w-[520px] max-w-[92vw] bg-[#232323] rounded-xl shadow-2xl border border-[#3a3a3a] p-6"
       >
-        <h2 class="text-xl font-bold text-white mb-5">Create playlist</h2>
+        <h2 class="text-xl font-bold text-white mb-5">{{ store.playlistModal.mode === 'edit' ? 'Edit playlist' : 'Create playlist' }}</h2>
 
         <div class="flex gap-5">
           <!-- Cover picker -->
@@ -122,7 +136,7 @@ const create = () => {
               type="text"
               placeholder="Playlist title"
               maxlength="80"
-              @keyup.enter="create"
+              @keyup.enter="save"
               class="w-full bg-[#2a2a2a] text-white rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[var(--accent-color)] placeholder-gray-500"
             />
             <textarea
@@ -145,10 +159,10 @@ const create = () => {
             Cancel
           </button>
           <button
-            @click="create"
+            @click="save"
             class="px-6 py-2 rounded-full text-sm font-semibold bg-[var(--accent-color)] text-white hover:bg-red-500 transition shadow-lg"
           >
-            Create
+            {{ store.playlistModal.mode === 'edit' ? 'Save' : 'Create' }}
           </button>
         </div>
       </div>

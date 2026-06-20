@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, nextTick, watch } from 'vue';
+import { computed, ref, nextTick, watch, onMounted, onUnmounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { store } from '../store';
 import SongList from '../components/SongList.vue';
@@ -13,27 +13,7 @@ const playlistId = computed(() => route.params.id);
 const playlist = computed(() => store.getPlaylist(playlistId.value));
 const songs = computed(() => store.playlistSongs(playlistId.value));
 
-const editing = ref(false);
-const nameInput = ref('');
-const nameField = ref(null);
-
 const suggestedSongs = ref([]);
-
-const startRename = async () => {
-  if (!playlist.value) return;
-  nameInput.value = playlist.value.name;
-  editing.value = true;
-  await nextTick();
-  nameField.value?.focus();
-  nameField.value?.select();
-};
-
-const commitRename = () => {
-  if (editing.value && playlist.value) {
-    store.renamePlaylist(playlist.value.id, nameInput.value);
-  }
-  editing.value = false;
-};
 
 const playAll = () => {
   if (songs.value.length > 0) store.playSong(songs.value[0], songs.value);
@@ -43,6 +23,41 @@ const removePlaylist = () => {
   if (playlist.value) {
     store.deletePlaylist(playlist.value.id);
     router.push('/songs');
+  }
+};
+
+const menuOpen = ref(false);
+
+const closeMenu = (e) => {
+  if (e && e.target.closest('.playlist-menu-container')) return;
+  menuOpen.value = false;
+};
+
+onMounted(() => {
+  window.addEventListener('click', closeMenu);
+});
+
+onUnmounted(() => {
+  window.removeEventListener('click', closeMenu);
+});
+
+const shufflePlaylist = () => {
+  if (songs.value.length > 0) {
+    store.shuffleMode = true;
+    const randomIndex = Math.floor(Math.random() * songs.value.length);
+    store.playSong(songs.value[randomIndex], songs.value);
+  }
+};
+
+const playNextPlaylist = () => {
+  if (songs.value.length > 0) {
+    store.playNextSongs(songs.value);
+  }
+};
+
+const playLastPlaylist = () => {
+  if (songs.value.length > 0) {
+    store.addToQueue(songs.value);
   }
 };
 
@@ -89,21 +104,7 @@ watch(
           Playlist
         </h4>
 
-        <input
-          v-if="editing"
-          ref="nameField"
-          v-model="nameInput"
-          @blur="commitRename"
-          @keyup.enter="commitRename"
-          @keyup.esc="editing = false"
-          class="text-4xl font-bold tracking-tight text-white bg-transparent border-b border-[var(--accent-color)] focus:outline-none w-full"
-        />
-        <h1
-          v-else
-          @click="startRename"
-          class="text-4xl font-bold tracking-tight text-white truncate cursor-text hover:underline decoration-dotted"
-          title="Click to rename"
-        >
+        <h1 class="text-4xl font-bold tracking-tight text-white truncate">
           {{ playlist.name }}
         </h1>
 
@@ -117,7 +118,7 @@ watch(
           {{ songs.length }} songs
         </p>
 
-        <div class="flex gap-3 mt-6">
+        <div class="flex gap-3 mt-6 items-center">
           <button
             @click="playAll"
             :disabled="songs.length === 0"
@@ -136,8 +137,9 @@ watch(
             Play
           </button>
           <button
-            @click="removePlaylist"
-            class="bg-[#3a3a3a] text-[var(--text-secondary)] px-6 py-2 rounded-[4px] text-sm font-semibold hover:bg-[#444] hover:text-white transition flex items-center gap-2"
+            @click="shufflePlaylist"
+            :disabled="songs.length === 0"
+            class="bg-[#3a3a3a] text-[var(--accent-color)] px-8 py-2 rounded-[4px] text-sm font-semibold hover:bg-[#444] transition flex items-center gap-2 shadow-lg disabled:opacity-40"
           >
             <svg
               xmlns="http://www.w3.org/2000/svg"
@@ -150,12 +152,79 @@ watch(
               stroke-linecap="round"
               stroke-linejoin="round"
             >
-              <polyline points="3 6 5 6 21 6"></polyline>
-              <path
-                d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
-              ></path>
+              <path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5" />
             </svg>
-            Delete
+            Shuffle
+          </button>
+        </div>
+      </div>
+
+      <!-- Ellipsis Options Menu at the far right end -->
+      <div class="relative pb-2 self-end playlist-menu-container">
+        <button
+          @click.stop="menuOpen = !menuOpen"
+          class="text-red-500 hover:text-red-400 p-2 rounded-full hover:bg-white/5 transition-colors flex items-center justify-center"
+          title="More options"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="currentColor"
+            stroke="none"
+          >
+            <circle cx="5" cy="12" r="2"></circle>
+            <circle cx="12" cy="12" r="2"></circle>
+            <circle cx="19" cy="12" r="2"></circle>
+          </svg>
+        </button>
+
+        <!-- Options Dropdown -->
+        <div
+          v-if="menuOpen"
+          class="absolute right-0 mt-2 z-50 w-56 rounded-lg bg-[#282828] border border-[#3a3a3a] py-1.5 shadow-2xl text-sm text-white"
+        >
+          <button
+            @click="store.openPlaylistModal(null, 'edit', playlist.id)"
+            class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors"
+          >
+            Edit
+          </button>
+          <button
+            @click="playAll"
+            :disabled="songs.length === 0"
+            class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors disabled:opacity-40"
+          >
+            Play "{{ playlist.name }}"
+          </button>
+          <button
+            @click="shufflePlaylist"
+            :disabled="songs.length === 0"
+            class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors disabled:opacity-40"
+          >
+            Shuffle "{{ playlist.name }}"
+          </button>
+          <button
+            @click="playNextPlaylist"
+            :disabled="songs.length === 0"
+            class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors disabled:opacity-40"
+          >
+            Play next
+          </button>
+          <button
+            @click="playLastPlaylist"
+            :disabled="songs.length === 0"
+            class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors disabled:opacity-40"
+          >
+            Play last
+          </button>
+          <div class="border-t border-[#3a3a3a] my-1"></div>
+          <button
+            @click="removePlaylist"
+            class="w-full text-left px-4 py-2 text-red-500 hover:bg-[#3a3a3a] transition-colors"
+          >
+            Delete from library
           </button>
         </div>
       </div>
