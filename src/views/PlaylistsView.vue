@@ -1,5 +1,5 @@
 <script setup>
-import { computed } from 'vue';
+import { computed, ref, onUnmounted } from 'vue';
 import { store } from '../store';
 import { useRouter } from 'vue-router';
 import PlaylistCover from '../components/PlaylistCover.vue';
@@ -12,6 +12,11 @@ const router = useRouter();
 const playlists = computed(() => store.playlists);
 
 function openPlaylist(id, event) {
+  // Don't navigate if we just finished dragging
+  if (dragDidReorder) {
+    dragDidReorder = false;
+    return;
+  }
   const coverEl = event.currentTarget.querySelector('.cover-image');
   navigateWithTransition(
     () => router.push({ name: 'PlaylistDetail', params: { id } }),
@@ -31,6 +36,82 @@ function playPlaylist(id) {
 function newPlaylist() {
   store.openPlaylistModal();
 }
+
+// ---- Drag-to-reorder playlists in the grid ----
+const dragIndex = ref(-1);
+const overIndex = ref(-1);
+const dragActive = ref(false);
+const gridContainer = ref(null);
+let startX = 0;
+let startY = 0;
+let pendingIdx = -1;
+let dragDidReorder = false;
+const DRAG_THRESHOLD = 8;
+
+const getCardIndex = (clientX, clientY) => {
+  const el = gridContainer.value?.$el || gridContainer.value;
+  if (!el) return -1;
+  const cards = el.querySelectorAll('[data-pl-grid-idx]');
+  for (const card of cards) {
+    const rect = card.getBoundingClientRect();
+    if (clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom) {
+      return parseInt(card.dataset.plGridIdx, 10);
+    }
+  }
+  return -1;
+};
+
+const onMouseMove = (e) => {
+  if (pendingIdx === -1) return;
+  const dx = Math.abs(e.clientX - startX);
+  const dy = Math.abs(e.clientY - startY);
+  if (!dragActive.value && (dx >= DRAG_THRESHOLD || dy >= DRAG_THRESHOLD)) {
+    dragActive.value = true;
+    dragIndex.value = pendingIdx;
+    overIndex.value = pendingIdx;
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'grabbing';
+  }
+  if (dragActive.value) {
+    e.preventDefault();
+    const idx = getCardIndex(e.clientX, e.clientY);
+    if (idx !== -1) overIndex.value = idx;
+  }
+};
+
+const onMouseUp = () => {
+  if (dragActive.value && dragIndex.value !== -1 && overIndex.value !== -1 && dragIndex.value !== overIndex.value) {
+    store.movePlaylistOrder(dragIndex.value, overIndex.value);
+    dragDidReorder = true;
+  }
+  dragIndex.value = -1;
+  overIndex.value = -1;
+  dragActive.value = false;
+  pendingIdx = -1;
+  document.removeEventListener('mousemove', onMouseMove);
+  document.removeEventListener('mouseup', onMouseUp);
+  document.body.style.userSelect = '';
+  document.body.style.cursor = '';
+};
+
+const onCardMouseDown = (index, e) => {
+  // Don't interfere with play button clicks
+  if (e.target.closest('[data-play-btn]')) return;
+  if (e.target.closest('button')) return;
+  pendingIdx = index;
+  startX = e.clientX;
+  startY = e.clientY;
+  dragDidReorder = false;
+  document.addEventListener('mousemove', onMouseMove);
+  document.addEventListener('mouseup', onMouseUp);
+};
+
+onUnmounted(() => {
+  document.removeEventListener('mousemove', onMouseMove);
+  document.removeEventListener('mouseup', onMouseUp);
+  document.body.style.userSelect = '';
+  document.body.style.cursor = '';
+});
 </script>
 
 <template>
@@ -59,16 +140,25 @@ function newPlaylist() {
       </button>
     </div>
 
-    <div
+    <TransitionGroup
       v-if="playlists.length > 0"
+      ref="gridContainer"
+      name="plgrid"
+      tag="div"
       class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-x-6 gap-y-10"
     >
       <div
-        v-for="pl in playlists"
+        v-for="(pl, plIdx) in playlists"
         :key="pl.id"
         :data-cover-key="pl.id"
+        :data-pl-grid-idx="plIdx"
         @click="openPlaylist(pl.id, $event)"
-        class="cursor-pointer group"
+        @mousedown="onCardMouseDown(plIdx, $event)"
+        class="cursor-pointer group transition-all duration-200"
+        :class="{
+          'opacity-30 scale-95': plIdx === dragIndex,
+          'plgrid-drop-target': overIndex === plIdx && dragIndex !== plIdx && dragIndex !== -1,
+        }"
       >
         <!-- Playlist Art -->
         <div
@@ -86,6 +176,7 @@ function newPlaylist() {
           >
             <div
               v-if="pl.paths.length > 0"
+              data-play-btn
               @click.stop="playPlaylist(pl.id)"
               class="bg-[var(--accent-color)] text-white rounded-full p-3 shadow-lg translate-y-2 opacity-0 group-hover:translate-y-0 group-hover:opacity-100 transition-all duration-300 hover:scale-110 hover:bg-red-500"
             >
@@ -108,7 +199,7 @@ function newPlaylist() {
         </h3>
         <p class="text-[13px] text-[var(--text-secondary)] truncate">{{ pl.paths.length }} songs</p>
       </div>
-    </div>
+    </TransitionGroup>
 
     <div v-else class="p-20 text-center text-gray-600">
       <div class="text-4xl mb-4 opacity-20">♪</div>
@@ -119,3 +210,17 @@ function newPlaylist() {
     </div>
   </div>
 </template>
+
+<style scoped>
+/* Drop target highlight */
+.plgrid-drop-target {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 4px;
+  border-radius: 8px;
+}
+
+/* FLIP reorder animation for grid cards */
+.plgrid-move {
+  transition: transform 0.35s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+</style>

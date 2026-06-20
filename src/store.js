@@ -791,6 +791,15 @@ export const store = reactive({
     return this.playlists.find((p) => p.id === id);
   },
 
+  movePlaylistOrder(from, to) {
+    if (from === to) return;
+    if (from < 0 || from >= this.playlists.length) return;
+    if (to < 0 || to >= this.playlists.length) return;
+    const [item] = this.playlists.splice(from, 1);
+    this.playlists.splice(to, 0, item);
+    this.persistState();
+  },
+
   addToPlaylist(id, paths) {
     const pl = this.getPlaylist(id);
     if (!pl) return;
@@ -809,6 +818,17 @@ export const store = reactive({
       pl.paths.splice(idx, 1);
       this.persistState();
     }
+  },
+
+  moveInPlaylist(id, from, to) {
+    if (from === to) return;
+    const pl = this.getPlaylist(id);
+    if (!pl) return;
+    if (from < 0 || from >= pl.paths.length) return;
+    if (to < 0 || to >= pl.paths.length) return;
+    const [item] = pl.paths.splice(from, 1);
+    pl.paths.splice(to, 0, item);
+    this.persistState();
   },
 
   async deleteSong(path) {

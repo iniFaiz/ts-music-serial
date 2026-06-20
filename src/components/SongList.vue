@@ -17,6 +17,9 @@ const router = useRouter();
 const sortKey = ref(null);
 const sortOrder = ref('asc');
 
+// Whether drag-to-reorder is available (only for playlists with no active sort)
+const canReorder = computed(() => !!props.playlistId && !sortKey.value);
+
 const toggleSort = (key) => {
   if (sortKey.value === key) {
     if (sortOrder.value === 'asc') {
@@ -61,6 +64,78 @@ const playSong = (song) => {
 
 const isCurrentSong = (song) => {
   return store.currentSong && store.currentSong.path === song.path;
+};
+
+// ---- Pointer-event based drag-to-reorder (playlist only) ----
+// Uses a movement threshold so clicks (play) vs drags (reorder) are distinct.
+const plDragIndex = ref(-1);
+const plOverIndex = ref(-1);
+const plDragActive = ref(false); // true once threshold exceeded
+const songListContainer = ref(null);
+let plStartY = 0;
+let plPendingIndex = -1;
+const PL_DRAG_THRESHOLD = 5; // px of vertical movement to start drag
+let plDragDidReorder = false;
+
+const getRowIndexFromY = (clientY) => {
+  if (!songListContainer.value) return -1;
+  const rows = songListContainer.value.querySelectorAll('[data-pl-drag-idx]');
+  for (const row of rows) {
+    const rect = row.getBoundingClientRect();
+    if (clientY >= rect.top && clientY <= rect.bottom) {
+      return parseInt(row.dataset.plDragIdx, 10);
+    }
+  }
+  if (rows.length > 0) {
+    const firstRect = rows[0].getBoundingClientRect();
+    if (clientY < firstRect.top) return 0;
+    const lastRect = rows[rows.length - 1].getBoundingClientRect();
+    if (clientY > lastRect.bottom) return rows.length - 1;
+  }
+  return -1;
+};
+
+const onPlMouseMove = (e) => {
+  if (plPendingIndex === -1) return;
+  const dy = Math.abs(e.clientY - plStartY);
+  // Activate drag once threshold is exceeded
+  if (!plDragActive.value && dy >= PL_DRAG_THRESHOLD) {
+    plDragActive.value = true;
+    plDragIndex.value = plPendingIndex;
+    plOverIndex.value = plPendingIndex;
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'grabbing';
+  }
+  if (plDragActive.value) {
+    e.preventDefault();
+    const idx = getRowIndexFromY(e.clientY);
+    if (idx !== -1) plOverIndex.value = idx;
+  }
+};
+
+const onPlMouseUp = () => {
+  if (plDragActive.value && plDragIndex.value !== -1 && plOverIndex.value !== -1 && plDragIndex.value !== plOverIndex.value) {
+    store.moveInPlaylist(props.playlistId, plDragIndex.value, plOverIndex.value);
+    plDragDidReorder = true;
+  }
+  plDragIndex.value = -1;
+  plOverIndex.value = -1;
+  plDragActive.value = false;
+  plPendingIndex = -1;
+  document.removeEventListener('mousemove', onPlMouseMove);
+  document.removeEventListener('mouseup', onPlMouseUp);
+  document.body.style.userSelect = '';
+  document.body.style.cursor = '';
+};
+
+const onPlRowMouseDown = (index, e) => {
+  // Don't initiate drag from buttons or interactive elements
+  if (e.target.closest('button') || e.target.closest('input')) return;
+  plPendingIndex = index;
+  plStartY = e.clientY;
+  plDragDidReorder = false;
+  document.addEventListener('mousemove', onPlMouseMove);
+  document.addEventListener('mouseup', onPlMouseUp);
 };
 
 const formatDuration = (seconds) => {
@@ -424,11 +499,16 @@ onUnmounted(() => {
   window.removeEventListener('scroll', closeMenuOnScroll, true);
   window.removeEventListener('resize', closeMenu);
   hideTooltip();
+  // Cleanup playlist drag listeners
+  document.removeEventListener('mousemove', onPlMouseMove);
+  document.removeEventListener('mouseup', onPlMouseUp);
+  document.body.style.userSelect = '';
+  document.body.style.cursor = '';
 });
 </script>
 
 <template>
-  <div class="w-full text-left text-sm 2xl:text-sm px-6 pb-12">
+  <div ref="songListContainer" class="w-full text-left text-sm 2xl:text-sm px-6 pb-12">
     <!-- Header -->
     <div
       class="grid gap-4 text-[var(--text-secondary)] text-xs font-medium uppercase tracking-wide border-b border-[var(--border-color)] py-2 mb-2 sticky top-0 bg-[var(--app-bg)]/95 backdrop-blur-xl z-10 select-none grid-cols-[20px_3fr_2fr_2fr_120px] 2xl:grid-cols-[30px_4fr_3fr_3fr_120px]"
@@ -470,16 +550,21 @@ onUnmounted(() => {
     </div>
 
     <!-- Rows -->
-    <div class="space-y-0.5">
+    <TransitionGroup name="song-list" tag="div" class="space-y-0.5">
       <div
         v-for="(song, index) in sortedSongs"
         :key="song.path"
         :data-song-path="song.path"
-        @click="selectMode ? toggleSelectSong(song) : playSong(song)"
+        :data-pl-drag-idx="canReorder ? index : undefined"
+        @click="plDragDidReorder ? null : (selectMode ? toggleSelectSong(song) : playSong(song))"
         @contextmenu.prevent="openMenu(song, $event)"
+        @mousedown="canReorder ? onPlRowMouseDown(index, $event) : null"
         class="song-row grid gap-4 py-2 px-2 rounded-md hover:bg-[#2a2a2a] group items-center transition-colors cursor-pointer grid-cols-[20px_3fr_2fr_2fr_120px] 2xl:grid-cols-[30px_4fr_3fr_3fr_120px] 2xl:py-1.5"
         :class="{
           'bg-[#2a2a2a]': isCurrentSong(song) || (selectMode && selectedSongs.includes(song.path)),
+          'opacity-30': canReorder && index === plDragIndex,
+          'pl-drop-target-above': canReorder && plOverIndex === index && plDragIndex !== index && plDragIndex > index,
+          'pl-drop-target-below': canReorder && plOverIndex === index && plDragIndex !== index && plDragIndex < index,
         }"
       >
         <div class="text-xs text-gray-500 text-center flex justify-center items-center h-full">
@@ -624,11 +709,11 @@ onUnmounted(() => {
           </button>
         </div>
       </div>
+    </TransitionGroup>
 
-      <div v-if="songs.length === 0" class="p-20 text-center text-gray-600">
-        <div class="text-4xl mb-4 opacity-20">♫</div>
-        <p>No songs found.</p>
-      </div>
+    <div v-if="songs.length === 0" class="p-20 text-center text-gray-600">
+      <div class="text-4xl mb-4 opacity-20">♫</div>
+      <p>No songs found.</p>
     </div>
 
     <!-- Context menu -->
@@ -1046,6 +1131,14 @@ onUnmounted(() => {
   contain-intrinsic-size: auto 56px;
 }
 
+/* Playlist drag-to-reorder: drop-target indicators */
+.pl-drop-target-above {
+  box-shadow: inset 0 2px 0 0 var(--accent-color);
+}
+.pl-drop-target-below {
+  box-shadow: inset 0 -2px 0 0 var(--accent-color);
+}
+
 .animate-fade-in {
   animation: fadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
@@ -1074,5 +1167,10 @@ onUnmounted(() => {
     opacity: 1;
     transform: translate(-50%, 0);
   }
+}
+
+/* Playlist song list reorder FLIP animation */
+.song-list-move {
+  transition: transform 0.3s cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 </style>

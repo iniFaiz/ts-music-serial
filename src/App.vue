@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, onUnmounted, nextTick } from 'vue';
+import { ref, onMounted, onUnmounted, nextTick, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { listen } from '@tauri-apps/api/event';
@@ -14,6 +14,16 @@ import LyricsPanel from './components/LyricsPanel.vue';
 import { goBackWithTransition, goForwardWithTransition } from './viewTransition';
 
 const router = useRouter();
+
+// Navigate to /songs when typing in search
+watch(
+  () => store.searchQuery,
+  (query) => {
+    if (query && router.currentRoute.value.path !== '/songs') {
+      router.push('/songs');
+    }
+  }
+);
 
 // ---- Global keyboard shortcuts ----
 const handleKeydown = (e) => {
@@ -149,11 +159,94 @@ onUnmounted(() => {
   if (unlistenDrop) unlistenDrop();
   if (unlistenLibraryChanged) unlistenLibraryChanged();
   if (refreshTimer) clearTimeout(refreshTimer);
+  // Cleanup sidebar playlist drag
+  document.removeEventListener('mousemove', onSidebarPlMouseMove);
+  document.removeEventListener('mouseup', onSidebarPlMouseUp);
+  document.body.style.userSelect = '';
+  document.body.style.cursor = '';
 });
 
 function newPlaylist() {
   store.openPlaylistModal();
 }
+
+// ---- Sidebar playlist drag-to-reorder ----
+const sidebarPlDragIndex = ref(-1);
+const sidebarPlOverIndex = ref(-1);
+const sidebarPlDragActive = ref(false);
+const sidebarPlContainer = ref(null);
+let sidebarPlStartY = 0;
+let sidebarPlPendingIdx = -1;
+const SIDEBAR_DRAG_THRESHOLD = 5;
+let sidebarPlDragDidReorder = false;
+
+const getSidebarPlRowIndex = (clientY) => {
+  if (!sidebarPlContainer.value) return -1;
+  const rows = sidebarPlContainer.value.querySelectorAll('[data-sidebar-pl-idx]');
+  for (const row of rows) {
+    const rect = row.getBoundingClientRect();
+    if (clientY >= rect.top && clientY <= rect.bottom) {
+      return parseInt(row.dataset.sidebarPlIdx, 10);
+    }
+  }
+  if (rows.length > 0) {
+    const firstRect = rows[0].getBoundingClientRect();
+    if (clientY < firstRect.top) return 0;
+    const lastRect = rows[rows.length - 1].getBoundingClientRect();
+    if (clientY > lastRect.bottom) return rows.length - 1;
+  }
+  return -1;
+};
+
+const onSidebarPlMouseMove = (e) => {
+  if (sidebarPlPendingIdx === -1) return;
+  const dy = Math.abs(e.clientY - sidebarPlStartY);
+  if (!sidebarPlDragActive.value && dy >= SIDEBAR_DRAG_THRESHOLD) {
+    sidebarPlDragActive.value = true;
+    sidebarPlDragIndex.value = sidebarPlPendingIdx;
+    sidebarPlOverIndex.value = sidebarPlPendingIdx;
+    sidebarPlDragDidReorder = true;
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'grabbing';
+  }
+  if (sidebarPlDragActive.value) {
+    e.preventDefault();
+    const idx = getSidebarPlRowIndex(e.clientY);
+    if (idx !== -1) sidebarPlOverIndex.value = idx;
+  }
+};
+
+const onSidebarPlMouseUp = () => {
+  if (sidebarPlDragActive.value && sidebarPlDragIndex.value !== -1 && sidebarPlOverIndex.value !== -1 && sidebarPlDragIndex.value !== sidebarPlOverIndex.value) {
+    store.movePlaylistOrder(sidebarPlDragIndex.value, sidebarPlOverIndex.value);
+  }
+  sidebarPlDragIndex.value = -1;
+  sidebarPlOverIndex.value = -1;
+  sidebarPlDragActive.value = false;
+  sidebarPlPendingIdx = -1;
+  document.removeEventListener('mousemove', onSidebarPlMouseMove);
+  document.removeEventListener('mouseup', onSidebarPlMouseUp);
+  document.body.style.userSelect = '';
+  document.body.style.cursor = '';
+};
+
+const onSidebarPlMouseDown = (index, e) => {
+  if (e.target.closest('button')) return;
+  sidebarPlPendingIdx = index;
+  sidebarPlStartY = e.clientY;
+  sidebarPlDragDidReorder = false;
+  document.addEventListener('mousemove', onSidebarPlMouseMove);
+  document.addEventListener('mouseup', onSidebarPlMouseUp);
+};
+
+const onSidebarPlClick = (e) => {
+  if (sidebarPlDragDidReorder) {
+    e.preventDefault();
+    e.stopPropagation();
+    sidebarPlDragDidReorder = false;
+  }
+};
+
 </script>
 
 <template>
@@ -382,7 +475,7 @@ function newPlaylist() {
               </svg>
             </button>
           </div>
-          <div class="flex-1 pr-1 -mr-1 overflow-auto">
+          <div ref="sidebarPlContainer" class="flex-1 pr-1 -mr-1 overflow-auto">
             <!-- Link to All Playlists -->
             <router-link
               to="/playlists"
@@ -416,14 +509,27 @@ function newPlaylist() {
               <span v-if="!compact" class="truncate">All Playlists</span>
             </router-link>
 
+            <TransitionGroup name="sidebar-pl" tag="div">
             <router-link
-              v-for="pl in store.playlists"
+              v-for="(pl, plIdx) in store.playlists"
               :key="pl.id"
+              :data-sidebar-pl-idx="plIdx"
               :to="'/playlists/' + pl.id"
               active-class="bg-[#282828] text-white"
               class="flex items-center rounded-md text-sm text-[var(--text-secondary)] hover:text-white hover:bg-[#282828] transition-colors"
-              :class="compact ? 'justify-center py-1.5' : 'gap-3 px-2 py-1.5'"
+              :class="[
+                compact ? 'justify-center py-1.5' : 'gap-3 px-2 py-1.5',
+                {
+                  'opacity-30': plIdx === sidebarPlDragIndex,
+                  'sidebar-pl-drop-above': sidebarPlOverIndex === plIdx && sidebarPlDragIndex !== plIdx && sidebarPlDragIndex > plIdx,
+                  'sidebar-pl-drop-below': sidebarPlOverIndex === plIdx && sidebarPlDragIndex !== plIdx && sidebarPlDragIndex < plIdx,
+                }
+              ]"
               :title="compact ? pl.name : null"
+              draggable="false"
+              @dragstart.prevent
+              @mousedown="onSidebarPlMouseDown(plIdx, $event)"
+              @click="onSidebarPlClick"
             >
               <PlaylistCover
                 :name="pl.name"
@@ -433,6 +539,7 @@ function newPlaylist() {
               />
               <span v-if="!compact" class="truncate">{{ pl.name }}</span>
             </router-link>
+            </TransitionGroup>
             <div
               v-if="store.playlists.length === 0 && !compact"
               class="px-3 py-1 text-[11px] text-gray-600"
@@ -575,5 +682,18 @@ function newPlaylist() {
 .fullscreen-fade-enter-from,
 .fullscreen-fade-leave-to {
   opacity: 0;
+}
+
+/* Sidebar playlist drag-to-reorder indicators */
+.sidebar-pl-drop-above {
+  box-shadow: inset 0 2px 0 0 var(--accent-color);
+}
+.sidebar-pl-drop-below {
+  box-shadow: inset 0 -2px 0 0 var(--accent-color);
+}
+
+/* Sidebar playlist reorder FLIP animation */
+.sidebar-pl-move {
+  transition: transform 0.3s cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 </style>

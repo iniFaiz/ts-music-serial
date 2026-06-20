@@ -1,5 +1,5 @@
 <script setup>
-import { ref } from 'vue';
+import { ref, onUnmounted } from 'vue';
 import { store } from '../store';
 import { useRouter } from 'vue-router';
 import CoverImage from './CoverImage.vue';
@@ -21,38 +21,69 @@ const keyFor = (item) => {
   return k;
 };
 
-const dragIndex = ref(-1); // row being dragged
-const overIndex = ref(-1); // row the cursor is currently over (drop target)
+// ---- Pointer-event based drag-to-reorder ----
+// HTML5 drag-and-drop is unreliable in Tauri/webview contexts.
+// This uses mousedown/mousemove/mouseup for a rock-solid experience.
 
-const onDragStart = (index, event) => {
+const dragIndex = ref(-1);   // row being dragged
+const overIndex = ref(-1);   // row the cursor is currently over (drop target)
+const listContainer = ref(null);
+
+const getRowIndexFromY = (clientY) => {
+  if (!listContainer.value) return -1;
+  const rows = listContainer.value.querySelectorAll('[data-queue-idx]');
+  for (const row of rows) {
+    const rect = row.getBoundingClientRect();
+    if (clientY >= rect.top && clientY <= rect.bottom) {
+      return parseInt(row.dataset.queueIdx, 10);
+    }
+  }
+  // If above or below all rows, clamp to first/last
+  if (rows.length > 0) {
+    const firstRect = rows[0].getBoundingClientRect();
+    if (clientY < firstRect.top) return 0;
+    const lastRect = rows[rows.length - 1].getBoundingClientRect();
+    if (clientY > lastRect.bottom) return rows.length - 1;
+  }
+  return -1;
+};
+
+const onMouseMove = (e) => {
+  if (dragIndex.value === -1) return;
+  e.preventDefault();
+  const idx = getRowIndexFromY(e.clientY);
+  if (idx !== -1) overIndex.value = idx;
+};
+
+const onMouseUp = (e) => {
+  if (dragIndex.value !== -1 && overIndex.value !== -1 && dragIndex.value !== overIndex.value) {
+    store.moveInQueue(dragIndex.value, overIndex.value);
+  }
+  dragIndex.value = -1;
+  overIndex.value = -1;
+  document.removeEventListener('mousemove', onMouseMove);
+  document.removeEventListener('mouseup', onMouseUp);
+  document.body.style.userSelect = '';
+  document.body.style.cursor = '';
+};
+
+const onGripMouseDown = (index, e) => {
+  e.preventDefault();
+  e.stopPropagation();
   dragIndex.value = index;
-  if (event.dataTransfer) {
-    event.dataTransfer.effectAllowed = 'move';
-    event.dataTransfer.setData('text/plain', String(index));
-  }
+  overIndex.value = index;
+  document.body.style.userSelect = 'none';
+  document.body.style.cursor = 'grabbing';
+  document.addEventListener('mousemove', onMouseMove);
+  document.addEventListener('mouseup', onMouseUp);
 };
 
-// Only update the target indicator while dragging — do NOT mutate the list here.
-// Reordering live causes the cursor to land on a shifted element and re-fire
-// dragenter, which makes the animation loop/stutter.
-const onDragEnter = (index) => {
-  if (dragIndex.value !== -1) overIndex.value = index;
-};
-
-// Reorder exactly once, on drop. TransitionGroup then animates the single
-// change: the dragged row glides to its slot and the others fall into place.
-const onDrop = (index) => {
-  if (dragIndex.value !== -1 && dragIndex.value !== index) {
-    store.moveInQueue(dragIndex.value, index);
-  }
-  dragIndex.value = -1;
-  overIndex.value = -1;
-};
-
-const onDragEnd = () => {
-  dragIndex.value = -1;
-  overIndex.value = -1;
-};
+onUnmounted(() => {
+  document.removeEventListener('mousemove', onMouseMove);
+  document.removeEventListener('mouseup', onMouseUp);
+  document.body.style.userSelect = '';
+  document.body.style.cursor = '';
+});
 
 const isCurrent = (song) => store.currentSong && store.currentSong.path === song.path;
 
@@ -114,7 +145,7 @@ const navigateToArtist = (artistName) => {
       </div>
 
       <!-- List -->
-      <div class="flex-1 overflow-auto p-2 relative">
+      <div ref="listContainer" class="flex-1 overflow-auto p-2 relative">
         <div v-if="store.queue.length === 0" class="p-8 text-center text-gray-600 text-sm">
           The queue is empty.
         </div>
@@ -123,20 +154,31 @@ const navigateToArtist = (artistName) => {
           <div
             v-for="(song, index) in store.queue"
             :key="keyFor(song)"
-            draggable="true"
-            @dragstart="onDragStart(index, $event)"
-            @dragenter.prevent="onDragEnter(index)"
-            @dragover.prevent
-            @drop="onDrop(index)"
-            @dragend="onDragEnd"
+            :data-queue-idx="index"
             @dblclick="store.playQueueIndex(index)"
-            class="queue-row group flex items-center gap-3 p-2 rounded-md hover:bg-[#2a2a2a] cursor-grab active:cursor-grabbing transition-colors"
+            class="queue-row group flex items-center gap-2 p-2 rounded-md hover:bg-[#2a2a2a] transition-colors"
             :class="{
               'bg-[#2a2a2a]': isCurrent(song),
               'opacity-30': index === dragIndex,
-              'drop-target': overIndex === index && dragIndex !== index,
+              'drop-target-above': overIndex === index && dragIndex !== index && dragIndex > index,
+              'drop-target-below': overIndex === index && dragIndex !== index && dragIndex < index,
             }"
           >
+            <!-- Drag grip handle -->
+            <div
+              class="shrink-0 cursor-grab active:cursor-grabbing text-gray-600 hover:text-gray-300 transition-colors drag-grip"
+              @mousedown="onGripMouseDown(index, $event)"
+              title="Drag to reorder"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+                <circle cx="9" cy="5" r="1.5"></circle>
+                <circle cx="15" cy="5" r="1.5"></circle>
+                <circle cx="9" cy="12" r="1.5"></circle>
+                <circle cx="15" cy="12" r="1.5"></circle>
+                <circle cx="9" cy="19" r="1.5"></circle>
+                <circle cx="15" cy="19" r="1.5"></circle>
+              </svg>
+            </div>
             <CoverImage :path="song.path" className="h-10 w-10 rounded shrink-0 bg-[#333]" />
             <div class="flex-1 min-w-0" @click="store.playQueueIndex(index)">
               <div
@@ -175,28 +217,6 @@ const navigateToArtist = (artistName) => {
           </div>
         </TransitionGroup>
       </div>
-
-      <div class="px-4 py-2 text-[11px] border-t border-[var(--border-color)]">
-        <div v-if="store.autoplayMode" class="flex items-center gap-1.5 text-[var(--accent-color)]">
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <path
-              d="M12 12c-2-2.67-4-4-6-4a4 4 0 1 0 0 8c2 0 4-1.33 6-4Zm0 0c2 2.67 4 4 6 4a4 4 0 0 0 0-8c-2 0-4 1.33-6 4Z"
-            />
-          </svg>
-          <span>Autoplay on · random songs keep playing</span>
-        </div>
-        <span v-else class="text-gray-600">Drag to reorder · double-click to play</span>
-      </div>
     </aside>
   </Transition>
 </template>
@@ -211,9 +231,22 @@ const navigateToArtist = (artistName) => {
   transform: translateX(100%);
 }
 
-/* Drop-target indicator: an accent line above the row the item will land on. */
-.drop-target {
+/* Drop-target indicator: accent line showing where the item will land. */
+.drop-target-above {
   box-shadow: inset 0 2px 0 0 var(--accent-color);
+}
+.drop-target-below {
+  box-shadow: inset 0 -2px 0 0 var(--accent-color);
+}
+
+/* Drag grip pulse on hover */
+.drag-grip:hover {
+  animation: grip-pulse 0.6s ease-in-out;
+}
+
+@keyframes grip-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.15); }
 }
 
 /* Reorder: every displaced row glides to its new position (one clean pass). */
