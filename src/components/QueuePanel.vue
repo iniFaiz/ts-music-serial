@@ -55,7 +55,7 @@ const onMouseMove = (e) => {
   if (idx !== -1) overIndex.value = idx;
 };
 
-const onMouseUp = (e) => {
+const onMouseUp = () => {
   if (dragIndex.value !== -1 && overIndex.value !== -1 && dragIndex.value !== overIndex.value) {
     store.moveInQueue(dragIndex.value, overIndex.value);
   }

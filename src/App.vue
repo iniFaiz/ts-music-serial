@@ -11,7 +11,7 @@ import PlaylistCover from './components/PlaylistCover.vue';
 import TitleBar from './components/TitleBar.vue';
 import FullScreenPlayer from './components/FullScreenPlayer.vue';
 import LyricsPanel from './components/LyricsPanel.vue';
-import { goBackWithTransition, goForwardWithTransition } from './viewTransition';
+import { navigateWithTransition, goBackWithTransition, goForwardWithTransition } from './viewTransition';
 
 const router = useRouter();
 
@@ -228,6 +228,9 @@ const onSidebarPlMouseUp = () => {
   document.removeEventListener('mouseup', onSidebarPlMouseUp);
   document.body.style.userSelect = '';
   document.body.style.cursor = '';
+  setTimeout(() => {
+    sidebarPlDragDidReorder = false;
+  }, 50);
 };
 
 const onSidebarPlMouseDown = (index, e) => {
@@ -239,12 +242,18 @@ const onSidebarPlMouseDown = (index, e) => {
   document.addEventListener('mouseup', onSidebarPlMouseUp);
 };
 
-const onSidebarPlClick = (e) => {
+const navigatePlaylist = (id, event) => {
   if (sidebarPlDragDidReorder) {
-    e.preventDefault();
-    e.stopPropagation();
     sidebarPlDragDidReorder = false;
+    return;
   }
+  const coverEl = event.currentTarget.querySelector('.h-7') || event.currentTarget.querySelector('img') || event.currentTarget.firstElementChild;
+  navigateWithTransition(
+    () => router.push('/playlists/' + id),
+    coverEl,
+    'shared-cover',
+    'to-album-transition'
+  );
 };
 
 </script>
@@ -529,7 +538,7 @@ const onSidebarPlClick = (e) => {
               draggable="false"
               @dragstart.prevent
               @mousedown="onSidebarPlMouseDown(plIdx, $event)"
-              @click="onSidebarPlClick"
+              @click.prevent="navigatePlaylist(pl.id, $event)"
             >
               <PlaylistCover
                 :name="pl.name"
@@ -619,8 +628,8 @@ const onSidebarPlClick = (e) => {
             @click="store.queuePanelOpen = false; store.lyricsPanelOpen = false"
           >
             <router-view v-slot="{ Component }">
-              <keep-alive :include="['SongsView', 'AlbumsView', 'ArtistsView', 'PlaylistsView']">
-                <component :is="Component" />
+              <keep-alive :include="['SongsView', 'AlbumsView', 'ArtistsView']">
+                <component :is="Component" :key="$route.fullPath" />
               </keep-alive>
             </router-view>
           </div>

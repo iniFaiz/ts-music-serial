@@ -16,7 +16,6 @@ const showLyricsOption = ref(true);
 
 const song = computed(() => store.currentSong);
 
-const hasLyrics = computed(() => lines.value && lines.value.length > 0);
 const showLyricsColumn = computed(() => {
   return showLyricsOption.value;
 });

@@ -92,6 +92,9 @@ const onMouseUp = () => {
   document.removeEventListener('mouseup', onMouseUp);
   document.body.style.userSelect = '';
   document.body.style.cursor = '';
+  setTimeout(() => {
+    dragDidReorder = false;
+  }, 50);
 };
 
 const onCardMouseDown = (index, e) => {

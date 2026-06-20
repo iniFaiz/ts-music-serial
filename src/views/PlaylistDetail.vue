@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, nextTick, watch, onMounted, onUnmounted } from 'vue';
+import { computed, ref, watch, onMounted, onUnmounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { store } from '../store';
 import SongList from '../components/SongList.vue';
@@ -85,6 +85,20 @@ watch(
   },
   { immediate: true }
 );
+
+const suggestionsClosed = ref(false);
+
+watch(playlistId, () => {
+  suggestionsClosed.value = false;
+});
+
+const addAndRemoveFromSuggestions = (songPath) => {
+  store.addToPlaylist(playlist.value.id, songPath);
+  suggestedSongs.value = suggestedSongs.value.filter((s) => s.path !== songPath);
+  if (suggestedSongs.value.length === 0) {
+    getSuggestions();
+  }
+};
 </script>
 
 <template>
@@ -238,18 +252,21 @@ watch(
         <p class="text-xs text-gray-500 mt-1 max-w-sm mx-auto">
           Right-click a song anywhere and choose "Add to playlist".
         </p>
+      </div>
 
-        <!-- Suggested Songs Widget -->
-        <div
-          class="mt-10 max-w-lg mx-auto text-left bg-[#1d1d1f] border border-[#2d2d2f] rounded-xl p-5 shadow-2xl relative"
-        >
-          <div class="flex items-center justify-between mb-4 border-b border-[#2d2d2f] pb-3">
-            <div>
-              <h3 class="text-xs font-semibold text-white uppercase tracking-wider">
-                Recommended Songs
-              </h3>
-              <p class="text-[11px] text-gray-500 mt-0.5">Quick add to your playlist</p>
-            </div>
+      <!-- Suggested Songs Widget -->
+      <div
+        v-if="songs.length < 6 && !suggestionsClosed"
+        class="mt-10 max-w-lg mx-auto text-left bg-[#1d1d1f] border border-[#2d2d2f] rounded-xl p-5 shadow-2xl relative"
+      >
+        <div class="flex items-center justify-between mb-4 border-b border-[#2d2d2f] pb-3">
+          <div>
+            <h3 class="text-xs font-semibold text-white uppercase tracking-wider">
+              Recommended Songs
+            </h3>
+            <p class="text-[11px] text-gray-500 mt-0.5">Quick add to your playlist</p>
+          </div>
+          <div class="flex items-center gap-2">
             <button
               @click="getSuggestions"
               class="text-gray-400 hover:text-white transition flex items-center gap-1.5 text-[11px] font-medium bg-[#282828] hover:bg-[#333] px-2.5 py-1 rounded-md border border-[#3a3a3a]"
@@ -271,54 +288,74 @@ watch(
               </svg>
               Refresh
             </button>
-          </div>
-
-          <div v-if="suggestedSongs.length > 0" class="space-y-2">
-            <div
-              v-for="song in suggestedSongs"
-              :key="song.path"
-              class="flex items-center justify-between p-2 rounded-lg hover:bg-white/5 transition duration-150 group"
+            <button
+              @click="suggestionsClosed = true"
+              class="text-gray-400 hover:text-white transition flex items-center justify-center bg-[#282828] hover:bg-[#333] h-[25px] w-[25px] rounded-md border border-[#3a3a3a]"
+              title="Close recommendations"
             >
-              <div class="flex items-center gap-3 overflow-hidden flex-1 min-w-0 pr-3">
-                <CoverImage
-                  :path="song.path"
-                  className="h-9 w-9 rounded-[4px] shadow-md bg-[#333] shrink-0"
-                />
-                <div class="truncate">
-                  <div class="text-xs font-medium text-white truncate leading-none mb-1">
-                    {{ song.title }}
-                  </div>
-                  <div class="text-[10px] text-gray-400 truncate leading-none">
-                    {{ song.artist }} • <span class="opacity-60">{{ song.album }}</span>
-                  </div>
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <div v-if="suggestedSongs.length > 0" class="space-y-2">
+          <div
+            v-for="song in suggestedSongs"
+            :key="song.path"
+            class="flex items-center justify-between p-2 rounded-lg hover:bg-white/5 transition duration-150 group"
+          >
+            <div class="flex items-center gap-3 overflow-hidden flex-1 min-w-0 pr-3">
+              <CoverImage
+                :path="song.path"
+                className="h-9 w-9 rounded-[4px] shadow-md bg-[#333] shrink-0"
+              />
+              <div class="truncate">
+                <div class="text-xs font-medium text-white truncate leading-none mb-1">
+                  {{ song.title }}
+                </div>
+                <div class="text-[10px] text-gray-400 truncate leading-none">
+                  {{ song.artist }} • <span class="opacity-60">{{ song.album }}</span>
                 </div>
               </div>
-
-              <button
-                @click="store.addToPlaylist(playlist.id, song.path)"
-                class="bg-[#282828] hover:bg-[var(--accent-color)] text-gray-300 hover:text-white border border-[#3a3a3a] hover:border-transparent px-3 py-1 rounded-full text-[11px] font-semibold transition-all duration-150 flex items-center gap-1 shrink-0"
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  width="10"
-                  height="10"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="3"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <line x1="12" y1="5" x2="12" y2="19"></line>
-                  <line x1="5" y1="12" x2="19" y2="12"></line>
-                </svg>
-                Add
-              </button>
             </div>
+
+            <button
+              @click="addAndRemoveFromSuggestions(song.path)"
+              class="bg-[#282828] hover:bg-[var(--accent-color)] text-gray-300 hover:text-white border border-[#3a3a3a] hover:border-transparent px-3 py-1 rounded-full text-[11px] font-semibold transition-all duration-150 flex items-center gap-1 shrink-0"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="10"
+                height="10"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="3"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <line x1="12" y1="5" x2="12" y2="19"></line>
+                <line x1="5" y1="12" x2="19" y2="12"></line>
+              </svg>
+              Add
+            </button>
           </div>
-          <div v-else class="text-center py-6 text-xs text-gray-600">
-            No suggestions available. Try adding more songs to your library.
-          </div>
+        </div>
+        <div v-else class="text-center py-6 text-xs text-gray-600">
+          No suggestions available. Try adding more songs to your library.
         </div>
       </div>
     </div>

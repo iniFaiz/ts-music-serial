@@ -131,6 +131,9 @@ const onPlMouseUp = () => {
   document.removeEventListener('mouseup', onPlMouseUp);
   document.body.style.userSelect = '';
   document.body.style.cursor = '';
+  setTimeout(() => {
+    plDragDidReorder = false;
+  }, 50);
 };
 
 const onPlRowMouseDown = (index, e) => {
