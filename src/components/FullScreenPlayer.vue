@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, watch, nextTick, onUnmounted } from 'vue';
+import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue';
 import { store } from '../store';
 import { loadCover, getCachedCover, hasCachedCover } from '../coverCache';
 import { loadLyrics, activeLineIndex } from '../lyricsCache';
@@ -13,6 +13,36 @@ const lyrics = ref(undefined);
 const linesEl = ref(null);
 const lyricsLoading = ref(false);
 const showLyricsOption = ref(true);
+
+const losslessPopupOpen = ref(false);
+
+const isLossless = computed(() => {
+  if (!store.currentSong || !store.currentSong.path) return false;
+  const ext = store.currentSong.path.split('.').pop().toLowerCase();
+  return ['flac', 'wav', 'alac', 'm4a'].includes(ext);
+});
+
+const formatLosslessSpecs = () => {
+  if (!store.currentSong || !store.currentSong.path) return '24-bit 48kHz ALAC';
+  const ext = store.currentSong.path.split('.').pop().toLowerCase();
+  const bits = store.currentBitDepth || store.currentSong.bit_depth;
+  const hz = store.currentSampleRate || store.currentSong.sample_rate;
+
+  if (bits && hz) {
+    const bitStr = `${bits}-bit`;
+    const rateStr = hz >= 1000 ? `${(hz / 1000).toFixed(1).replace('.0', '')}kHz` : `${hz}Hz`;
+    const codecStr = ext === 'm4a' ? 'ALAC' : ext.toUpperCase();
+    return `${bitStr} ${rateStr} ${codecStr}`;
+  }
+
+  if (ext === 'flac') return '24-bit 48kHz FLAC';
+  if (ext === 'wav') return '16-bit 44.1kHz WAV';
+  return '24-bit 48kHz ALAC';
+};
+
+const closeLosslessPopup = () => {
+  losslessPopupOpen.value = false;
+};
 
 const song = computed(() => store.currentSong);
 
@@ -54,6 +84,7 @@ async function fetchLyrics(force = false) {
 watch(
   () => store.fullscreenOpen,
   (open) => {
+    losslessPopupOpen.value = false;
     if (open && song.value) {
       resolveCover(song.value.path);
       fetchLyrics();
@@ -63,6 +94,7 @@ watch(
 watch(
   () => song.value && song.value.path,
   (path) => {
+    losslessPopupOpen.value = false;
     if (store.fullscreenOpen && path) {
       resolveCover(path);
       fetchLyrics();
@@ -238,9 +270,14 @@ watch(() => [song.value?.path, lines.value], () => {
   npUserPausedUntil = 0;
 });
 
+onMounted(() => {
+  document.addEventListener('click', closeLosslessPopup);
+});
+
 onUnmounted(() => {
   if (npRafId) cancelAnimationFrame(npRafId);
   if (npUserScrollTimer) clearTimeout(npUserScrollTimer);
+  document.removeEventListener('click', closeLosslessPopup);
 });
 
 // ---- transport ----
@@ -410,7 +447,7 @@ const goToAlbum = (albumName) => {
       <!-- Draggable top strip + close button -->
       <div
         data-tauri-drag-region
-        class="absolute top-0 left-0 right-0 h-14 flex items-center px-4 z-10"
+        class="absolute top-0 left-0 right-0 z-10 flex items-center px-4 h-14"
       >
         <button
           @click="close"
@@ -437,7 +474,7 @@ const goToAlbum = (albumName) => {
         <button
           v-if="hasRomaji && showLyricsColumn"
           @click="store.toggleRomaji()"
-          class="ml-auto flex items-center justify-center w-9 h-9 rounded-full text-white transition-all active:scale-95"
+          class="flex items-center justify-center ml-auto text-white transition-all rounded-full w-9 h-9 active:scale-95"
           :class="store.showRomaji ? 'bg-white/25' : 'bg-white/10 hover:bg-white/20'"
           :title="store.showRomaji ? 'Hide romaji' : 'Show romaji'"
         >
@@ -449,7 +486,7 @@ const goToAlbum = (albumName) => {
 
       <!-- Content -->
       <div
-        class="relative h-full flex flex-col lg:flex-row items-center justify-center px-6 sm:px-12 lg:px-20 pt-14 pb-8"
+        class="relative flex flex-col items-center justify-center h-full px-6 pb-8 lg:flex-row sm:px-12 lg:px-20 pt-14"
       >
         <!-- Left: cover + controls -->
         <div class="flex flex-col items-stretch w-full max-w-[420px] shrink-0 transition-all duration-500 ease-[cubic-bezier(0.25,1,0.5,1)]">
@@ -459,17 +496,17 @@ const goToAlbum = (albumName) => {
             <img
               v-if="coverUrl"
               :src="coverUrl"
-              class="w-full h-full object-cover"
+              class="object-cover w-full h-full"
               alt=""
               draggable="false"
             />
             <div
               v-else
-              class="w-full h-full bg-gradient-to-br from-gray-700 to-gray-900 flex items-center justify-center"
+              class="flex items-center justify-center w-full h-full bg-gradient-to-br from-gray-700 to-gray-900"
             >
               <svg
                 xmlns="http://www.w3.org/2000/svg"
-                class="w-1/4 h-1/4 text-gray-500 opacity-50"
+                class="w-1/4 text-gray-500 opacity-50 h-1/4"
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
@@ -483,10 +520,10 @@ const goToAlbum = (albumName) => {
           </div>
 
           <!-- Title row -->
-          <div class="flex items-center justify-between mt-5 gap-3">
+          <div class="flex items-center justify-between gap-3 mt-5">
             <div class="min-w-0">
               <div class="text-xl font-bold truncate">{{ song.title }}</div>
-              <div class="text-sm text-white/60 truncate">
+              <div class="text-sm truncate text-white/60">
                 <span
                   @click="goToArtist(song.artist)"
                   class="hover:text-[var(--accent-color)] hover:underline cursor-pointer transition-colors"
@@ -506,7 +543,7 @@ const goToAlbum = (albumName) => {
             </div>
             <button
               @click="store.toggleFavorite(song.path)"
-              class="shrink-0 transition hover:scale-110"
+              class="transition shrink-0 hover:scale-110"
               :class="store.isFavorite(song.path) ? 'text-[var(--accent-color)]' : 'text-white/60 hover:text-white'"
               title="Like"
             >
@@ -546,10 +583,70 @@ const goToAlbum = (albumName) => {
               <span>{{ formatTime(store.currentTime) }}</span>
               <span>-{{ remaining }}</span>
             </div>
+
+            <!-- Lossless Badge Container (Centered under seek bar & timestamps) -->
+            <div v-if="isLossless" class="relative flex justify-center mt-0.1">
+              <button
+                @click.stop="losslessPopupOpen = !losslessPopupOpen"
+                class="flex items-center gap-1 px-1.5 py-0.5 rounded bg-white/10 hover:bg-white/15 active:scale-98 transition border border-white/10 text-white/70 hover:text-white text-[9px] font-bold uppercase tracking-wider select-none focus:outline-none"
+                title="Lossless Audio"
+              >
+                <!-- SVG logo same as playercontrol -->
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 15 9"
+                  class="h-2 w-[13px] fill-current"
+                >
+                  <path
+                    d="M8.184,0.35C9.944,0.35 10.703,3.296 11.338,5.238C11.673,3.842 11.497,3.542 11.857,3.542C11.99,3.542 12.126,3.633 12.126,3.798C12.126,3.809 12.123,3.839 12.117,3.883L12.091,4.058C12.02,4.522 11.845,5.494 11.654,6.144C13.198,10.191 14.345,4.861 14.474,3.772C14.493,3.615 14.612,3.542 14.731,3.542C14.891,3.542 15.022,3.662 14.997,3.843C14.72,5.605 14.295,8.35 12.547,8.35C11.582,8.35 11.04,7.595 10.611,6.73C9.54,4.626 9.047,1.093 7.997,1.093C7.66,1.093 7.411,1.444 7.394,1.444C7.362,1.444 7.337,1.301 7.023,0.909C7.322,0.567 7.734,0.35 8.184,0.35ZM2.458,0.354C5.211,0.354 5.456,7.618 7.014,7.618C7.197,7.618 7.394,7.507 7.61,7.256C7.729,7.458 7.851,7.638 7.978,7.796C7.667,8.151 7.28,8.35 6.795,8.35C5.054,8.349 4.306,5.434 3.663,3.466C3.511,4.097 3.432,4.669 3.402,4.925C3.382,5.088 3.263,5.163 3.143,5.163C3.009,5.163 2.874,5.071 2.874,4.908L2.874,4.908L2.877,4.87C2.966,4.223 3.146,3.243 3.347,2.56C3.079,1.858 2.745,1.091 2.252,1.091C1.257,1.091 0.687,3.591 0.527,4.925C0.508,5.088 0.388,5.163 0.268,5.163C0.135,5.163 0,5.071 0,4.908C0,4.896 0.001,4.883 0.002,4.87C0.283,2.836 0.808,0.354 2.458,0.354ZM5.315,0.35C5.809,0.35 6.339,0.608 6.797,1.211C6.822,1.241 7.078,1.639 7.159,1.777C8.277,3.802 8.818,7.627 9.881,7.627C10.065,7.627 10.264,7.513 10.484,7.256C10.604,7.458 10.726,7.638 10.852,7.796C10.542,8.15 10.155,8.35 9.67,8.35C6.933,8.349 6.636,1.09 5.128,1.09C4.788,1.09 4.536,1.444 4.519,1.444C4.487,1.444 4.462,1.301 4.148,0.909C4.455,0.558 4.87,0.35 5.315,0.35Z"
+                  />
+                </svg>
+                <span>lossless</span>
+              </button>
+
+              <!-- Popover (slightly larger) -->
+              <div
+                v-if="losslessPopupOpen"
+                class="lossless-popover-content absolute bottom-full left-1/2 -translate-x-1/2 mb-3 z-[100] bg-[#1c1c1e] border border-[#323236] rounded-xl shadow-2xl p-4 w-[230px] text-center select-none animate-fade-in-up"
+                @click.stop
+              >
+                <!-- Downward pointing arrow -->
+                <div
+                  class="absolute top-full left-1/2 -translate-x-1/2 -translate-y-1/2 w-2 h-2 bg-[#1c1c1e] border-r border-b border-[#323236] rotate-45"
+                ></div>
+
+                <!-- Lossless Logo (Small) -->
+                <div class="flex justify-center mb-2">
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    viewBox="0 0 15 9"
+                    class="h-5 w-[35px] text-white fill-current"
+                  >
+                    <path
+                      d="M8.184,0.35C9.944,0.35 10.703,3.296 11.338,5.238C11.673,3.842 11.497,3.542 11.857,3.542C11.99,3.542 12.126,3.633 12.126,3.798C12.126,3.809 12.123,3.839 12.117,3.883L12.091,4.058C12.02,4.522 11.845,5.494 11.654,6.144C13.198,10.191 14.345,4.861 14.474,3.772C14.493,3.615 14.612,3.542 14.731,3.542C14.891,3.542 15.022,3.662 14.997,3.843C14.72,5.605 14.295,8.35 12.547,8.35C11.582,8.35 11.04,7.595 10.611,6.73C9.54,4.626 9.047,1.093 7.997,1.093C7.66,1.093 7.411,1.444 7.394,1.444C7.362,1.444 7.337,1.301 7.023,0.909C7.322,0.567 7.734,0.35 8.184,0.35ZM2.458,0.354C5.211,0.354 5.456,7.618 7.014,7.618C7.197,7.618 7.394,7.507 7.61,7.256C7.729,7.458 7.851,7.638 7.978,7.796C7.667,8.151 7.28,8.35 6.795,8.35C5.054,8.349 4.306,5.434 3.663,3.466C3.511,4.097 3.432,4.669 3.402,4.925C3.382,5.088 3.263,5.163 3.143,5.163C3.009,5.163 2.874,5.071 2.874,4.908L2.874,4.908L2.877,4.87C2.966,4.223 3.146,3.243 3.347,2.56C3.079,1.858 2.745,1.091 2.252,1.091C1.257,1.091 0.687,3.591 0.527,4.925C0.508,5.088 0.388,5.163 0.268,5.163C0.135,5.163 0,5.071 0,4.908C0,4.896 0.001,4.883 0.002,4.87C0.283,2.836 0.808,0.354 2.458,0.354ZM5.315,0.35C5.809,0.35 6.339,0.608 6.797,1.211C6.822,1.241 7.078,1.639 7.159,1.777C8.277,3.802 8.818,7.627 9.881,7.627C10.065,7.627 10.264,7.513 10.484,7.256C10.604,7.458 10.726,7.638 10.852,7.796C10.542,8.15 10.155,8.35 9.67,8.35C6.933,8.349 6.636,1.09 5.128,1.09C4.788,1.09 4.536,1.444 4.519,1.444C4.487,1.444 4.462,1.301 4.148,0.909C4.455,0.558 4.87,0.35 5.315,0.35Z"
+                    />
+                  </svg>
+                </div>
+
+                <!-- Title -->
+                <h4 class="text-sm font-bold text-white mb-0.5">Lossless</h4>
+                <!-- Description -->
+                <p class="mb-3 text-xs leading-normal text-gray-400">
+                  This audio is playing with lossless compression.
+                </p>
+
+                <!-- Technical Specs -->
+                <div
+                  class="bg-[#2c2c2e]/60 rounded-lg py-1 px-3 text-xs font-semibold text-[var(--accent-color)] font-variant-numeric tracking-wide border border-white/5"
+                >
+                  {{ formatLosslessSpecs() }}
+                </div>
+              </div>
+            </div>
           </div>
 
           <!-- Controls -->
-          <div class="flex items-center justify-center gap-6 mt-3">
+          <div class="flex items-center justify-center gap-6 mt-6">
             <button
               @click="store.toggleShuffle()"
               :class="store.shuffleMode ? 'text-[var(--accent-color)]' : 'text-white/60 hover:text-white'"
@@ -567,7 +664,7 @@ const goToAlbum = (albumName) => {
             </button>
             <button
               @click="store.togglePlay()"
-              class="bg-white text-black rounded-full w-16 h-16 flex items-center justify-center hover:scale-105 transition"
+              class="flex items-center justify-center w-16 h-16 text-black transition bg-white rounded-full hover:scale-105"
             >
               <svg v-if="store.isPlaying" xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 24 24" fill="currentColor">
                 <rect x="6" y="4" width="4" height="16"></rect>
@@ -637,7 +734,7 @@ const goToAlbum = (albumName) => {
             @scroll.passive="() => { if (npIsAutoScrolling) return; npUserPausedUntil = Date.now() + 3000; if (npUserScrollTimer) clearTimeout(npUserScrollTimer); npUserScrollTimer = setTimeout(() => { npUserPausedUntil = 0; }, 3100); }"
           >
             <!-- Loading -->
-            <div v-if="lyricsLoading" class="text-white/40 text-2xl font-bold">Loading lyrics…</div>
+            <div v-if="lyricsLoading" class="text-2xl font-bold text-white/40">Loading lyrics…</div>
 
             <!-- Found -->
             <template v-else-if="lines.length">
@@ -646,7 +743,7 @@ const goToAlbum = (albumName) => {
                 :key="i"
                 :data-line="i"
                 @click="seekToLine(line)"
-                class="np-line text-2xl sm:text-3xl font-semibold leading-relaxed tracking-tight"
+                class="text-2xl font-semibold leading-relaxed tracking-tight np-line sm:text-3xl"
                 :class="[
                   synced ? 'cursor-pointer' : '',
                   i === activeIdx ? 'np-line-active' : 'np-line-dim',
@@ -677,8 +774,8 @@ const goToAlbum = (albumName) => {
 
             <!-- Not found -->
             <div v-else class="text-white/50">
-              <div class="text-3xl font-bold mb-2">Lyrics not found</div>
-              <p class="text-sm text-white/40 mb-4">
+              <div class="mb-2 text-3xl font-bold">Lyrics not found</div>
+              <p class="mb-4 text-sm text-white/40">
                 No lyrics were found locally, on LRCLIB, or NetEase
                 <span v-if="!store.musixmatchToken">(add a Musixmatch token in Settings for more sources)</span>.
               </p>
@@ -701,11 +798,11 @@ const goToAlbum = (albumName) => {
 
       <!-- Bottom-right lyrics toggle button -->
       <div
-        class="absolute bottom-6 right-6 z-30"
+        class="absolute z-30 bottom-6 right-6"
       >
         <button
           @click="showLyricsOption = !showLyricsOption"
-          class="flex items-center justify-center w-10 h-10 rounded-full transition-all bg-white/10 text-white hover:bg-white/20 active:scale-95"
+          class="flex items-center justify-center w-10 h-10 text-white transition-all rounded-full bg-white/10 hover:bg-white/20 active:scale-95"
           :class="{ 'text-[var(--accent-color)] bg-white/20': showLyricsOption }"
           :title="showLyricsOption ? 'Hide Lyrics' : 'Show Lyrics'"
         >
@@ -964,5 +1061,21 @@ input[type='range']::-webkit-slider-thumb {
   height: 3.5rem;
   margin-bottom: 1rem !important;
   opacity: 1;
+}
+
+.animate-fade-in-up {
+  animation: fadeInUp 0.15s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  transform-origin: bottom center;
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 4px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1);
+  }
 }
 </style>
