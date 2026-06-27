@@ -41,6 +41,7 @@ function playAlbum(albumName) {
   const songs = store.songs.filter((s) => s.album === albumName);
   songs.sort((a, b) => (a.track_number || 0) - (b.track_number || 0));
   if (songs.length > 0) {
+    store.recordRecent('album', albumName);
     store.playSong(songs[0], songs);
   }
 }

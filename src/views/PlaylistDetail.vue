@@ -16,7 +16,10 @@ const songs = computed(() => store.playlistSongs(playlistId.value));
 const suggestedSongs = ref([]);
 
 const playAll = () => {
-  if (songs.value.length > 0) store.playSong(songs.value[0], songs.value);
+  if (songs.value.length > 0) {
+    store.recordRecent('playlist', playlistId.value);
+    store.playSong(songs.value[0], songs.value);
+  }
 };
 
 const removePlaylist = () => {
@@ -43,6 +46,7 @@ onUnmounted(() => {
 
 const shufflePlaylist = () => {
   if (songs.value.length > 0) {
+    store.recordRecent('playlist', playlistId.value);
     store.shuffleMode = true;
     const randomIndex = Math.floor(Math.random() * songs.value.length);
     store.playSong(songs.value[randomIndex], songs.value);

@@ -10,27 +10,31 @@ defineOptions({ name: 'PlaylistsView' });
 const router = useRouter();
 
 const playlists = computed(() => store.playlists);
+const smartCount = (pl) => store.smartSongs(pl.id).length;
+const cardCount = (pl) => (store.isSmart(pl) ? smartCount(pl) : pl.paths.length);
 
-function openPlaylist(id, event) {
+function newSmartPlaylist() {
+  store.openSmartModal('create');
+}
+
+function playCard(pl) {
+  if (store.isSmart(pl)) store.playSmartPlaylist(pl.id);
+  else playPlaylist(pl.id);
+}
+
+function openPlaylist(pl, event) {
   // Don't navigate if we just finished dragging
   if (dragDidReorder) {
     dragDidReorder = false;
     return;
   }
   const coverEl = event.currentTarget.querySelector('.cover-image');
-  navigateWithTransition(
-    () => router.push({ name: 'PlaylistDetail', params: { id } }),
-    coverEl,
-    'shared-cover',
-    'to-album-transition'
-  );
+  const to = store.isSmart(pl) ? '/smart/' + pl.id : { name: 'PlaylistDetail', params: { id: pl.id } };
+  navigateWithTransition(() => router.push(to), coverEl, 'shared-cover', 'to-album-transition');
 }
 
 function playPlaylist(id) {
-  const songs = store.playlistSongs(id);
-  if (songs.length > 0) {
-    store.playSong(songs[0], songs);
-  }
+  store.playPlaylist(id);
 }
 
 function newPlaylist() {
@@ -121,26 +125,45 @@ onUnmounted(() => {
   <div class="h-full overflow-auto px-8 pt-8 pb-12">
     <div class="flex items-center justify-between mb-6">
       <h1 class="text-3xl font-bold tracking-tight text-white">Playlists</h1>
-      <button
-        @click="newPlaylist"
-        class="bg-[var(--accent-color)] text-white px-5 py-1.5 rounded-[4px] text-xs font-semibold hover:bg-red-500 transition flex items-center gap-1.5 shadow-lg"
-      >
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          width="14"
-          height="14"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2.5"
-          stroke-linecap="round"
-          stroke-linejoin="round"
+      <div class="flex items-center gap-2.5">
+        <button
+          @click="newSmartPlaylist"
+          class="bg-[#2c2c2e] text-white px-5 py-1.5 rounded-[4px] text-xs font-semibold hover:bg-[#3a3a3c] transition flex items-center gap-1.5 shadow-lg"
         >
-          <line x1="12" y1="5" x2="12" y2="19"></line>
-          <line x1="5" y1="12" x2="19" y2="12"></line>
-        </svg>
-        New Playlist
-      </button>
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="13"
+            height="13"
+            viewBox="0 0 24 24"
+            fill="currentColor"
+            stroke="none"
+            class="text-[var(--accent-color)]"
+          >
+            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+          </svg>
+          New Smart Playlist
+        </button>
+        <button
+          @click="newPlaylist"
+          class="bg-[var(--accent-color)] text-white px-5 py-1.5 rounded-[4px] text-xs font-semibold hover:bg-red-500 transition flex items-center gap-1.5 shadow-lg"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.5"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <line x1="12" y1="5" x2="12" y2="19"></line>
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+          </svg>
+          New Playlist
+        </button>
+      </div>
     </div>
 
     <TransitionGroup
@@ -155,7 +178,7 @@ onUnmounted(() => {
         :key="pl.id"
         :data-cover-key="pl.id"
         :data-pl-grid-idx="plIdx"
-        @click="openPlaylist(pl.id, $event)"
+        @click="openPlaylist(pl, $event)"
         @mousedown="onCardMouseDown(plIdx, $event)"
         class="cursor-pointer group transition-all duration-200"
         :class="{
@@ -178,9 +201,9 @@ onUnmounted(() => {
             class="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity rounded-md flex items-end p-3"
           >
             <div
-              v-if="pl.paths.length > 0"
+              v-if="cardCount(pl) > 0"
               data-play-btn
-              @click.stop="playPlaylist(pl.id)"
+              @click.stop="playCard(pl)"
               class="bg-[var(--accent-color)] text-white rounded-full p-3 shadow-lg translate-y-2 opacity-0 group-hover:translate-y-0 group-hover:opacity-100 transition-all duration-300 hover:scale-110 hover:bg-red-500"
             >
               <svg
@@ -197,18 +220,30 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <h3 class="text-[13px] font-medium text-white truncate pr-2 leading-snug">
-          {{ pl.name }}
+        <h3 class="text-[13px] font-medium text-white truncate pr-2 leading-snug flex items-center gap-1.5">
+          <span class="truncate">{{ pl.name }}</span>
+          <svg
+            v-if="store.isSmart(pl)"
+            xmlns="http://www.w3.org/2000/svg"
+            width="11"
+            height="11"
+            viewBox="0 0 24 24"
+            fill="currentColor"
+            stroke="none"
+            class="text-[var(--accent-color)] shrink-0"
+          >
+            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+          </svg>
         </h3>
-        <p class="text-[13px] text-[var(--text-secondary)] truncate">{{ pl.paths.length }} songs</p>
+        <p class="text-[13px] text-[var(--text-secondary)] truncate">{{ cardCount(pl) }} songs</p>
       </div>
     </TransitionGroup>
 
-    <div v-else class="p-20 text-center text-gray-600">
+    <div v-if="playlists.length === 0" class="p-20 text-center text-gray-600">
       <div class="text-4xl mb-4 opacity-20">♪</div>
       <p>No playlists created yet.</p>
       <p class="text-xs mt-2">
-        Click the "New Playlist" button above or in the sidebar to get started.
+        Click "New Playlist" or "New Smart Playlist" above to get started.
       </p>
     </div>
   </div>

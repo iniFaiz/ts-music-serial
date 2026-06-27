@@ -7,6 +7,7 @@ import { store } from './store';
 import PlayerControls from './components/PlayerControls.vue';
 import QueuePanel from './components/QueuePanel.vue';
 import PlaylistCreateModal from './components/PlaylistCreateModal.vue';
+import SmartPlaylistModal from './components/SmartPlaylistModal.vue';
 import PlaylistCover from './components/PlaylistCover.vue';
 import TitleBar from './components/TitleBar.vue';
 import FullScreenPlayer from './components/FullScreenPlayer.vue';
@@ -46,12 +47,27 @@ let refreshTimer = null;
 
 const scrollContainer = ref(null);
 const scrollPositions = new Map();
+const horizontalScrollPositions = new Map();
 
 router.beforeEach((to, from) => {
   if (scrollContainer.value) {
     const container =
       scrollContainer.value.querySelector('.overflow-auto') || scrollContainer.value;
     scrollPositions.set(from.fullPath, container.scrollTop);
+
+    // Save horizontal scroll positions
+    const horizontalShelves = scrollContainer.value.querySelectorAll('.shelf-row');
+    const horizPos = [];
+    horizontalShelves.forEach((el) => {
+      const section = el.closest('section');
+      const titleEl = section ? section.querySelector('h2') : null;
+      const title = titleEl ? titleEl.textContent.trim() : '';
+      horizPos.push({
+        title,
+        scrollLeft: el.scrollLeft,
+      });
+    });
+    horizontalScrollPositions.set(from.fullPath, horizPos);
   }
 });
 
@@ -62,13 +78,41 @@ router.afterEach((to) => {
         scrollContainer.value.querySelector('.overflow-auto') || scrollContainer.value;
 
       // Detail pages should always start scrolled to the top
-      const isDetailPage = ['AlbumDetail', 'ArtistDetail', 'PlaylistDetail'].includes(to.name);
+      const isDetailPage = [
+        'AlbumDetail',
+        'ArtistDetail',
+        'PlaylistDetail',
+        'SmartPlaylistDetail',
+        'CollectionDetail',
+      ].includes(to.name);
       const pos = isDetailPage ? 0 : scrollPositions.get(to.fullPath) || 0;
 
       const originalBehavior = container.style.scrollBehavior;
       container.style.scrollBehavior = 'auto';
       container.scrollTop = pos;
       container.style.scrollBehavior = originalBehavior;
+
+      // Restore horizontal scroll positions if not a detail page
+      if (!isDetailPage) {
+        const horizPos = horizontalScrollPositions.get(to.fullPath);
+        if (horizPos && horizPos.length > 0) {
+          nextTick(() => {
+            const horizontalShelves = scrollContainer.value.querySelectorAll('.shelf-row');
+            horizontalShelves.forEach((el, index) => {
+              const section = el.closest('section');
+              const titleEl = section ? section.querySelector('h2') : null;
+              const title = titleEl ? titleEl.textContent.trim() : '';
+              const match = horizPos.find((p) => p.title === title) || horizPos[index];
+              if (match) {
+                const orig = el.style.scrollBehavior;
+                el.style.scrollBehavior = 'auto';
+                el.scrollLeft = match.scrollLeft;
+                el.style.scrollBehavior = orig;
+              }
+            });
+          });
+        }
+      }
     }
   });
 });
@@ -242,18 +286,14 @@ const onSidebarPlMouseDown = (index, e) => {
   document.addEventListener('mouseup', onSidebarPlMouseUp);
 };
 
-const navigatePlaylist = (id, event) => {
+const navigatePlaylist = (pl, event) => {
   if (sidebarPlDragDidReorder) {
     sidebarPlDragDidReorder = false;
     return;
   }
   const coverEl = event.currentTarget.querySelector('.h-7') || event.currentTarget.querySelector('img') || event.currentTarget.firstElementChild;
-  navigateWithTransition(
-    () => router.push('/playlists/' + id),
-    coverEl,
-    'shared-cover',
-    'to-album-transition'
-  );
+  const path = store.isSmart(pl) ? '/smart/' + pl.id : '/playlists/' + pl.id;
+  navigateWithTransition(() => router.push(path), coverEl, 'shared-cover', 'to-album-transition');
 };
 
 </script>
@@ -312,6 +352,34 @@ const navigatePlaylist = (id, event) => {
             <circle cx="11" cy="11" r="8"></circle>
             <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
           </svg>
+        </div>
+
+        <!-- Top-level navigation -->
+        <div class="space-y-1">
+          <router-link
+            to="/home"
+            active-class="bg-[#282828] text-[var(--accent-color)] font-medium"
+            class="flex items-center rounded-md text-sm text-[var(--text-secondary)] hover:text-white hover:bg-[#282828] transition-colors"
+            :class="compact ? 'justify-center py-2.5' : 'gap-3 px-3 py-2'"
+            :title="compact ? 'Home' : null"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M3 9.5L12 3l9 6.5"></path>
+              <path d="M5 10v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V10"></path>
+              <path d="M9 21v-6h6v6"></path>
+            </svg>
+            <span v-if="!compact">Home</span>
+          </router-link>
         </div>
 
         <!-- Library -->
@@ -523,7 +591,7 @@ const navigatePlaylist = (id, event) => {
               v-for="(pl, plIdx) in store.playlists"
               :key="pl.id"
               :data-sidebar-pl-idx="plIdx"
-              :to="'/playlists/' + pl.id"
+              :to="store.isSmart(pl) ? '/smart/' + pl.id : '/playlists/' + pl.id"
               active-class="bg-[#282828] text-white"
               class="flex items-center rounded-md text-sm text-[var(--text-secondary)] hover:text-white hover:bg-[#282828] transition-colors"
               :class="[
@@ -538,7 +606,7 @@ const navigatePlaylist = (id, event) => {
               draggable="false"
               @dragstart.prevent
               @mousedown="onSidebarPlMouseDown(plIdx, $event)"
-              @click.prevent="navigatePlaylist(pl.id, $event)"
+              @click.prevent="navigatePlaylist(pl, $event)"
             >
               <PlaylistCover
                 :name="pl.name"
@@ -546,7 +614,21 @@ const navigatePlaylist = (id, event) => {
                 :size="28"
                 className="h-7 w-7 rounded shrink-0"
               />
-              <span v-if="!compact" class="truncate">{{ pl.name }}</span>
+              <span v-if="!compact" class="truncate flex-1 flex items-center gap-1.5 min-w-0">
+                <span class="truncate">{{ pl.name }}</span>
+                <svg
+                  v-if="store.isSmart(pl)"
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="10"
+                  height="10"
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                  stroke="none"
+                  class="text-[var(--accent-color)] shrink-0 opacity-80"
+                >
+                  <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+                </svg>
+              </span>
             </router-link>
             </TransitionGroup>
             <div
@@ -628,7 +710,7 @@ const navigatePlaylist = (id, event) => {
             @click="store.queuePanelOpen = false; store.lyricsPanelOpen = false"
           >
             <router-view v-slot="{ Component }">
-              <keep-alive :include="['SongsView', 'AlbumsView', 'ArtistsView']">
+              <keep-alive :include="['HomeView', 'SongsView', 'AlbumsView', 'ArtistsView']">
                 <component :is="Component" :key="$route.fullPath" />
               </keep-alive>
             </router-view>
@@ -645,6 +727,9 @@ const navigatePlaylist = (id, event) => {
 
     <!-- Create-playlist modal (global overlay) -->
     <PlaylistCreateModal />
+
+    <!-- Smart-playlist rule editor (global overlay) -->
+    <SmartPlaylistModal />
 
     <!-- Fullscreen Now-Playing + lyrics (global overlay) -->
     <FullScreenPlayer />

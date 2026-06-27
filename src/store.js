@@ -4,6 +4,7 @@ import { open } from '@tauri-apps/plugin-dialog';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { idbGet, idbSet, idbDelete } from './libraryStore';
 import { sortTracks } from './sortTracks';
+import { evaluateSmartPlaylist, newSmartPlaylist } from './smartPlaylists';
 
 const appWindow = getCurrentWindow();
 
@@ -96,6 +97,20 @@ export const store = reactive({
   favorites: [],
   playlists: [], // [{ id, name, paths: [] }]
 
+  // Per-track play statistics: { [path]: { playCount, lastPlayed, skipCount } }.
+  // `lastPlayed` is a ms epoch. Drives Home insights and smart playlists.
+  stats: {},
+  // Smart playlists live in the same `playlists` array as normal ones, flagged
+  // by the presence of a `rules` object, so they share ordering, drag-reorder
+  // and rendering. `smartPlaylists` / `normalPlaylists` getters split them.
+  // Smart-playlist create/edit modal state.
+  smartModal: { open: false, mode: 'create', smartId: null },
+
+  // Recently played *containers* (not individual songs) for the Home shelf:
+  // [{ type: 'playlist'|'smart'|'station'|'album'|'collection', key, ts }].
+  // Most-recent first, de-duplicated by type+key.
+  recents: [],
+
   // Hand-off to PlayerControls' load watcher: where to start the next load and
   // whether it should auto-play. Used by "resume on launch" (seek + paused).
   pendingSeek: null,
@@ -122,6 +137,8 @@ export const store = reactive({
       await idbSet('app_state', {
         favorites: [...this.favorites],
         playlists: JSON.parse(JSON.stringify(this.playlists)),
+        stats: JSON.parse(JSON.stringify(this.stats)),
+        recents: JSON.parse(JSON.stringify(this.recents)),
         settings: {
           outputDevice: this.outputDevice,
           normalizationEnabled: this.normalizationEnabled,
@@ -209,6 +226,20 @@ export const store = reactive({
 
     this.favorites = Array.isArray(state.favorites) ? state.favorites : [];
     this.playlists = Array.isArray(state.playlists) ? state.playlists : [];
+    // Migrate legacy separately-stored smart playlists into the unified array.
+    if (Array.isArray(state.smartPlaylists) && state.smartPlaylists.length) {
+      const seen = new Set(this.playlists.map((p) => p.id));
+      for (const sp of state.smartPlaylists) {
+        if (!seen.has(sp.id)) this.playlists.push(sp);
+      }
+    }
+    // Every playlist (smart included) needs a `paths` array so library-pruning
+    // code can filter it unconditionally.
+    this.playlists.forEach((p) => {
+      if (!Array.isArray(p.paths)) p.paths = [];
+    });
+    this.stats = state.stats && typeof state.stats === 'object' ? state.stats : {};
+    this.recents = Array.isArray(state.recents) ? state.recents : [];
 
     const s = state.settings;
     if (s) {
@@ -278,6 +309,8 @@ export const store = reactive({
     this.scanComplete = false;
     this.favorites = [];
     this.playlists = [];
+    this.stats = {};
+    this.recents = [];
     this.statusMessage = 'Library reset';
     try {
       await invoke('player_stop');
@@ -903,6 +936,7 @@ export const store = reactive({
     this.playlists.forEach((pl) => {
       pl.paths = pl.paths.filter((p) => p !== path);
     });
+    delete this.stats[path];
 
     await this.persist();
     await this.persistState();
@@ -939,6 +973,7 @@ export const store = reactive({
     this.playlists.forEach((pl) => {
       pl.paths = pl.paths.filter((p) => p !== path);
     });
+    delete this.stats[path];
 
     await this.persist();
     await this.persistState();
@@ -956,7 +991,247 @@ export const store = reactive({
 
   playPlaylist(id) {
     const list = this.playlistSongs(id);
-    if (list.length > 0) this.playSong(list[0], list);
+    if (list.length > 0) {
+      this.recordRecent('playlist', id);
+      this.playSong(list[0], list);
+    }
+  },
+
+  // ---- Play statistics --------------------------------------------------
+
+  // Stats for a path, with safe defaults so callers never see undefined.
+  statFor(path) {
+    return this.stats[path] || { playCount: 0, lastPlayed: 0, skipCount: 0 };
+  },
+
+  // Mark that playback of a track has begun. Updates "last played" (drives the
+  // Recently Played row) but not the play count — that only lands once the
+  // listener has heard enough of the track (see recordPlay).
+  recordPlayStart(path) {
+    if (!path) return;
+    const cur = this.stats[path] || { playCount: 0, lastPlayed: 0, skipCount: 0 };
+    this.stats[path] = { ...cur, lastPlayed: Date.now() };
+    this.persistState();
+  },
+
+  // Count a completed/substantial listen toward the play count.
+  recordPlay(path) {
+    if (!path) return;
+    const cur = this.stats[path] || { playCount: 0, lastPlayed: 0, skipCount: 0 };
+    this.stats[path] = { ...cur, playCount: (cur.playCount || 0) + 1, lastPlayed: Date.now() };
+    this.persistState();
+  },
+
+  // Count a skip (track abandoned early). Lightweight signal, not surfaced
+  // prominently but kept for future "less interested" heuristics.
+  recordSkip(path) {
+    if (!path) return;
+    const cur = this.stats[path] || { playCount: 0, lastPlayed: 0, skipCount: 0 };
+    this.stats[path] = { ...cur, skipCount: (cur.skipCount || 0) + 1 };
+    this.persistState();
+  },
+
+  // Total number of plays across the library (for the Home summary).
+  get totalPlayCount() {
+    let n = 0;
+    for (const k in this.stats) n += this.stats[k].playCount || 0;
+    return n;
+  },
+
+  // Approximate total listening time in seconds (playCount × track duration).
+  get totalListenSeconds() {
+    const byPath = new Map(this.songs.map((s) => [s.path, s]));
+    let secs = 0;
+    for (const k in this.stats) {
+      const song = byPath.get(k);
+      if (song) secs += (this.stats[k].playCount || 0) * (song.duration_secs || 0);
+    }
+    return secs;
+  },
+
+  // ---- Insight collections (live, derived from the library + stats) ------
+  // Each getter returns songs newest/strongest first. Views slice for display.
+
+  // Adapter passed to the smart-playlist engine and reused by the getters.
+  get insightCtx() {
+    return {
+      now: Date.now(),
+      stat: (p) => this.stats[p] || { playCount: 0, lastPlayed: 0, skipCount: 0 },
+      isFavorite: (p) => this.favorites.includes(p),
+    };
+  },
+
+  get recentlyPlayedSongs() {
+    return this.songs
+      .filter((s) => this.statFor(s.path).lastPlayed > 0)
+      .sort((a, b) => this.statFor(b.path).lastPlayed - this.statFor(a.path).lastPlayed);
+  },
+
+  get mostPlayedSongs() {
+    return this.songs
+      .filter((s) => this.statFor(s.path).playCount > 0)
+      .sort((a, b) => this.statFor(b.path).playCount - this.statFor(a.path).playCount);
+  },
+
+  // "On Repeat": tracks played repeatedly and recently (last 45 days). Scored by
+  // play count, with ties broken by recency.
+  get onRepeatSongs() {
+    const cutoff = Date.now() - 45 * 86400000;
+    return this.songs
+      .filter((s) => {
+        const st = this.statFor(s.path);
+        return st.playCount >= 2 && st.lastPlayed >= cutoff;
+      })
+      .sort((a, b) => {
+        const sa = this.statFor(a.path);
+        const sb = this.statFor(b.path);
+        return sb.playCount - sa.playCount || sb.lastPlayed - sa.lastPlayed;
+      });
+  },
+
+  get recentlyAddedSongs() {
+    return [...this.songs].sort((a, b) => (b.date_added || 0) - (a.date_added || 0));
+  },
+
+  // "Rediscover": liked songs not played in the last 60 days (or never), shuffled.
+  get rediscoverSongs() {
+    const cutoff = Date.now() - 60 * 86400000;
+    const list = this.songs.filter((s) => {
+      if (!this.favorites.includes(s.path)) return false;
+      const lp = this.statFor(s.path).lastPlayed;
+      return lp === 0 || lp < cutoff;
+    });
+    for (let i = list.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [list[i], list[j]] = [list[j], list[i]];
+    }
+    return list;
+  },
+
+  // Top artists by play count (falling back to track count), for Stations.
+  get topArtists() {
+    const map = new Map();
+    for (const s of this.songs) {
+      if (!s.artist || s.artist === 'Unknown Artist') continue;
+      const cur = map.get(s.artist) || { name: s.artist, plays: 0, tracks: 0, coverPath: s.path };
+      cur.plays += this.statFor(s.path).playCount || 0;
+      cur.tracks += 1;
+      map.set(s.artist, cur);
+    }
+    return [...map.values()].sort((a, b) => b.plays - a.plays || b.tracks - a.tracks);
+  },
+
+  // Top genres by play count (falling back to track count), for Stations.
+  get topGenres() {
+    const map = new Map();
+    for (const s of this.songs) {
+      if (!s.genre) continue;
+      const cur = map.get(s.genre) || { name: s.genre, plays: 0, tracks: 0, coverPath: s.path };
+      cur.plays += this.statFor(s.path).playCount || 0;
+      cur.tracks += 1;
+      map.set(s.genre, cur);
+    }
+    return [...map.values()].sort((a, b) => b.plays - a.plays || b.tracks - a.tracks);
+  },
+
+  // ---- Recently-played containers ---------------------------------------
+
+  // Record that a container (playlist/smart/station/album/collection) was
+  // played, so the Home "Recently Played" shelf can surface it.
+  recordRecent(type, key) {
+    if (!type || !key) return;
+    this.recents = this.recents.filter((r) => !(r.type === type && r.key === key));
+    this.recents.unshift({ type, key, ts: Date.now() });
+    if (this.recents.length > 40) this.recents.length = 40;
+    this.persistState();
+  },
+
+  // ---- Stations ---------------------------------------------------------
+
+  // Play a shuffled "station" built from every track by an artist or genre.
+  playStation(type, key) {
+    let pool;
+    if (type === 'genre') pool = this.songs.filter((s) => s.genre === key);
+    else pool = this.songs.filter((s) => s.artist === key);
+    if (pool.length === 0) return;
+    const list = [...pool];
+    for (let i = list.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [list[i], list[j]] = [list[j], list[i]];
+    }
+    this.shuffleMode = false; // queue is already shuffled; play it straight
+    this.autoplayMode = true; // keep it going like a radio station
+    this.recordRecent('station', `${type}:${key}`);
+    this.playSong(list[0], list);
+  },
+
+  // ---- Smart playlists --------------------------------------------------
+
+  // Smart playlists are entries in `playlists` that carry a `rules` object;
+  // normal ones don't. These getters split the unified array for views.
+  get smartPlaylists() {
+    return this.playlists.filter((p) => p && p.rules);
+  },
+  get normalPlaylists() {
+    return this.playlists.filter((p) => p && !p.rules);
+  },
+  isSmart(pl) {
+    return !!(pl && pl.rules);
+  },
+
+  getSmartPlaylist(id) {
+    return this.playlists.find((p) => p.id === id && p.rules);
+  },
+
+  // Evaluate a smart playlist's rules against the live library.
+  smartSongs(id) {
+    const sp = this.getSmartPlaylist(id);
+    if (!sp) return [];
+    return evaluateSmartPlaylist(sp, this.songs, this.insightCtx);
+  },
+
+  playSmartPlaylist(id) {
+    const list = this.smartSongs(id);
+    if (list.length > 0) {
+      this.recordRecent('smart', id);
+      this.playSong(list[0], list);
+    }
+  },
+
+  createSmartPlaylist(data) {
+    const sp = newSmartPlaylist(data || {});
+    sp.paths = []; // keep a paths array so library-pruning code stays uniform
+    this.playlists.push(sp);
+    this.persistState();
+    return sp;
+  },
+
+  updateSmartPlaylist(id, data) {
+    const idx = this.playlists.findIndex((p) => p.id === id && p.rules);
+    if (idx >= 0) {
+      this.playlists[idx] = { ...this.playlists[idx], ...data, id };
+      this.persistState();
+    }
+  },
+
+  deleteSmartPlaylist(id) {
+    const idx = this.playlists.findIndex((p) => p.id === id && p.rules);
+    if (idx >= 0) {
+      this.playlists.splice(idx, 1);
+      this.persistState();
+    }
+  },
+
+  openSmartModal(mode = 'create', smartId = null) {
+    this.smartModal.mode = mode;
+    this.smartModal.smartId = smartId;
+    this.smartModal.open = true;
+  },
+
+  closeSmartModal() {
+    this.smartModal.open = false;
+    this.smartModal.smartId = null;
+    this.smartModal.mode = 'create';
   },
 
   togglePlay() {

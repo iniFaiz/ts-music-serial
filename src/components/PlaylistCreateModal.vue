@@ -80,15 +80,15 @@ const save = () => {
 </script>
 
 <template>
-  <Transition name="fade">
+  <Transition name="modal">
     <div
       v-if="store.playlistModal.open"
-      class="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      class="fixed inset-0 z-[200] flex items-center justify-center bg-black/70 backdrop-blur-md"
       @click.self="cancel"
       @keydown.esc="cancel"
     >
       <div
-        class="w-[520px] max-w-[92vw] bg-[#232323] rounded-xl shadow-2xl border border-[#3a3a3a] p-6"
+        class="modal-panel w-[520px] max-w-[92vw] bg-[#1c1c1e] rounded-2xl shadow-2xl border border-[#2c2c2e] p-6"
       >
         <h2 class="text-xl font-bold text-white mb-5">{{ store.playlistModal.mode === 'edit' ? 'Edit playlist' : 'Create playlist' }}</h2>
 
@@ -151,16 +151,16 @@ const save = () => {
 
         <input ref="fileInput" type="file" accept="image/*" class="hidden" @change="onFile" />
 
-        <div class="flex justify-end gap-3 mt-6">
+        <div class="flex justify-end gap-2.5 mt-6">
           <button
             @click="cancel"
-            class="px-5 py-2 rounded-full text-sm font-semibold text-[var(--text-secondary)] hover:text-white transition"
+            class="px-4 py-2 rounded-lg text-sm font-medium text-gray-400 hover:text-white bg-[#2c2c2e] hover:bg-[#3a3a3c] transition"
           >
             Cancel
           </button>
           <button
             @click="save"
-            class="px-6 py-2 rounded-full text-sm font-semibold bg-[var(--accent-color)] text-white hover:bg-red-500 transition shadow-lg"
+            class="px-5 py-2 rounded-lg text-sm font-semibold bg-[var(--accent-color)] text-white hover:bg-red-500 transition shadow-lg"
           >
             {{ store.playlistModal.mode === 'edit' ? 'Save' : 'Create' }}
           </button>
@@ -169,14 +169,3 @@ const save = () => {
     </div>
   </Transition>
 </template>
-
-<style scoped>
-.fade-enter-active,
-.fade-leave-active {
-  transition: opacity 0.18s ease;
-}
-.fade-enter-from,
-.fade-leave-to {
-  opacity: 0;
-}
-</style>

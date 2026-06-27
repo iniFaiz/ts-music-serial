@@ -13,6 +13,15 @@ export async function navigateWithTransition(
   name = 'shared-cover',
   transitionClass = 'to-artist-transition'
 ) {
+  if (sourceEl && typeof document !== 'undefined') {
+    // Clear previous clicked elements to avoid duplicates
+    document.querySelectorAll('[data-last-clicked]').forEach((el) => {
+      el.removeAttribute('data-last-clicked');
+    });
+    // Tag the clicked element so we can uniquely find it on back transition
+    sourceEl.setAttribute('data-last-clicked', 'true');
+  }
+
   if (typeof document === 'undefined' || !document.startViewTransition) {
     await navigate();
     return;
@@ -97,8 +106,11 @@ export async function navigateWithTransition(
 // (quotes, brackets) can't break the query.
 function getRouteKey(route) {
   if (!route || !route.params) return null;
-  if (route.name === 'PlaylistDetail') {
+  if (route.name === 'PlaylistDetail' || route.name === 'SmartPlaylistDetail') {
     return route.params.id ?? null;
+  }
+  if (route.name === 'CollectionDetail') {
+    return route.params.key ?? null;
   }
   if (route.name === 'AlbumDetail' || route.name === 'ArtistDetail') {
     return route.params.name ?? null;
@@ -106,11 +118,27 @@ function getRouteKey(route) {
   return route.params.name ?? route.params.id ?? null;
 }
 
+// Checks if the artist key string contains the target artist name, accounting
+// for multiple artists formatted with commas, semicolons, slashes, or ampersands.
+function artistKeysMatch(artistKeyStr, targetArtist) {
+  if (!artistKeyStr || !targetArtist) return false;
+  const lowerTarget = targetArtist.trim().toLowerCase();
+  // Split by common delimiters: comma, semicolon, slash, amp, and words like feat/ft
+  const parts = artistKeyStr.split(/[,;/&]|\bfeat\b|\bft\b/i).map((s) => s.trim().toLowerCase());
+  return parts.includes(lowerTarget) || artistKeyStr.trim().toLowerCase() === lowerTarget;
+}
+
 function findCoverByKey(key) {
   if (key == null) return null;
-  const nodes = document.querySelectorAll('[data-cover-key]');
+  // Match either a cover key (albums/playlists/collections) or an artist key
+  // (song cards/rows) — the latter lets artist back/forward navigation morph
+  // even when opened from a page whose items only carry data-artist-key.
+  const nodes = document.querySelectorAll('[data-cover-key], [data-artist-key]');
   for (const n of nodes) {
-    if (n.dataset.coverKey === String(key) || n.dataset.artistKey === String(key)) {
+    if (
+      n.dataset.coverKey === String(key) ||
+      artistKeysMatch(n.dataset.artistKey, String(key))
+    ) {
       return n.querySelector('.cover-image') || n;
     }
   }
@@ -131,8 +159,13 @@ export async function goBackWithTransition(router, name = 'shared-cover') {
   }
 
   const backPath = window.history.state && window.history.state.back;
+  // Pick the morph shape from the cover we're leaving first (an artist cover is
+  // circular), then fall back to the destination — so artist back-navigation
+  // animates the same way no matter where it was opened from.
   let transitionClass = 'to-album-transition';
-  if (backPath) {
+  if (from && from.name === 'ArtistDetail') {
+    transitionClass = 'to-artist-transition';
+  } else if (backPath) {
     try {
       const resolved = router.resolve(backPath);
       if (resolved && (resolved.name === 'ArtistDetail' || resolved.name === 'ArtistsView')) {
@@ -157,7 +190,27 @@ export async function goBackWithTransition(router, name = 'shared-cover') {
       setTimeout(resolve, 500);
     });
     await nextTick();
-    const el = findCoverByKey(key);
+
+    // 1. Try to find the exact last clicked cover element
+    let el = document.querySelector('[data-last-clicked="true"]');
+    if (el) {
+      const parent = el.closest('[data-cover-key], [data-artist-key]') || el;
+      const coverKey = parent.dataset.coverKey ? String(parent.dataset.coverKey) : '';
+      const artistKey = parent.dataset.artistKey ? String(parent.dataset.artistKey) : '';
+      const matches =
+        coverKey === String(key) ||
+        artistKey === String(key) ||
+        artistKeysMatch(artistKey, String(key));
+      if (!matches) {
+        el = null; // Mismatch, clear to fall back to generic finder
+      }
+    }
+
+    // 2. If no exact match, search using findCoverByKey
+    if (!el) {
+      el = findCoverByKey(key);
+    }
+
     if (el) {
       tagged = el;
       tagged.dataset._prevVt = el.style.getPropertyValue('view-transition-name') || '';

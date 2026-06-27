@@ -37,6 +37,7 @@ struct MusicTrack {
     title: String,
     artist: String,
     album: String,
+    genre: Option<String>,
     duration_secs: u64,
     date_added: u64,
     year: Option<u32>,
@@ -111,6 +112,11 @@ fn parse_metadata(path: &Path) -> Option<MusicTrack> {
     let album = tag
         .and_then(|t| t.album().map(|s| s.to_string()))
         .unwrap_or_else(|| "Unknown Album".to_string());
+    // Genre is optional — many files lack it. Trimmed so blank tags become None,
+    // which lets the frontend's smart-playlist genre rules ignore them cleanly.
+    let genre = tag
+        .and_then(|t| t.genre().map(|s| s.trim().to_string()))
+        .filter(|s| !s.is_empty());
     let year = tag.and_then(|t| t.year());
     let track_number = tag.and_then(|t| t.track());
     let duration_secs = properties.duration().as_secs();
@@ -131,6 +137,7 @@ fn parse_metadata(path: &Path) -> Option<MusicTrack> {
         title,
         artist,
         album,
+        genre,
         duration_secs,
         date_added,
         year,

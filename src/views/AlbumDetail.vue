@@ -55,12 +55,14 @@ const albumInfo = computed(() => {
 
 const playAlbum = () => {
   if (albumSongs.value.length > 0) {
+    store.recordRecent('album', albumName);
     store.playSong(albumSongs.value[0], albumSongs.value);
   }
 };
 
 const shuffleAlbum = () => {
   if (albumSongs.value.length > 0) {
+    store.recordRecent('album', albumName);
     store.shuffleMode = true;
     const randomIndex = Math.floor(Math.random() * albumSongs.value.length);
     store.playSong(albumSongs.value[randomIndex], albumSongs.value);

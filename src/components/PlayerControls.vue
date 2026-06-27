@@ -70,10 +70,38 @@ let stateTimer = null;
 let endedHandledFor = null; // latch so a finished track only advances once
 let loadToken = 0; // guards against a stale load winning after a rapid skip
 
+// ---- Play-stat tracking (feeds Home insights + smart playlists) ----
+// `playStartedFor` latches the "last played" timestamp once per load session;
+// `playCountedFor` latches the play-count bump once a track is heard enough.
+// `lastPolled` remembers the outgoing track's progress so we can tell a skip
+// (abandoned early) from a natural finish.
+let playStartedFor = null;
+let playCountedFor = null;
+let lastPolled = { path: null, time: 0, finished: false };
+
+const recordStart = (path) => {
+  if (!path || playStartedFor === path) return;
+  playStartedFor = path;
+  store.recordPlayStart(path);
+};
+
 // Load (and usually play) whenever the selected song changes.
 watch(
   () => store.currentSong,
   async (song) => {
+    // Skip accounting for the track we're leaving: if it wasn't counted as a
+    // play and wasn't allowed to finish, treat the early change as a skip.
+    const leaving = lastPolled.path;
+    if (leaving && (!song || leaving !== song.path)) {
+      if (playCountedFor !== leaving && !lastPolled.finished && lastPolled.time > 2) {
+        store.recordSkip(leaving);
+      }
+    }
+    // New load session — clear the per-track stat latches.
+    playStartedFor = null;
+    playCountedFor = null;
+    lastPolled = { path: song ? song.path : null, time: 0, finished: false };
+
     if (!song) {
       losslessPopupOpen.value = false;
       playbackError.value = null;
@@ -99,6 +127,7 @@ watch(
       store.duration = song.duration_secs || 0;
       store.currentSampleRate = song.sample_rate;
       store.currentBitDepth = song.bit_depth;
+      recordStart(song.path); // gapless/crossfade auto-advance is always playing
       pushMediaMetadata(song);
       pushMediaPlayback();
       return;
@@ -137,6 +166,7 @@ watch(
       store.currentTime = startPos;
       seekValue.value = startPos;
       store.isPlaying = autoplay;
+      if (autoplay) recordStart(song.path);
       pushMediaMetadata(song);
       pushMediaPlayback();
 
@@ -176,6 +206,8 @@ watch(
 watch(
   () => store.isPlaying,
   async (playing) => {
+    // Count a "last played" the first time a loaded-but-paused track starts.
+    if (playing && store.currentSong) recordStart(store.currentSong.path);
     pushMediaPlayback();
     try {
       await invoke(playing ? 'player_resume' : 'player_pause');
@@ -369,6 +401,22 @@ const poll = async () => {
         seekValue.value = status.position;
       }
     }
+    // Count a play once the listener has heard enough of the track (half its
+    // length, capped at 4 minutes) — mirrors Apple Music's play-count rule.
+    if (store.currentSong && store.duration > 0) {
+      const threshold = Math.min(store.duration * 0.5, 240);
+      if (store.currentTime >= threshold && playCountedFor !== store.currentSong.path) {
+        playCountedFor = store.currentSong.path;
+        store.recordPlay(store.currentSong.path);
+      }
+      // Snapshot progress so a subsequent track change can classify skip vs finish.
+      lastPolled = {
+        path: store.currentSong.path,
+        time: store.currentTime,
+        finished: !!status.finished,
+      };
+    }
+
     if (status.finished) {
       finishedTicks++;
       if (store.transitionMode === 'off' || finishedTicks > 5) {

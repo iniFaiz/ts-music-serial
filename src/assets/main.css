@@ -36,6 +36,25 @@ body {
   @apply bg-gray-500/80;
 }
 
+/* Standard modal transition (shared by the create-playlist + smart-playlist
+   editors): the backdrop fades while the panel scales/lifts in and out. */
+.modal-enter-active,
+.modal-leave-active {
+  transition: opacity 0.22s ease;
+}
+.modal-enter-from,
+.modal-leave-to {
+  opacity: 0;
+}
+.modal-enter-active .modal-panel,
+.modal-leave-active .modal-panel {
+  transition: transform 0.26s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.modal-enter-from .modal-panel,
+.modal-leave-to .modal-panel {
+  transform: scale(0.95) translateY(8px);
+}
+
 /* Shared-element transition: the cover art glides from the list to the detail
    page (and back) instead of cutting. Tuned for a smooth spring-like ease. */
 ::view-transition-group(shared-cover) {

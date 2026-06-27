@@ -563,6 +563,7 @@ onUnmounted(() => {
         v-for="(song, index) in sortedSongs"
         :key="song.path"
         :data-song-path="song.path"
+        :data-artist-key="song.artist"
         :data-pl-drag-idx="canReorder ? index : undefined"
         @click="plDragDidReorder ? null : (selectMode ? toggleSelectSong(song) : playSong(song))"
         @contextmenu.prevent="openMenu(song, $event)"
@@ -781,7 +782,6 @@ onUnmounted(() => {
               : 'Add to Liked Songs'
           }}
         </button>
-
         <div class="border-t border-[#3a3a3a] my-1"></div>
 
         <div class="px-4 py-1 text-[11px] uppercase tracking-wide text-gray-500">
@@ -789,7 +789,7 @@ onUnmounted(() => {
         </div>
         <div class="max-h-40 overflow-auto scrollbar-thin">
           <button
-            v-for="pl in store.playlists"
+            v-for="pl in store.normalPlaylists"
             :key="pl.id"
             @click="addToPlaylist(pl.id)"
             class="w-full text-left px-4 py-1.5 hover:bg-[#3a3a3a] transition-colors truncate"
@@ -926,12 +926,31 @@ onUnmounted(() => {
                     infoSong ? formatDuration(infoSong.duration_secs) : ''
                   }}</span>
                 </div>
+                <div class="grid grid-cols-[100px_1fr] gap-2 items-baseline" v-if="infoSong?.genre">
+                  <span class="text-gray-500">Genre:</span>
+                  <span class="text-white font-medium truncate">{{ infoSong?.genre }}</span>
+                </div>
                 <div class="grid grid-cols-[100px_1fr] gap-2 items-baseline">
                   <span class="text-gray-500">Date Added:</span>
                   <span class="text-white font-medium">
                     {{ infoSong ? new Date(infoSong.date_added * 1000).toLocaleString() : '' }}
                   </span>
                 </div>
+                <div class="grid grid-cols-[100px_1fr] gap-2 items-baseline">
+                  <span class="text-gray-500">Plays:</span>
+                  <span class="text-white font-medium">{{ infoSong ? store.statFor(infoSong.path).playCount : 0 }}</span>
+                </div>
+                <div class="grid grid-cols-[100px_1fr] gap-2 items-baseline">
+                  <span class="text-gray-500">Last Played:</span>
+                  <span class="text-white font-medium">
+                    {{
+                      infoSong && store.statFor(infoSong.path).lastPlayed
+                        ? new Date(store.statFor(infoSong.path).lastPlayed).toLocaleString()
+                        : 'Never'
+                    }}
+                  </span>
+                </div>
+
               </div>
             </div>
 
@@ -1084,14 +1103,14 @@ onUnmounted(() => {
             class="absolute bottom-12 left-0 z-[160] w-48 bg-[#282828] border border-[#3a3a3a] rounded-md shadow-2xl py-1 text-left text-sm max-h-40 overflow-auto scrollbar-thin"
           >
             <button
-              v-for="pl in store.playlists"
+              v-for="pl in store.normalPlaylists"
               :key="pl.id"
               @click="addSelectedToPlaylist(pl.id)"
               class="w-full text-left px-4 py-2 hover:bg-[#3a3a3c] transition-colors truncate"
             >
               {{ pl.name }}
             </button>
-            <div class="border-t border-[#3a3a3a] my-1" v-if="store.playlists.length > 0"></div>
+            <div class="border-t border-[#3a3a3a] my-1" v-if="store.normalPlaylists.length > 0"></div>
             <button
               @click="newPlaylistWithSelected"
               class="w-full text-left px-4 py-2 text-[var(--accent-color)] hover:bg-[#3a3a3c] transition-colors"
