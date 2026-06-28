@@ -143,6 +143,14 @@
       </div>
     </Section>
 
+    <!-- Equalizer -->
+    <Section
+      title="Equalizer"
+      description="10-band graphic equalizer applied in real time. Boost or cut frequency bands, or pick a preset. Changes take effect instantly, even mid-track."
+    >
+      <EqualizerPanel />
+    </Section>
+
     <!-- Lyrics -->
     <Section
       title="Lyrics"
@@ -206,6 +214,7 @@ import Section from '../components/settings/Section.vue';
 import ToggleInt from '../components/settings/ToggleInt.vue';
 import SelectInt from '../components/settings/SelectInt.vue';
 import SliderInt from '../components/settings/SliderInt.vue';
+import EqualizerPanel from '../components/EqualizerPanel.vue';
 
 const devices = ref([]);
 

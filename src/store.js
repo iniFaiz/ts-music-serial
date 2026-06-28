@@ -5,6 +5,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { idbGet, idbSet, idbDelete } from './libraryStore';
 import { sortTracks } from './sortTracks';
 import { evaluateSmartPlaylist, newSmartPlaylist } from './smartPlaylists';
+import { EQ_PRESETS, EQ_BAND_COUNT, EQ_MIN_DB, EQ_MAX_DB, matchPreset } from './equalizer';
 
 const appWindow = getCurrentWindow();
 
@@ -77,6 +78,13 @@ export const store = reactive({
   // Track-to-track transition: 'off' | 'gapless' | 'crossfade'.
   transitionMode: 'off',
   crossfadeSecs: 6,
+  // 10-band graphic equalizer (DSP runs in Rust as a Source filter). `eqBands`
+  // holds per-band gains in dB for the ISO octave bands 31Hz..16kHz; `eqPreset`
+  // is the selected preset id, or 'custom' once a band is hand-adjusted.
+  eqEnabled: false,
+  eqPreampDb: 0,
+  eqBands: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+  eqPreset: 'flat',
   // Optional Musixmatch community user token for the lyrics fallback chain.
   musixmatchToken: '',
   // Selected lyrics provider: 'lrclib' | 'local' | 'netease' | 'musixmatch' | 'none'
@@ -145,6 +153,10 @@ export const store = reactive({
           normalizationPreampDb: this.normalizationPreampDb,
           transitionMode: this.transitionMode,
           crossfadeSecs: this.crossfadeSecs,
+          eqEnabled: this.eqEnabled,
+          eqPreampDb: this.eqPreampDb,
+          eqBands: [...this.eqBands],
+          eqPreset: this.eqPreset,
           musixmatchToken: this.musixmatchToken,
           lyricsSource: this.lyricsSource,
           showRomaji: this.showRomaji,
@@ -250,6 +262,11 @@ export const store = reactive({
         this.normalizationPreampDb = s.normalizationPreampDb;
       if (typeof s.transitionMode === 'string') this.transitionMode = s.transitionMode;
       if (typeof s.crossfadeSecs === 'number') this.crossfadeSecs = s.crossfadeSecs;
+      if (typeof s.eqEnabled === 'boolean') this.eqEnabled = s.eqEnabled;
+      if (typeof s.eqPreampDb === 'number') this.eqPreampDb = s.eqPreampDb;
+      if (Array.isArray(s.eqBands) && s.eqBands.length === EQ_BAND_COUNT)
+        this.eqBands = s.eqBands.map((n) => Number(n) || 0);
+      if (typeof s.eqPreset === 'string') this.eqPreset = s.eqPreset;
       if (typeof s.musixmatchToken === 'string') this.musixmatchToken = s.musixmatchToken;
       if (typeof s.lyricsSource === 'string') this.lyricsSource = s.lyricsSource;
       if (typeof s.showRomaji === 'boolean') this.showRomaji = s.showRomaji;
@@ -269,6 +286,7 @@ export const store = reactive({
       enabled: this.normalizationEnabled,
       preampDb: this.normalizationPreampDb
     }).catch(() => {});
+    this.syncEqualizer();
 
     const pb = state.playback;
     if (!pb) return;
@@ -596,6 +614,54 @@ export const store = reactive({
       crossfadeSecs: this.crossfadeSecs,
     }).catch(() => {});
   },
+  // ---- Equalizer ---------------------------------------------------------
+
+  // Push the current EQ state to the Rust DSP filter. Called on every change and
+  // once on startup (so a saved EQ is applied to the restored track).
+  syncEqualizer() {
+    invoke('player_set_equalizer', {
+      enabled: this.eqEnabled,
+      gains: [...this.eqBands],
+      preampDb: this.eqPreampDb,
+    }).catch(() => {});
+  },
+  setEqEnabled(v) {
+    this.eqEnabled = !!v;
+    this.persistState();
+    this.syncEqualizer();
+  },
+  setEqBand(i, v) {
+    if (i < 0 || i >= this.eqBands.length) return;
+    const bands = [...this.eqBands];
+    bands[i] = Math.max(EQ_MIN_DB, Math.min(EQ_MAX_DB, Number(v) || 0));
+    this.eqBands = bands;
+    // Hand-editing a band switches the selection to the matching preset (if the
+    // curve happens to equal one) or 'custom'.
+    this.eqPreset = matchPreset(bands);
+    this.persistState();
+    this.syncEqualizer();
+  },
+  setEqPreamp(v) {
+    this.eqPreampDb = Math.max(EQ_MIN_DB, Math.min(EQ_MAX_DB, Number(v) || 0));
+    this.persistState();
+    this.syncEqualizer();
+  },
+  applyEqPreset(id) {
+    const preset = EQ_PRESETS[id];
+    if (!preset) return;
+    this.eqBands = [...preset.gains];
+    this.eqPreset = id;
+    this.persistState();
+    this.syncEqualizer();
+  },
+  resetEq() {
+    this.eqBands = [...EQ_PRESETS.flat.gains];
+    this.eqPreampDb = 0;
+    this.eqPreset = 'flat';
+    this.persistState();
+    this.syncEqualizer();
+  },
+
   setMusixmatchToken(v) {
     this.musixmatchToken = String(v || '').trim();
     this.persistState();
