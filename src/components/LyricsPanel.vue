@@ -283,6 +283,7 @@ function seekToLine(line) {
             :class="[
               i === activeIdx ? 'lp-active' : 'lp-dim',
               line.isGap ? 'lp-line-gap' : '',
+              (line.words && line.words.length) ? 'lp-words' : '',
             ]"
           >
             <span
@@ -385,6 +386,19 @@ function seekToLine(line) {
     opacity    0.45s cubic-bezier(0.25, 1, 0.5, 1),
     transform  0.5s  cubic-bezier(0.34, 1.56, 0.64, 1);
   transform-origin: left center;
+}
+
+/* Word-by-word (karaoke) lines drive their brightness with the gradient wipe, so
+   entering the active state must NOT also ride the slow opacity ramp: transitioning
+   opacity up from 0.22 while the dim (unsung, 34%) fill is shown would dip the text
+   darker than the line it replaced before brightening — the "dark flash". A CSS
+   transition is governed by the *destination* state, so we strip opacity only on
+   the active state (snap in, no dip). The base .lp-line keeps opacity in its
+   transition, so leaving active (→ .lp-dim) still fades the finished line out. */
+.lp-line.lp-words.lp-active {
+  transition:
+    color      0.45s cubic-bezier(0.25, 1, 0.5, 1),
+    transform  0.5s  cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 /* Active line: full white, nudged slightly right, very subtle scale pop */

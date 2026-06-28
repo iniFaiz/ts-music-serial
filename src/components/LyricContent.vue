@@ -83,6 +83,12 @@ function wordStyle(w) {
   -webkit-text-fill-color: transparent;
   white-space: pre-wrap;
   transition: background-position 0.12s linear;
+  /* Karaoke glyphs are filled by a semi-transparent gradient (unsung = 34%
+     opacity). An inherited text-shadow (used by the fullscreen player) would
+     bleed through those low-opacity glyphs and darken them, so the fullscreen
+     karaoke looked muddier than the shadow-less sidebar. Drop the shadow here so
+     both views render the wipe identically. Plain (non-karaoke) lines keep it. */
+  text-shadow: none;
 }
 .lc-word.lc-sung {
   background-position-x: 0%;

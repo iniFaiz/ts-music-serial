@@ -748,6 +748,7 @@ const goToAlbum = (albumName) => {
                   synced ? 'cursor-pointer' : '',
                   i === activeIdx ? 'np-line-active' : 'np-line-dim',
                   line.isGap ? 'np-line-gap' : 'mb-4',
+                  (line.words && line.words.length) ? 'np-words' : '',
                 ]"
               >
                 <span
@@ -896,6 +897,19 @@ input[type='range']::-webkit-slider-thumb {
   padding-right: 24px; /* Prevent text clipping on scale/translate */
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 2px 6px rgba(0, 0, 0, 0.15);
 }
+/* Word-by-word (karaoke) lines drive their brightness with the gradient wipe, so
+   entering the active state must NOT also ride the slow opacity ramp: transitioning
+   opacity up from 0.28 while the dim (unsung, 34%) fill is shown would dip the text
+   dark before brightening — the "dark flash". A CSS transition is governed by the
+   *destination* state, so we strip opacity only on the active state (snap in, no
+   dip). The base .np-line keeps opacity in its transition, so leaving active
+   (→ .np-line-dim) still fades the finished line out. */
+.np-line.np-words.np-line-active {
+  transition:
+    color     0.45s cubic-bezier(0.25, 1, 0.5, 1),
+    transform 0.5s  cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
 .np-line-active {
   color: rgba(255, 255, 255, 0.97);
   opacity: 1;
