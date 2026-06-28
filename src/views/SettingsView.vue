@@ -143,6 +143,28 @@
       </div>
     </Section>
 
+    <!-- Mini Player -->
+    <Section
+      title="Mini Player"
+      description="A compact Apple-Music-style player with synced lyrics. Toggle it any time with Ctrl+Shift+M."
+    >
+      <ToggleInt
+        :modelValue="store.miniAlwaysOnTop"
+        @update:modelValue="(v) => store.setMiniAlwaysOnTop(v)"
+        label="Always on top"
+      />
+      <p class="text-xs text-gray-500 -mt-1 mb-3">
+        Keeps the mini player floating above other windows while it's open.
+      </p>
+      <button
+        @click="store.enterMiniPlayer()"
+        :disabled="store.miniPlayerOpen"
+        class="text-sm font-semibold text-[var(--accent-color)] hover:underline disabled:opacity-50"
+      >
+        Open mini player (Ctrl+Shift+M)
+      </button>
+    </Section>
+
     <!-- Equalizer -->
     <Section
       title="Equalizer"

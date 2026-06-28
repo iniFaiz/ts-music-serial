@@ -1,13 +1,34 @@
 import { reactive } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
-import { getCurrentWindow } from '@tauri-apps/api/window';
+import { getCurrentWindow, LogicalSize } from '@tauri-apps/api/window';
 import { idbGet, idbSet, idbDelete } from './libraryStore';
 import { sortTracks } from './sortTracks';
 import { evaluateSmartPlaylist, newSmartPlaylist } from './smartPlaylists';
 import { EQ_PRESETS, EQ_BAND_COUNT, EQ_MIN_DB, EQ_MAX_DB, matchPreset } from './equalizer';
 
 const appWindow = getCurrentWindow();
+
+// Mini player window sizes per sub-view (logical px). The window resizes between
+// these as the user switches lyrics / album-art / compact, Apple-Music style.
+const MINI_SIZES = {
+  lyrics: { w: 360, h: 620 },
+  compact: { w: 360, h: 150 },
+  artwork: { w: 360, h: 360 },
+};
+const MINI_MIN_WIDTH = 360;
+const MINI_MIN_HEIGHT = 150;
+// The main window's original minimum + default size (mirrors tauri.conf.json).
+// The default is the fallback restore size if the saved size is ever missing.
+const MAIN_MIN_WIDTH = 1000;
+const MAIN_MIN_HEIGHT = 480;
+const MAIN_DEFAULT_WIDTH = 1200;
+const MAIN_DEFAULT_HEIGHT = 700;
+
+// Window geometry saved when entering the mini player, restored on exit. Kept at
+// module scope (not in the reactive store) so it's never persisted/serialized.
+let savedWindowSize = null; // PhysicalSize from outerSize()
+let savedWindowMaximized = false;
 
 // Directory portion of a file path (handles both / and \ separators).
 function dirName(path) {
@@ -96,6 +117,12 @@ export const store = reactive({
   // Fullscreen Now-Playing overlay (Apple Music style cover + synced lyrics).
   fullscreenOpen: false,
   fullscreenOverlayVisible: false,
+
+  // Apple-Music-style compact mini player. Toggled with Ctrl+Shift+M; shrinks the
+  // window and shows a synced-lyrics overlay. `miniAlwaysOnTop` (persisted) keeps
+  // the mini window floating above other apps while it's open.
+  miniPlayerOpen: false,
+  miniAlwaysOnTop: false,
   // Currently selected/active album for keyboard shortcut actions.
   selectedAlbum: null,
   // Drop-overlay visibility while a drag is over the window.
@@ -160,6 +187,7 @@ export const store = reactive({
           musixmatchToken: this.musixmatchToken,
           lyricsSource: this.lyricsSource,
           showRomaji: this.showRomaji,
+          miniAlwaysOnTop: this.miniAlwaysOnTop,
         },
         playback: {
           songPath: this.currentSong ? this.currentSong.path : null,
@@ -270,6 +298,7 @@ export const store = reactive({
       if (typeof s.musixmatchToken === 'string') this.musixmatchToken = s.musixmatchToken;
       if (typeof s.lyricsSource === 'string') this.lyricsSource = s.lyricsSource;
       if (typeof s.showRomaji === 'boolean') this.showRomaji = s.showRomaji;
+      if (typeof s.miniAlwaysOnTop === 'boolean') this.miniAlwaysOnTop = s.miniAlwaysOnTop;
 
       // Re-select the saved output device (the audio thread starts on default).
       if (this.outputDevice) {
@@ -730,6 +759,91 @@ export const store = reactive({
       this.exitFullscreenWithTransition();
     } else {
       this.enterFullscreenWithTransition();
+    }
+  },
+
+  // ---- Mini player (Apple Music compact window) --------------------------
+
+  // Shrink the window into the compact mini player. The overlay is shown first
+  // so the resize never flashes the squished full UI. The original size and
+  // maximized state are saved for an exact restore.
+  async enterMiniPlayer() {
+    if (this.miniPlayerOpen) return;
+    // The mini player and native fullscreen are mutually exclusive.
+    if (this.fullscreenOpen) await this.exitFullscreenWithTransition();
+    this.miniPlayerOpen = true;
+    try {
+      savedWindowMaximized = await appWindow.isMaximized();
+      if (savedWindowMaximized) await appWindow.unmaximize();
+      savedWindowSize = await appWindow.outerSize();
+      // Lower the min size before shrinking, or the OS clamps the new size.
+      await appWindow.setMinSize(new LogicalSize(MINI_MIN_WIDTH, MINI_MIN_HEIGHT));
+      await this.applyMiniViewSize('lyrics');
+      await appWindow.setResizable(false);
+      await appWindow.setAlwaysOnTop(this.miniAlwaysOnTop);
+    } catch (e) {
+      console.warn('Failed to enter mini player', e);
+    }
+  },
+
+  // Resize the mini window to fit a sub-view ('lyrics' | 'compact' | 'artwork').
+  // Driven by MiniPlayer.vue as the user toggles views.
+  async applyMiniViewSize(view) {
+    if (!this.miniPlayerOpen) return;
+    const s = MINI_SIZES[view] || MINI_SIZES.lyrics;
+    try {
+      await appWindow.setSize(new LogicalSize(s.w, s.h));
+    } catch (e) {
+      console.warn('Failed to resize mini player', e);
+    }
+  },
+
+  // Resize to an explicit logical size — used by the compact bar, which measures
+  // its own content height so it fits exactly (no stray gap / clipping).
+  async applyMiniSize(width, height) {
+    if (!this.miniPlayerOpen) return;
+    try {
+      await appWindow.setSize(new LogicalSize(Math.round(width), Math.round(height)));
+    } catch (e) {
+      console.warn('Failed to resize mini player', e);
+    }
+  },
+
+  // Restore the full window. `miniPlayerOpen` is flipped to false FIRST so any
+  // pending mini view-resize (applyMiniViewSize/applyMiniSize/fitCompact, some
+  // scheduled via nextTick) becomes a no-op and can't shrink the window back to
+  // the mini size after we restore it — that race was leaving the main window
+  // stuck at the mini size on exit. The leave transition fades the overlay over
+  // the (fast) grow-back so there's no flash of the squished full UI.
+  async exitMiniPlayer() {
+    if (!this.miniPlayerOpen) return;
+    this.miniPlayerOpen = false;
+    try {
+      await appWindow.setAlwaysOnTop(false);
+      await appWindow.setResizable(true);
+      await appWindow.setMinSize(new LogicalSize(MAIN_MIN_WIDTH, MAIN_MIN_HEIGHT));
+      // Fall back to the default size if the saved size is somehow missing, so the
+      // window is never left stuck at the mini size.
+      const target = savedWindowSize || new LogicalSize(MAIN_DEFAULT_WIDTH, MAIN_DEFAULT_HEIGHT);
+      await appWindow.setSize(target);
+      if (savedWindowMaximized) await appWindow.maximize();
+    } catch (e) {
+      console.warn('Failed to exit mini player', e);
+    }
+    savedWindowSize = null;
+    savedWindowMaximized = false;
+  },
+
+  toggleMiniPlayer() {
+    if (this.miniPlayerOpen) this.exitMiniPlayer();
+    else this.enterMiniPlayer();
+  },
+
+  setMiniAlwaysOnTop(v) {
+    this.miniAlwaysOnTop = !!v;
+    this.persistState();
+    if (this.miniPlayerOpen) {
+      appWindow.setAlwaysOnTop(this.miniAlwaysOnTop).catch(() => {});
     }
   },
 

@@ -11,6 +11,7 @@ import SmartPlaylistModal from './components/SmartPlaylistModal.vue';
 import PlaylistCover from './components/PlaylistCover.vue';
 import TitleBar from './components/TitleBar.vue';
 import FullScreenPlayer from './components/FullScreenPlayer.vue';
+import MiniPlayer from './components/MiniPlayer.vue';
 import LyricsPanel from './components/LyricsPanel.vue';
 import { navigateWithTransition, goBackWithTransition, goForwardWithTransition } from './viewTransition';
 
@@ -28,10 +29,21 @@ watch(
 
 // ---- Global keyboard shortcuts ----
 const handleKeydown = (e) => {
-  // Ctrl+Shift+F toggles the fullscreen Now-Playing view and enters native monitor fullscreen.
+  // Ctrl+Shift+F toggles the fullscreen Now-Playing view and enters native monitor
+  // fullscreen. Ignored while the mini player is open (the two window modes conflict).
   if (e.ctrlKey && e.shiftKey && (e.key === 'F' || e.key === 'f')) {
     e.preventDefault();
-    store.toggleFullscreen();
+    if (!store.miniPlayerOpen) store.toggleFullscreen();
+    return;
+  }
+  // Ctrl+Shift+M toggles the Apple-Music-style compact mini player.
+  if (e.ctrlKey && e.shiftKey && (e.key === 'M' || e.key === 'm')) {
+    e.preventDefault();
+    store.toggleMiniPlayer();
+    return;
+  }
+  if (e.key === 'Escape' && store.miniPlayerOpen) {
+    store.exitMiniPlayer();
     return;
   }
   if (e.key === 'Escape' && store.fullscreenOpen) {
@@ -733,6 +745,9 @@ const navigatePlaylist = (pl, event) => {
 
     <!-- Fullscreen Now-Playing + lyrics (global overlay) -->
     <FullScreenPlayer />
+
+    <!-- Compact mini player (global overlay, Ctrl+Shift+M) -->
+    <MiniPlayer />
 
     <!-- Fullscreen black transition overlay -->
     <Transition name="fullscreen-fade">
