@@ -1,5 +1,5 @@
 <template>
-  <div class="py-2.5">
+  <div class="py-2.5" :class="{ 'opacity-40 pointer-events-none select-none': disabled }">
     <div class="flex items-center justify-between mb-2">
       <span class="text-gray-300 font-medium text-sm">{{ label }}</span>
       <span class="text-sm text-gray-400 tabular-nums">{{ display }}</span>
@@ -10,8 +10,9 @@
       :max="max"
       :step="step"
       :value="modelValue"
+      :disabled="disabled"
       @input="$emit('update:modelValue', Number($event.target.value))"
-      class="w-full h-1 rounded-lg appearance-none cursor-pointer"
+      class="w-full h-1 rounded-lg appearance-none cursor-pointer disabled:cursor-not-allowed"
       :style="{
         background: `linear-gradient(to right, var(--accent-color) ${pct}%, #4b5563 ${pct}%)`,
       }"
@@ -29,6 +30,7 @@ const props = defineProps({
   max: { type: Number, default: 100 },
   step: { type: Number, default: 1 },
   suffix: { type: String, default: '' },
+  disabled: { type: Boolean, default: false },
 });
 defineEmits(['update:modelValue']);
 

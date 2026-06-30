@@ -55,6 +55,7 @@ const handleKeydown = (e) => {
 let unlistenDrop = null;
 // ---- Filesystem watcher → debounced library refresh ----
 let unlistenLibraryChanged = null;
+let unlistenExclusiveErr = null;
 let refreshTimer = null;
 
 const scrollContainer = ref(null);
@@ -204,6 +205,21 @@ onMounted(async () => {
   } catch {
     // watcher best-effort
   }
+
+  // Surface WASAPI-exclusive fallback so the user knows it dropped to shared mode.
+  try {
+    unlistenExclusiveErr = await listen('wasapi-exclusive-error', (e) => {
+      const msg = e && e.payload ? `: ${e.payload}` : '';
+      store.statusMessage = `WASAPI exclusive unavailable — using shared mode${msg}`;
+      // The backend has already disabled exclusive mode; sync the frontend.
+      if (store.wasapiExclusive) {
+        store.wasapiExclusive = false;
+        store.persistState();
+      }
+    });
+  } catch {
+    // best-effort
+  }
 });
 
 onUnmounted(() => {
@@ -214,6 +230,7 @@ onUnmounted(() => {
   window.removeEventListener('keydown', handleKeydown);
   if (unlistenDrop) unlistenDrop();
   if (unlistenLibraryChanged) unlistenLibraryChanged();
+  if (unlistenExclusiveErr) unlistenExclusiveErr();
   if (refreshTimer) clearTimeout(refreshTimer);
   // Cleanup sidebar playlist drag
   document.removeEventListener('mousemove', onSidebarPlMouseMove);

@@ -20,9 +20,12 @@ use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink, Source};
 use tauri::{AppHandle, Emitter, Manager, State};
 use walkdir::WalkDir;
 
+mod discord;
 mod lyrics;
 #[cfg(target_os = "windows")]
 mod thumbbar;
+#[cfg(target_os = "windows")]
+mod exclusive;
 
 const SUPPORTED_EXTS: [&str; 6] = ["mp3", "flac", "wav", "m4a", "ogg", "aac"];
 // Cover art is downscaled to this maximum edge (px) before being sent to the
@@ -378,6 +381,7 @@ enum AudioCommand {
     // The reply channel is signalled once the device is open.
     OpenDevice(Option<String>, mpsc::Sender<()>),
     CreateSink(mpsc::Sender<Result<Arc<Sink>, String>>),
+    CloseStream(mpsc::Sender<()>),
 }
 
 #[allow(dead_code)]
@@ -441,6 +445,9 @@ struct AudioPlayer {
     // Current primary track and fading tracks
     current_track: Arc<Mutex<Option<ActiveTrack>>>,
     fading_tracks: Arc<Mutex<Vec<FadingTrack>>>,
+    // When true (Windows only), playback is routed to the WASAPI exclusive engine
+    // instead of the rodio shared-mode sink.
+    exclusive_enabled: Arc<AtomicBool>,
 }
 
 impl Clone for AudioPlayer {
@@ -463,6 +470,7 @@ impl Clone for AudioPlayer {
             crossfade_secs: self.crossfade_secs.clone(),
             normalization_enabled: self.normalization_enabled.clone(),
             normalization_preamp_db: self.normalization_preamp_db.clone(),
+            exclusive_enabled: self.exclusive_enabled.clone(),
         }
     }
 }
@@ -484,12 +492,12 @@ impl AudioPlayer {
 }
 
 #[derive(Serialize)]
-struct PlayerStatus {
-    position: f64,
-    duration: f64,
-    playing: bool,
-    finished: bool,
-    path: Option<String>,
+pub(crate) struct PlayerStatus {
+    pub(crate) position: f64,
+    pub(crate) duration: f64,
+    pub(crate) playing: bool,
+    pub(crate) finished: bool,
+    pub(crate) path: Option<String>,
 }
 
 // Read a file into memory and build a *seekable* decoder. Decoding stays lazy
@@ -498,7 +506,7 @@ struct PlayerStatus {
 // keeps the audio callback off the disk, and `[profile.dev.package."*"]
 // opt-level = 3` keeps the codec fast enough to never starve the callback —
 // together that fixes both the slow start and the "bz bz bz" under load.
-fn build_decoder(path: &Path) -> Result<(Decoder<Cursor<Vec<u8>>>, f64), String> {
+pub(crate) fn build_decoder(path: &Path) -> Result<(Decoder<Cursor<Vec<u8>>>, f64), String> {
     let bytes = fs::read(path).map_err(|e| e.to_string())?;
     let byte_len = bytes.len() as u64;
     let decoder = Decoder::builder()
@@ -538,7 +546,7 @@ const SPECTRUM_DECAY: f32 = 0.18; // how slowly it falls back (springy feel)
 
 // Lock-free hand-off of the latest band levels from the audio thread to the
 // `player_spectrum` command: each band is an f32 kept as its bit pattern.
-struct SpectrumShared {
+pub(crate) struct SpectrumShared {
     enabled: AtomicBool,
     bands: [AtomicU32; SPECTRUM_BANDS],
 }
@@ -558,7 +566,7 @@ impl SpectrumShared {
     fn load(&self) -> [f32; SPECTRUM_BANDS] {
         std::array::from_fn(|i| f32::from_bits(self.bands[i].load(Ordering::Relaxed)))
     }
-    fn reset(&self) {
+    pub(crate) fn reset(&self) {
         for slot in &self.bands {
             slot.store(0, Ordering::Relaxed);
         }
@@ -611,7 +619,7 @@ fn fft_in_place(re: &mut [f32], im: &mut [f32]) {
     }
 }
 
-struct SpectrumSource<S> {
+pub(crate) struct SpectrumSource<S> {
     inner: S,
     shared: Arc<SpectrumShared>,
     player_gen: Arc<AtomicU64>,
@@ -628,7 +636,7 @@ struct SpectrumSource<S> {
 }
 
 impl<S: Source> SpectrumSource<S> {
-    fn new(inner: S, shared: Arc<SpectrumShared>, player_gen: Arc<AtomicU64>, my_gen: u64) -> Self {
+    pub(crate) fn new(inner: S, shared: Arc<SpectrumShared>, player_gen: Arc<AtomicU64>, my_gen: u64) -> Self {
         let channels = inner.channels().max(1);
         let sr = inner.sample_rate().max(1) as f32;
         // Six log-spaced bands spanning sub-bass → presence.
@@ -779,7 +787,7 @@ const EQ_Q: f32 = 1.41;
 // Lock-free EQ settings shared from the UI thread to the audio thread. Gains and
 // preamp are f32 stored as their bit patterns; `version` is bumped on any change
 // so live `EqualizerSource`s know to recompute their coefficients.
-struct EqualizerShared {
+pub(crate) struct EqualizerShared {
     enabled: AtomicBool,
     gains_db: [AtomicU32; EQ_BANDS],
     preamp_db: AtomicU32,
@@ -872,7 +880,7 @@ impl BiquadState {
     }
 }
 
-struct EqualizerSource<S> {
+pub(crate) struct EqualizerSource<S> {
     inner: S,
     shared: Arc<EqualizerShared>,
     sample_rate: f32,
@@ -886,7 +894,7 @@ struct EqualizerSource<S> {
 }
 
 impl<S: Source> EqualizerSource<S> {
-    fn new(inner: S, shared: Arc<EqualizerShared>) -> Self {
+    pub(crate) fn new(inner: S, shared: Arc<EqualizerShared>) -> Self {
         let channels = inner.channels().max(1);
         let sample_rate = inner.sample_rate().max(1) as f32;
         let mut me = EqualizerSource {
@@ -982,10 +990,10 @@ impl<S: Source> Source for EqualizerSource<S> {
 // blocking pool so the UI/IPC thread never stalls; the previously playing track
 // is stopped immediately so it doesn't bleed over the (brief) load gap.
 #[derive(Serialize)]
-struct PlaybackInfo {
-    duration: f64,
-    sample_rate: Option<u32>,
-    bit_depth: Option<u8>,
+pub(crate) struct PlaybackInfo {
+    pub(crate) duration: f64,
+    pub(crate) sample_rate: Option<u32>,
+    pub(crate) bit_depth: Option<u8>,
 }
 
 #[tauri::command]
@@ -1002,6 +1010,37 @@ async fn player_load(
     let path_buf = PathBuf::from(&path);
     if !is_allowed_audio(&app, &path_buf) {
         return Err("Path is not within an allowed music folder".to_string());
+    }
+
+    // WASAPI exclusive path (Windows). Falls back to shared mode on any failure.
+    #[cfg(target_os = "windows")]
+    if player.exclusive_enabled.load(Ordering::SeqCst) {
+        if let Some(ex) = app.try_state::<Arc<exclusive::ExclusivePlayer>>() {
+            let ex = ex.inner().clone();
+            let p = path.clone();
+            let res = tauri::async_runtime::spawn_blocking(move || {
+                ex.load(p, volume, start_at, autoplay, duration_hint)
+            })
+            .await
+            .map_err(|e| format!("Exclusive load task failed: {e}"))?;
+            match res {
+                Ok(info) => return Ok(info),
+                Err(e) => {
+                    eprintln!("WASAPI exclusive load failed ({e}); using shared mode.");
+                    let _ = app.emit("wasapi-exclusive-error", e);
+                    // Disable exclusive so play/pause/status/seek route to
+                    // the shared-mode path until the user re-enables it.
+                    player.exclusive_enabled.store(false, Ordering::SeqCst);
+                    
+                    // Re-open the shared stream with a timeout so we never hang.
+                    let (reply_tx, reply_rx) = mpsc::channel();
+                    if player.cmd_tx.send(AudioCommand::OpenDevice(None, reply_tx)).is_ok() {
+                        let _ = reply_rx.recv_timeout(Duration::from_secs(5));
+                    }
+                    // fall through to the shared-mode rodio path below
+                }
+            }
+        }
     }
 
     // Stop all active sinks and clear fading list
@@ -1036,9 +1075,10 @@ async fn player_load(
         .send(AudioCommand::CreateSink(reply_tx))
         .map_err(|e| format!("Audio thread unavailable: {e}"))?;
     
-    // Wait up to 2 seconds for a sink
+    // Wait for a sink. Allow enough time for the audio thread to re-open the
+    // device (with retries) if the shared stream needs to be recovered first.
     let sink = reply_rx
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(Duration::from_secs(4))
         .map_err(|e| format!("Failed to create sink: {e}"))??;
 
     // Clone the shared handles out so we never hold the State guard across .await.
@@ -1183,7 +1223,13 @@ async fn player_prepare_next(
     if !is_allowed_audio(&app, &path_buf) {
         return Err("Path is not within an allowed music folder".to_string());
     }
-    
+
+    // The exclusive engine doesn't use rodio pre-decode; skip entirely.
+    #[cfg(target_os = "windows")]
+    if player.exclusive_enabled.load(Ordering::SeqCst) {
+        return Ok(());
+    }
+
     // Set target path and clear any stale prepared track
     {
         let mut target_g = player.prepared_target_path.lock().unwrap();
@@ -1248,7 +1294,16 @@ async fn player_prepare_next(
 }
 
 #[tauri::command]
-fn player_pause(player: State<AudioPlayer>) {
+fn player_pause(app: AppHandle, player: State<AudioPlayer>) {
+    #[cfg(target_os = "windows")]
+    if player.exclusive_enabled.load(Ordering::SeqCst) {
+        if let Some(ex) = app.try_state::<Arc<exclusive::ExclusivePlayer>>() {
+            if ex.is_active() {
+                ex.set_playing(false);
+                return;
+            }
+        }
+    }
     if let Some(sink) = player.sink() {
         sink.pause();
     }
@@ -1260,7 +1315,16 @@ fn player_pause(player: State<AudioPlayer>) {
 }
 
 #[tauri::command]
-fn player_resume(player: State<AudioPlayer>) {
+fn player_resume(app: AppHandle, player: State<AudioPlayer>) {
+    #[cfg(target_os = "windows")]
+    if player.exclusive_enabled.load(Ordering::SeqCst) {
+        if let Some(ex) = app.try_state::<Arc<exclusive::ExclusivePlayer>>() {
+            if ex.is_active() {
+                ex.set_playing(true);
+                return;
+            }
+        }
+    }
     if let Some(sink) = player.sink() {
         sink.play();
     }
@@ -1286,7 +1350,16 @@ fn player_set_volume(player: State<AudioPlayer>, volume: f64) {
 }
 
 #[tauri::command]
-fn player_seek(player: State<AudioPlayer>, position: f64) -> Result<(), String> {
+fn player_seek(app: AppHandle, player: State<AudioPlayer>, position: f64) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    if player.exclusive_enabled.load(Ordering::SeqCst) {
+        if let Some(ex) = app.try_state::<Arc<exclusive::ExclusivePlayer>>() {
+            if ex.is_active() {
+                ex.seek(position);
+                return Ok(());
+            }
+        }
+    }
     // Stop all fading tracks on manual seek
     {
         let mut fading_guard = player.fading_tracks.lock().unwrap();
@@ -1309,7 +1382,13 @@ fn player_seek(player: State<AudioPlayer>, position: f64) -> Result<(), String> 
 }
 
 #[tauri::command]
-fn player_stop(player: State<AudioPlayer>) {
+fn player_stop(app: AppHandle, player: State<AudioPlayer>) {
+    #[cfg(target_os = "windows")]
+    if let Some(ex) = app.try_state::<Arc<exclusive::ExclusivePlayer>>() {
+        if ex.is_active() {
+            ex.stop();
+        }
+    }
     {
         let mut fading_guard = player.fading_tracks.lock().unwrap();
         for t in fading_guard.drain(..) {
@@ -1324,7 +1403,15 @@ fn player_stop(player: State<AudioPlayer>) {
 }
 
 #[tauri::command]
-fn player_status(player: State<AudioPlayer>) -> PlayerStatus {
+fn player_status(app: AppHandle, player: State<AudioPlayer>) -> PlayerStatus {
+    #[cfg(target_os = "windows")]
+    if player.exclusive_enabled.load(Ordering::SeqCst) {
+        if let Some(ex) = app.try_state::<Arc<exclusive::ExclusivePlayer>>() {
+            if ex.is_active() {
+                return ex.status();
+            }
+        }
+    }
     match player.sink() {
         Some(sink) => {
             let empty = sink.empty();
@@ -1412,23 +1499,34 @@ fn open_device_stream(
 ) -> Option<OutputStream> {
     use rodio::cpal::traits::{DeviceTrait, HostTrait};
 
-    let stream = match name {
-        Some(want) => {
-            let host = rodio::cpal::default_host();
-            let device = host
-                .output_devices()
-                .ok()
-                .and_then(|mut devs| devs.find(|d| d.name().map(|n| n == want).unwrap_or(false)));
-            match device {
-                Some(dev) => OutputStreamBuilder::from_device(dev)
-                    .and_then(|b| b.open_stream())
-                    .ok(),
-                // Requested device vanished — fall back to default.
-                None => OutputStreamBuilder::open_default_stream().ok(),
+    // Opening can transiently fail right after an exclusive-mode stream releases
+    // the device (USB DACs / IEMs re-enumerate slowly), so retry a few times
+    // before giving up.
+    let mut stream = None;
+    for attempt in 0..4 {
+        stream = match name {
+            Some(want) => {
+                let host = rodio::cpal::default_host();
+                let device = host.output_devices().ok().and_then(|mut devs| {
+                    devs.find(|d| d.name().map(|n| n == want).unwrap_or(false))
+                });
+                match device {
+                    Some(dev) => OutputStreamBuilder::from_device(dev)
+                        .and_then(|b| b.open_stream())
+                        .ok(),
+                    // Requested device vanished — fall back to default.
+                    None => OutputStreamBuilder::open_default_stream().ok(),
+                }
             }
+            None => OutputStreamBuilder::open_default_stream().ok(),
+        };
+        if stream.is_some() {
+            break;
         }
-        None => OutputStreamBuilder::open_default_stream().ok(),
-    };
+        if attempt < 3 {
+            std::thread::sleep(Duration::from_millis(150));
+        }
+    }
 
     match stream {
         Some(stream) => {
@@ -1483,12 +1581,29 @@ fn init_audio_player() -> AudioPlayer {
                     let _ = reply.send(());
                 }
                 AudioCommand::CreateSink(reply) => {
+                    // Self-heal: the shared stream may be absent (just back from
+                    // exclusive mode, or a transient open failure). Re-open the
+                    // default device before giving up so playback recovers instead
+                    // of leaving the UI stuck "loading".
+                    if _stream.is_none() {
+                        _stream = open_device_stream(None, &slot_t, &lv_t, &nf_t);
+                    }
                     let res = if let Some(ref stream) = _stream {
                         Ok(Arc::new(Sink::connect_new(stream.mixer())))
                     } else {
                         Err("No active audio stream".to_string())
                     };
                     let _ = reply.send(res);
+                }
+                AudioCommand::CloseStream(reply) => {
+                    {
+                        let mut guard = slot_t.lock().unwrap();
+                        if let Some(s) = guard.take() {
+                            s.stop();
+                        }
+                    }
+                    _stream = None;
+                    let _ = reply.send(());
                 }
             }
         }
@@ -1516,6 +1631,7 @@ fn init_audio_player() -> AudioPlayer {
         normalization_preamp_db: Arc::new(Mutex::new(0.0)),
         current_track: Arc::new(Mutex::new(None)),
         fading_tracks: Arc::new(Mutex::new(Vec::new())),
+        exclusive_enabled: Arc::new(AtomicBool::new(false)),
     }
 }
 
@@ -2386,16 +2502,85 @@ fn player_delete_file(app: AppHandle, path: String) -> Result<(), String> {
     }
 }
 
+// Toggle WASAPI exclusive output. Enabling frees the rodio shared sink and closes
+// the shared stream so the exclusive engine can claim the device; disabling
+// stops the exclusive engine and re-opens the shared-mode stream.
+// The frontend reloads the current track afterwards so playback continues on the
+// newly-selected engine. (Windows only; a no-op stub elsewhere.)
+#[cfg(target_os = "windows")]
+#[tauri::command]
+async fn set_wasapi_exclusive(app: tauri::AppHandle, player: tauri::State<'_, AudioPlayer>, enabled: bool) -> Result<(), String> {
+    player.exclusive_enabled.store(enabled, Ordering::SeqCst);
+    if enabled {
+        let mut fading_guard = player.fading_tracks.lock().unwrap();
+        for t in fading_guard.drain(..) {
+            t.sink.stop();
+        }
+        let mut current_guard = player.current_track.lock().unwrap();
+        if let Some(t) = current_guard.take() {
+            t.sink.stop();
+        }
+        player.active.store(false, Ordering::SeqCst);
+
+        // Close the shared stream so WASAPI exclusive can claim the device
+        let (reply_tx, reply_rx) = mpsc::channel();
+        player
+            .cmd_tx
+            .send(AudioCommand::CloseStream(reply_tx))
+            .map_err(|e| format!("Audio thread unavailable: {e}"))?;
+        reply_rx
+            .recv_timeout(Duration::from_secs(2))
+            .map_err(|e| format!("Failed to close shared stream: {e}"))?;
+    } else {
+        if let Some(ex) = app.try_state::<Arc<exclusive::ExclusivePlayer>>() {
+            let ex = ex.inner().clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                ex.stop();
+            })
+            .await
+            .map_err(|e| format!("Exclusive stop task failed: {e}"))?;
+        }
+        // Re-open the shared stream so standard playback works again
+        let (reply_tx, reply_rx) = mpsc::channel();
+        player
+            .cmd_tx
+            .send(AudioCommand::OpenDevice(None, reply_tx))
+            .map_err(|e| format!("Audio thread unavailable: {e}"))?;
+        reply_rx
+            .recv_timeout(Duration::from_secs(5))
+            .map_err(|e| format!("Failed to re-open shared stream: {e}"))?;
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+async fn set_wasapi_exclusive(_enabled: bool) -> Result<(), String> {
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Channel feeding the filesystem-watch coalescer (spawned in setup).
     let (fs_tx, fs_rx) = mpsc::channel::<()>();
     let fs_rx = Mutex::new(Some(fs_rx));
 
+    let audio = init_audio_player();
+    // The exclusive engine reuses the main player's EQ / spectrum / volume /
+    // normalization state so those features behave identically in exclusive mode.
+    #[cfg(target_os = "windows")]
+    let exclusive_player = Arc::new(exclusive::ExclusivePlayer::new(
+        audio.equalizer.clone(),
+        audio.spectrum.clone(),
+        audio.last_volume.clone(),
+        audio.norm_factor.clone(),
+    ));
+
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(init_audio_player())
+        .manage(audio)
+        .manage(discord::DiscordState::new())
         .manage(FileWatcher {
             watcher: Mutex::new(None),
             evt_tx: fs_tx,
@@ -2405,7 +2590,8 @@ pub fn run() {
     {
         builder = builder
             .manage(Arc::new(MediaController(Mutex::new(None))))
-            .manage(thumbbar::ThumbbarController::new());
+            .manage(thumbbar::ThumbbarController::new())
+            .manage(exclusive_player);
     }
 
     builder
@@ -2454,7 +2640,11 @@ pub fn run() {
             player_show_in_folder,
             player_delete_file,
             player_set_transition,
-            player_set_normalization_settings
+            player_set_normalization_settings,
+            set_wasapi_exclusive,
+            discord::discord_set_enabled,
+            discord::discord_update,
+            discord::discord_clear
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

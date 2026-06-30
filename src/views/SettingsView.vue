@@ -74,24 +74,45 @@
     <Section title="Audio Output" description="Choose which device audio is played through.">
       <SelectInt
         label="Output device"
-        :modelValue="store.outputDevice || ''"
+        :modelValue="store.wasapiExclusive ? '' : (store.outputDevice || '')"
         :options="deviceOptions"
+        :disabled="store.wasapiExclusive"
         @update:modelValue="onDeviceChange"
       />
       <button
         @click="loadDevices"
-        class="text-xs font-medium text-gray-400 hover:text-white mt-1"
+        :disabled="store.wasapiExclusive"
+        class="text-xs font-medium text-gray-400 hover:text-white mt-1 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-gray-400"
       >
         Refresh devices
       </button>
+      <p v-if="store.wasapiExclusive" class="text-xs text-amber-500/80 mt-1">
+        Disabled while WASAPI Exclusive Mode is on.
+      </p>
+
+      <div class="border-t border-white/5 pt-1 mt-3">
+        <ToggleInt
+          :modelValue="store.wasapiExclusive"
+          @update:modelValue="(v) => store.setWasapiExclusive(v)"
+          label="WASAPI Exclusive Mode"
+        />
+        <p class="text-xs text-gray-500">
+          Sends audio straight to the device, bypassing the Windows mixer (no system resampling or
+          mixing) and matching the track's lossless bit depth. Other apps can't play sound while
+          it's active, and it falls back to shared mode if your device refuses exclusive access.
+          Output device selection and crossfade/gapless are disabled in this mode — it always uses
+          the system default device.
+        </p>
+      </div>
     </Section>
 
     <!-- Playback -->
     <Section title="Playback">
       <SelectInt
         label="Track transition"
-        :modelValue="store.transitionMode"
+        :modelValue="store.wasapiExclusive ? 'off' : store.transitionMode"
         :options="transitionOptions"
+        :disabled="store.wasapiExclusive"
         @update:modelValue="(v) => store.setTransitionMode(v)"
       />
       <SliderInt
@@ -102,11 +123,17 @@
         :max="12"
         :step="1"
         suffix="s"
+        :disabled="store.wasapiExclusive"
         @update:modelValue="(v) => store.setCrossfadeSecs(v)"
       />
       <p class="text-xs text-gray-500 -mt-1 mb-2">
-        Gapless pre-decodes the next track for seamless transitions. Crossfade overlaps the end of
-        one track with the start of the next.
+        <span v-if="store.wasapiExclusive" class="text-amber-500/80">
+          Disabled while WASAPI Exclusive Mode is on.
+        </span>
+        <span v-else>
+          Gapless pre-decodes the next track for seamless transitions. Crossfade overlaps the end of
+          one track with the start of the next.
+        </span>
       </p>
 
       <div class="border-t border-white/5 pt-1">
@@ -193,6 +220,35 @@
           placeholder="Paste your Musixmatch community token"
           class="w-full bg-[#2a2a2a] text-sm text-white rounded-md px-3 py-2 focus:outline-none focus:ring-1 focus:ring-[var(--accent-color)] placeholder-gray-600"
         />
+      </div>
+    </Section>
+
+    <!-- Discord Rich Presence -->
+    <Section
+      title="Discord Rich Presence"
+      description="Show the track you're playing as your Discord status."
+    >
+      <ToggleInt
+        :modelValue="store.discordEnabled"
+        @update:modelValue="(v) => store.setDiscordEnabled(v)"
+        label="Enable Discord Rich Presence"
+      />
+      <div class="mt-3">
+        <label class="text-sm text-gray-300 font-medium block mb-2">Discord Application ID</label>
+        <input
+          :value="store.discordClientId"
+          @change="(e) => store.setDiscordClientId(e.target.value)"
+          type="text"
+          placeholder="e.g. 1399999999999999999"
+          class="w-full bg-[#2a2a2a] text-sm text-white rounded-md px-3 py-2 focus:outline-none focus:ring-1 focus:ring-[var(--accent-color)] placeholder-gray-600"
+        />
+        <p class="text-xs text-gray-500 mt-2 leading-relaxed">
+          Create a free application at
+          <span class="text-gray-300">discord.com/developers/applications</span> and paste its
+          <span class="text-gray-300">Application ID</span> here. For artwork, upload an image named
+          <span class="text-gray-300">logo</span> under Rich Presence → Art Assets. Requires the
+          Discord desktop app to be running.
+        </p>
       </div>
     </Section>
 

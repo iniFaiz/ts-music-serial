@@ -99,6 +99,14 @@ export const store = reactive({
   // Track-to-track transition: 'off' | 'gapless' | 'crossfade'.
   transitionMode: 'off',
   crossfadeSecs: 6,
+  // WASAPI exclusive output (Windows): routes playback to a dedicated exclusive
+  // engine that bypasses the OS audio mixer. Falls back to shared mode if the
+  // device refuses exclusive access. Transitions are ignored while it's on.
+  wasapiExclusive: false,
+  // Discord Rich Presence: shows the current track as your Discord status.
+  // Needs a Discord Application ID (created at discord.com/developers).
+  discordEnabled: false,
+  discordClientId: '',
   // 10-band graphic equalizer (DSP runs in Rust as a Source filter). `eqBands`
   // holds per-band gains in dB for the ISO octave bands 31Hz..16kHz; `eqPreset`
   // is the selected preset id, or 'custom' once a band is hand-adjusted.
@@ -180,6 +188,9 @@ export const store = reactive({
           normalizationPreampDb: this.normalizationPreampDb,
           transitionMode: this.transitionMode,
           crossfadeSecs: this.crossfadeSecs,
+          wasapiExclusive: this.wasapiExclusive,
+          discordEnabled: this.discordEnabled,
+          discordClientId: this.discordClientId,
           eqEnabled: this.eqEnabled,
           eqPreampDb: this.eqPreampDb,
           eqBands: [...this.eqBands],
@@ -290,6 +301,9 @@ export const store = reactive({
         this.normalizationPreampDb = s.normalizationPreampDb;
       if (typeof s.transitionMode === 'string') this.transitionMode = s.transitionMode;
       if (typeof s.crossfadeSecs === 'number') this.crossfadeSecs = s.crossfadeSecs;
+      if (typeof s.wasapiExclusive === 'boolean') this.wasapiExclusive = s.wasapiExclusive;
+      if (typeof s.discordEnabled === 'boolean') this.discordEnabled = s.discordEnabled;
+      if (typeof s.discordClientId === 'string') this.discordClientId = s.discordClientId;
       if (typeof s.eqEnabled === 'boolean') this.eqEnabled = s.eqEnabled;
       if (typeof s.eqPreampDb === 'number') this.eqPreampDb = s.eqPreampDb;
       if (Array.isArray(s.eqBands) && s.eqBands.length === EQ_BAND_COUNT)
@@ -315,6 +329,13 @@ export const store = reactive({
       enabled: this.normalizationEnabled,
       preampDb: this.normalizationPreampDb
     }).catch(() => {});
+    await invoke('set_wasapi_exclusive', { enabled: this.wasapiExclusive }).catch(() => {});
+    if (this.discordEnabled) {
+      invoke('discord_set_enabled', {
+        enabled: true,
+        clientId: this.discordClientId,
+      }).catch(() => {});
+    }
     this.syncEqualizer();
 
     const pb = state.playback;
@@ -641,6 +662,72 @@ export const store = reactive({
     invoke('player_set_transition', {
       mode: this.transitionMode,
       crossfadeSecs: this.crossfadeSecs,
+    }).catch(() => {});
+  },
+
+  // ---- WASAPI exclusive output -------------------------------------------
+
+  async setWasapiExclusive(v) {
+    this.wasapiExclusive = !!v;
+    this.persistState();
+    try {
+      await invoke('set_wasapi_exclusive', { enabled: this.wasapiExclusive });
+    } catch (err) {
+      console.warn("Failed to set WASAPI exclusive:", err);
+      // If enabling failed, revert so the UI stays in sync with the backend.
+      if (this.wasapiExclusive) {
+        this.wasapiExclusive = false;
+        this.persistState();
+      }
+    }
+    // Give the audio thread a moment to fully open/close the stream
+    // before reloading the track, avoiding a race with CreateSink.
+    await new Promise(r => setTimeout(r, 150));
+    // Reload the current track on the newly-selected engine, preserving
+    // position/play state (same approach as switching output device).
+    if (this.currentSong) {
+      this.pendingSeek = this.currentTime || 0;
+      this.pendingAutoplay = this.isPlaying;
+      this.currentSong = { ...this.currentSong };
+    }
+  },
+
+  // ---- Discord Rich Presence ---------------------------------------------
+
+  setDiscordEnabled(v) {
+    this.discordEnabled = !!v;
+    this.persistState();
+    invoke('discord_set_enabled', {
+      enabled: this.discordEnabled,
+      clientId: this.discordClientId,
+    }).catch(() => {});
+    if (this.discordEnabled) this.syncDiscord();
+  },
+  setDiscordClientId(v) {
+    this.discordClientId = String(v || '').trim();
+    this.persistState();
+    if (this.discordEnabled) {
+      invoke('discord_set_enabled', {
+        enabled: true,
+        clientId: this.discordClientId,
+      }).catch(() => {});
+      this.syncDiscord();
+    }
+  },
+  // Push the current track to Discord (no-op backend-side when disabled).
+  syncDiscord() {
+    if (!this.discordEnabled) return;
+    if (!this.currentSong) {
+      invoke('discord_clear').catch(() => {});
+      return;
+    }
+    invoke('discord_update', {
+      title: this.currentSong.title || '',
+      artist: this.currentSong.artist || '',
+      album: this.currentSong.album || '',
+      isPlaying: this.isPlaying,
+      position: this.currentTime || 0,
+      duration: this.duration || 0,
     }).catch(() => {});
   },
   // ---- Equalizer ---------------------------------------------------------

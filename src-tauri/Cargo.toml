@@ -39,6 +39,9 @@ aes = "0.8"
 ecb = { version = "0.1", features = ["alloc"] }
 md-5 = "0.10"
 hex = "0.4"
+# Discord Rich Presence (now-playing status). Pure-Rust IPC to the local Discord
+# client; cross-platform.
+discord-rich-presence = "1.1"
 
 # Windows-only: native Taskbar thumbnail toolbar buttons (ITaskbarList3).
 # Pinned to the same `windows` major already pulled in by tauri/tao/wry so the
@@ -52,6 +55,9 @@ windows = { version = "0.61", features = [
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
+# WASAPI exclusive-mode output (bit-perfect). cpal/rodio only do shared mode, so
+# the exclusive engine talks to WASAPI directly through this crate.
+wasapi = "0.23"
 
 # Optimize dependencies even in debug/dev builds. Audio codecs (symphonia) are
 # math-heavy and unusably slow when compiled unoptimized — that is what made

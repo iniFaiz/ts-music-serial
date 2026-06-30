@@ -1,10 +1,14 @@
 <template>
-  <div class="flex items-center justify-between py-2.5 gap-4">
+  <div
+    class="flex items-center justify-between py-2.5 gap-4"
+    :class="{ 'opacity-40 pointer-events-none select-none': disabled }"
+  >
     <span class="text-gray-300 font-medium text-sm">{{ label }}</span>
     <select
       :value="modelValue"
+      :disabled="disabled"
       @change="$emit('update:modelValue', $event.target.value)"
-      class="bg-[#2a2a2a] text-sm text-white rounded-md px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-[var(--accent-color)] max-w-[65%] truncate"
+      class="bg-[#2a2a2a] text-sm text-white rounded-md px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-[var(--accent-color)] max-w-[65%] truncate disabled:cursor-not-allowed"
     >
       <option v-for="opt in options" :key="String(opt.value)" :value="opt.value">
         {{ opt.label }}
@@ -19,6 +23,7 @@ defineProps({
   label: { type: String, required: true },
   // [{ value, label }]
   options: { type: Array, default: () => [] },
+  disabled: { type: Boolean, default: false },
 });
 defineEmits(['update:modelValue']);
 </script>

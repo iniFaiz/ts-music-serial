@@ -115,6 +115,7 @@ watch(
       } catch (err) {
         console.warn("Failed to stop player:", err);
       }
+      store.syncDiscord();
       return;
     }
     losslessPopupOpen.value = false;
@@ -130,6 +131,7 @@ watch(
       recordStart(song.path); // gapless/crossfade auto-advance is always playing
       pushMediaMetadata(song);
       pushMediaPlayback();
+      store.syncDiscord();
       return;
     }
 
@@ -169,9 +171,10 @@ watch(
       if (autoplay) recordStart(song.path);
       pushMediaMetadata(song);
       pushMediaPlayback();
+      store.syncDiscord();
 
       // Trigger next track preparation since player_load clears/consumes the backend prepared state
-      if (store.transitionMode !== 'off') {
+      if (store.transitionMode !== 'off' && !store.wasapiExclusive) {
         const np = store.nextUpPath();
         if (np && np !== song.path) {
           const nextSong = store.queue.find(s => s.path === np) || store.songs.find(s => s.path === np);
@@ -192,7 +195,7 @@ watch(
 
 // Reactively prepare the next track whenever the transition settings, queue, or next track path changes
 watch(
-  () => store.transitionMode !== 'off' ? store.nextUpPath() : null,
+  () => (store.transitionMode !== 'off' && !store.wasapiExclusive) ? store.nextUpPath() : null,
   (np) => {
     if (np && store.currentSong && np !== store.currentSong.path) {
       const nextSong = store.queue.find(s => s.path === np) || store.songs.find(s => s.path === np);
@@ -209,6 +212,7 @@ watch(
     // Count a "last played" the first time a loaded-but-paused track starts.
     if (playing && store.currentSong) recordStart(store.currentSong.path);
     pushMediaPlayback();
+    store.syncDiscord();
     try {
       await invoke(playing ? 'player_resume' : 'player_pause');
     } catch {
@@ -355,6 +359,7 @@ const onSeekInput = () => {
 // the finished-track reload case and the seek-suppression timestamp).
 const onSeekCommit = () => {
   store.seek(Number(seekValue.value));
+  store.syncDiscord();
 };
 
 const handleTrackEnded = async () => {
@@ -419,7 +424,7 @@ const poll = async () => {
 
     if (status.finished) {
       finishedTicks++;
-      if (store.transitionMode === 'off' || finishedTicks > 5) {
+      if (store.transitionMode === 'off' || store.wasapiExclusive || finishedTicks > 5) {
         await handleTrackEnded();
         finishedTicks = 0;
       }
