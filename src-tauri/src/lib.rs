@@ -2644,7 +2644,8 @@ pub fn run() {
             set_wasapi_exclusive,
             discord::discord_set_enabled,
             discord::discord_update,
-            discord::discord_clear
+            discord::discord_clear,
+            discord::discord_cover_art
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

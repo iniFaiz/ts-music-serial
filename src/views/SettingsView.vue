@@ -233,23 +233,11 @@
         @update:modelValue="(v) => store.setDiscordEnabled(v)"
         label="Enable Discord Rich Presence"
       />
-      <div class="mt-3">
-        <label class="text-sm text-gray-300 font-medium block mb-2">Discord Application ID</label>
-        <input
-          :value="store.discordClientId"
-          @change="(e) => store.setDiscordClientId(e.target.value)"
-          type="text"
-          placeholder="e.g. 1399999999999999999"
-          class="w-full bg-[#2a2a2a] text-sm text-white rounded-md px-3 py-2 focus:outline-none focus:ring-1 focus:ring-[var(--accent-color)] placeholder-gray-600"
-        />
-        <p class="text-xs text-gray-500 mt-2 leading-relaxed">
-          Create a free application at
-          <span class="text-gray-300">discord.com/developers/applications</span> and paste its
-          <span class="text-gray-300">Application ID</span> here. For artwork, upload an image named
-          <span class="text-gray-300">logo</span> under Rich Presence → Art Assets. Requires the
-          Discord desktop app to be running.
-        </p>
-      </div>
+      <p class="text-xs text-gray-500 mt-2 leading-relaxed">
+        Shows the artist and track you're listening to on your Discord profile,
+        with the album cover as artwork. Pausing hides the status. Requires the
+        Discord desktop app to be running.
+      </p>
     </Section>
 
     <!-- Performance -->

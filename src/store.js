@@ -104,9 +104,11 @@ export const store = reactive({
   // device refuses exclusive access. Transitions are ignored while it's on.
   wasapiExclusive: false,
   // Discord Rich Presence: shows the current track as your Discord status.
-  // Needs a Discord Application ID (created at discord.com/developers).
+  // The Application ID is hardcoded in the backend — the user only toggles this.
   discordEnabled: false,
-  discordClientId: '',
+  // Runtime cache of resolved album-art URLs for Discord, keyed by artist|album
+  // (or artist|title). Not persisted; just avoids re-querying on play/pause.
+  discordCoverCache: {},
   // 10-band graphic equalizer (DSP runs in Rust as a Source filter). `eqBands`
   // holds per-band gains in dB for the ISO octave bands 31Hz..16kHz; `eqPreset`
   // is the selected preset id, or 'custom' once a band is hand-adjusted.
@@ -190,7 +192,6 @@ export const store = reactive({
           crossfadeSecs: this.crossfadeSecs,
           wasapiExclusive: this.wasapiExclusive,
           discordEnabled: this.discordEnabled,
-          discordClientId: this.discordClientId,
           eqEnabled: this.eqEnabled,
           eqPreampDb: this.eqPreampDb,
           eqBands: [...this.eqBands],
@@ -303,7 +304,6 @@ export const store = reactive({
       if (typeof s.crossfadeSecs === 'number') this.crossfadeSecs = s.crossfadeSecs;
       if (typeof s.wasapiExclusive === 'boolean') this.wasapiExclusive = s.wasapiExclusive;
       if (typeof s.discordEnabled === 'boolean') this.discordEnabled = s.discordEnabled;
-      if (typeof s.discordClientId === 'string') this.discordClientId = s.discordClientId;
       if (typeof s.eqEnabled === 'boolean') this.eqEnabled = s.eqEnabled;
       if (typeof s.eqPreampDb === 'number') this.eqPreampDb = s.eqPreampDb;
       if (Array.isArray(s.eqBands) && s.eqBands.length === EQ_BAND_COUNT)
@@ -331,10 +331,7 @@ export const store = reactive({
     }).catch(() => {});
     await invoke('set_wasapi_exclusive', { enabled: this.wasapiExclusive }).catch(() => {});
     if (this.discordEnabled) {
-      invoke('discord_set_enabled', {
-        enabled: true,
-        clientId: this.discordClientId,
-      }).catch(() => {});
+      invoke('discord_set_enabled', { enabled: true }).catch(() => {});
     }
     this.syncEqualizer();
 
@@ -697,34 +694,40 @@ export const store = reactive({
   setDiscordEnabled(v) {
     this.discordEnabled = !!v;
     this.persistState();
-    invoke('discord_set_enabled', {
-      enabled: this.discordEnabled,
-      clientId: this.discordClientId,
-    }).catch(() => {});
+    invoke('discord_set_enabled', { enabled: this.discordEnabled }).catch(() => {});
     if (this.discordEnabled) this.syncDiscord();
   },
-  setDiscordClientId(v) {
-    this.discordClientId = String(v || '').trim();
-    this.persistState();
-    if (this.discordEnabled) {
-      invoke('discord_set_enabled', {
-        enabled: true,
-        clientId: this.discordClientId,
-      }).catch(() => {});
-      this.syncDiscord();
-    }
-  },
-  // Push the current track to Discord (no-op backend-side when disabled).
-  syncDiscord() {
+  // Push the current track to Discord (no-op backend-side when disabled). Resolves
+  // the album art URL first (cached per album) so Discord can show the cover.
+  async syncDiscord() {
     if (!this.discordEnabled) return;
     if (!this.currentSong) {
       invoke('discord_clear').catch(() => {});
       return;
     }
+    const song = this.currentSong;
+    const title = song.title || '';
+    const artist = song.artist || '';
+    const album = song.album || '';
+
+    const key = `${artist}␟${album || title}`.toLowerCase();
+    let coverUrl = this.discordCoverCache[key];
+    if (coverUrl === undefined) {
+      try {
+        coverUrl = (await invoke('discord_cover_art', { title, artist, album })) || '';
+      } catch {
+        coverUrl = '';
+      }
+      this.discordCoverCache[key] = coverUrl;
+    }
+    // The track may have changed while we awaited the lookup — bail if so.
+    if (this.currentSong !== song) return;
+
     invoke('discord_update', {
-      title: this.currentSong.title || '',
-      artist: this.currentSong.artist || '',
-      album: this.currentSong.album || '',
+      title,
+      artist,
+      album,
+      coverUrl,
       isPlaying: this.isPlaying,
       position: this.currentTime || 0,
       duration: this.duration || 0,
