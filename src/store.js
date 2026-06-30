@@ -28,6 +28,10 @@ const MAIN_DEFAULT_HEIGHT = 700;
 // Window geometry saved when entering the mini player, restored on exit. Kept at
 // module scope (not in the reactive store) so it's never persisted/serialized.
 let savedWindowSize = null; // PhysicalSize from outerSize()
+
+// Debounce handle for persistState() — bursty callers (track change + stat bump +
+// play/pause often fire together) coalesce into a single deep-clone + IDB write.
+let persistStateTimer = null;
 let savedWindowMaximized = false;
 
 // Directory portion of a file path (handles both / and \ separators).
@@ -177,7 +181,27 @@ export const store = reactive({
   // Persist lightweight app state (likes, playlists, and what/where was
   // playing) so the next launch can restore it. Called on every relevant
   // change and on an interval to checkpoint the playback position.
-  async persistState() {
+  //
+  // Debounced: the write deep-clones playlists/stats/recents, so coalesce the
+  // bursts of callers that fire together. `flushState()` forces it immediately
+  // (used on window close, where we can't wait for the debounce window).
+  persistState() {
+    if (persistStateTimer) clearTimeout(persistStateTimer);
+    persistStateTimer = setTimeout(() => {
+      persistStateTimer = null;
+      this._writeAppState();
+    }, 400);
+  },
+
+  async flushState() {
+    if (persistStateTimer) {
+      clearTimeout(persistStateTimer);
+      persistStateTimer = null;
+    }
+    return this._writeAppState();
+  },
+
+  async _writeAppState() {
     try {
       await idbSet('app_state', {
         favorites: [...this.favorites],
@@ -522,7 +546,7 @@ export const store = reactive({
       });
     }
     await this.persist();
-    await this.persistState();
+    await this.flushState();
     this.scanCount = this.songs.length;
     this.statusMessage = `Removed folder: ${root}`;
     this.watchRoots();

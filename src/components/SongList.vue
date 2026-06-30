@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, onMounted, onUnmounted } from 'vue';
+import { computed, ref, onMounted, onUnmounted, TransitionGroup } from 'vue';
 import { useRouter } from 'vue-router';
 import { invoke } from '@tauri-apps/api/core';
 import { store } from '../store';
@@ -557,8 +557,16 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- Rows -->
-    <TransitionGroup name="song-list" tag="div" class="space-y-0.5">
+    <!-- Rows. The reorder FLIP animation is only meaningful for drag-reorderable
+         lists (playlists/favorites). For large library views we render a plain
+         <div> instead so Vue doesn't track per-row positions for thousands of
+         rows on every change. -->
+    <component
+      :is="canReorder ? TransitionGroup : 'div'"
+      :name="canReorder ? 'song-list' : null"
+      :tag="canReorder ? 'div' : null"
+      class="space-y-0.5"
+    >
       <div
         v-for="(song, index) in sortedSongs"
         :key="song.path"
@@ -718,7 +726,7 @@ onUnmounted(() => {
           </button>
         </div>
       </div>
-    </TransitionGroup>
+    </component>
 
     <div v-if="songs.length === 0" class="p-20 text-center text-gray-600">
       <div class="text-4xl mb-4 opacity-20">♫</div>

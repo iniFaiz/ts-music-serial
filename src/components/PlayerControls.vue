@@ -64,6 +64,7 @@ const volumePercentage = computed(() => {
 });
 
 let pollTimer = null;
+let pollStopped = false; // set on unmount so an in-flight poll doesn't reschedule
 let stateTimer = null;
 // Seek suppression timestamp lives on the store (store.lastSeekAt) so the
 // fullscreen player and lyric-click seeks suppress this poll too.
@@ -388,8 +389,8 @@ const handleTrackEnded = async () => {
   }
 };
 
-let pollTick = 0;
-let finishedTicks = 0;
+let finishedSince = 0; // wall-clock ms when 'finished' first latched (transition fallback)
+let lastMediaPush = 0; // throttle OS media-overlay timeline pushes
 
 const poll = async () => {
   if (!store.currentSong || store.isBuffering) return;
@@ -423,21 +424,50 @@ const poll = async () => {
     }
 
     if (status.finished) {
-      finishedTicks++;
-      if (store.transitionMode === 'off' || store.wasapiExclusive || finishedTicks > 5) {
+      // 'off'/exclusive advance immediately; crossfade/gapless give the backend a
+      // short window to drive the transition itself before we fall back to it.
+      if (!finishedSince) finishedSince = Date.now();
+      if (store.transitionMode === 'off' || store.wasapiExclusive || Date.now() - finishedSince > 600) {
         await handleTrackEnded();
-        finishedTicks = 0;
+        finishedSince = 0;
       }
     } else {
-      finishedTicks = 0;
+      finishedSince = 0;
     }
     // Keep the OS media overlay's timeline roughly in sync (~every 2s).
-    if (++pollTick % 7 === 0 && !store.isBuffering) {
+    if (Date.now() - lastMediaPush > 2000 && !store.isBuffering) {
       pushMediaPlayback();
+      lastMediaPush = Date.now();
     }
   } catch {
     // ignore transient errors
   }
+};
+
+// Smoothly advance the visible position between polls (~60fps) so the seek bar
+// and synced lyrics don't step at the 250ms poll cadence. The poll snaps
+// store.currentTime back to the backend truth each tick, correcting any drift.
+let rafId = null;
+let lastFrameTs = 0;
+const interpolate = (ts) => {
+  rafId = requestAnimationFrame(interpolate);
+  if (!store.currentSong || !store.isPlaying || store.isBuffering) {
+    lastFrameTs = ts;
+    return;
+  }
+  // Don't fight an in-progress seek, and skip until we have a baseline frame.
+  if (!lastFrameTs || Date.now() - store.lastSeekAt < 500) {
+    lastFrameTs = ts;
+    return;
+  }
+  const dt = (ts - lastFrameTs) / 1000;
+  lastFrameTs = ts;
+  if (dt <= 0 || dt > 1) return; // ignore huge gaps (e.g. backgrounded window)
+  const dur = store.duration || 0;
+  let t = (store.currentTime || 0) + dt;
+  if (dur > 0 && t > dur) t = dur;
+  store.currentTime = t;
+  seekValue.value = t;
 };
 
 const closeLosslessPopup = () => {
@@ -445,7 +475,18 @@ const closeLosslessPopup = () => {
 };
 
 onMounted(async () => {
-  pollTimer = setInterval(poll, 100);
+  // Self-pacing poll (~4×/s): the next poll is scheduled only after the current
+  // one resolves, so a slow IPC round-trip can never overlap itself. Position is
+  // interpolated at 60fps by `interpolate`, so the UI stays smooth at this rate.
+  const scheduleNextPoll = () => {
+    pollTimer = setTimeout(async () => {
+      await poll();
+      if (!pollStopped) scheduleNextPoll();
+    }, 250);
+  };
+  scheduleNextPoll();
+  rafId = requestAnimationFrame(interpolate);
+
   // Checkpoint playback position periodically so resume-on-launch is accurate.
   stateTimer = setInterval(() => {
     if (store.currentSong) store.persistState();
@@ -486,7 +527,9 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
-  if (pollTimer) clearInterval(pollTimer);
+  pollStopped = true;
+  if (pollTimer) clearTimeout(pollTimer);
+  if (rafId) cancelAnimationFrame(rafId);
   if (stateTimer) clearInterval(stateTimer);
   if (unlistenMedia) unlistenMedia();
   if (unlistenTrackChanged) unlistenTrackChanged();
@@ -495,7 +538,7 @@ onUnmounted(() => {
 });
 
 const flushState = () => {
-  if (store.currentSong) store.persistState();
+  if (store.currentSong) store.flushState();
 };
 
 const formatTime = (seconds) => {

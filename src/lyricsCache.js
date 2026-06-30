@@ -10,11 +10,33 @@ watch(() => store.lyricsSource, () => {
 // object ({ synced, source, lines: [{ time_ms, text }] }) or null ("not found").
 // The Rust backend additionally caches to disk, so this just avoids re-invoking
 // across re-opens of the fullscreen player within a session.
+//
+// LRU-bounded: a full synced lyric set is a sizeable array of objects, so cap how
+// many live on the JS heap at once. The disk cache stays the source of truth.
 const cache = new Map();
 const inflight = new Map();
+const MAX_LYRICS = 300;
+
+function touch(path) {
+  if (cache.has(path)) {
+    const v = cache.get(path);
+    cache.delete(path);
+    cache.set(path, v);
+  }
+}
+
+function cacheSet(path, value) {
+  cache.set(path, value);
+  while (cache.size > MAX_LYRICS) {
+    const oldest = cache.keys().next().value;
+    cache.delete(oldest);
+  }
+}
 
 export function getCachedLyrics(path) {
-  return cache.has(path) ? cache.get(path) : undefined;
+  if (!cache.has(path)) return undefined;
+  touch(path);
+  return cache.get(path);
 }
 
 // Resolve lyrics for a song through the backend pipeline. `force` bypasses both
@@ -22,7 +44,10 @@ export function getCachedLyrics(path) {
 export async function loadLyrics(song, { force = false } = {}) {
   if (!song || !song.path) return null;
   const path = song.path;
-  if (!force && cache.has(path)) return cache.get(path);
+  if (!force && cache.has(path)) {
+    touch(path);
+    return cache.get(path);
+  }
   if (!force && inflight.has(path)) return inflight.get(path);
 
   const req = invoke('get_lyrics', {
@@ -37,11 +62,11 @@ export async function loadLyrics(song, { force = false } = {}) {
   })
     .then((res) => {
       const value = res || null;
-      cache.set(path, value);
+      cacheSet(path, value);
       return value;
     })
     .catch(() => {
-      cache.set(path, null);
+      cacheSet(path, null);
       return null;
     })
     .finally(() => {
