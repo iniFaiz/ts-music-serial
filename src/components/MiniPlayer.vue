@@ -36,6 +36,9 @@ const linesEl = ref(null);
 const lyricsEnabled = ref(true);
 const artworkMode = ref(false);
 const queueOpen = ref(false);
+// True while the queue panel is in the DOM, including its slide-out animation, so
+// the window stays tall until the close finishes (avoids a height snap on close).
+const queuePresent = ref(false);
 
 // Bottom-bar popovers.
 const volumeOpen = ref(false);
@@ -86,6 +89,7 @@ watch(
       // Open in a consistent state each time.
       artworkMode.value = false;
       queueOpen.value = false;
+      queuePresent.value = false;
       lyricsEnabled.value = true;
       if (song.value) {
         resolveCover(song.value.path);
@@ -146,7 +150,7 @@ function fitCompact() {
   });
 }
 
-const windowView = computed(() => (queueOpen.value ? 'lyrics' : view.value));
+const windowView = computed(() => (queuePresent.value ? 'lyrics' : view.value));
 watch(
   windowView,
   (v) => {
@@ -444,22 +448,50 @@ const closeWindow = () => {
   });
 };
 
+// Remember whether the queue was opened from the album-art view, so closing it
+// returns there instead of dropping back to the lyrics/compact view. The restore
+// is *deferred* to onQueueAfterLeave so the player chrome doesn't change (e.g. the
+// album info row popping in) while the queue is still sliding out.
+let queuePrevArtwork = false;
+let restoreArtworkOnLeave = false;
+
 const toggleLyrics = () => {
   // From the lyrics view → hide (compact); from anywhere else → show lyrics.
   lyricsEnabled.value = view.value !== 'lyrics';
   artworkMode.value = false;
+  restoreArtworkOnLeave = false; // explicit view change — don't restore on close
   queueOpen.value = false;
 };
 const openArtwork = () => {
   artworkMode.value = true;
+  restoreArtworkOnLeave = false; // explicit view change — don't restore on close
   queueOpen.value = false;
 };
 const closeArtwork = () => {
   artworkMode.value = false;
 };
 const toggleQueue = () => {
-  queueOpen.value = !queueOpen.value;
-  if (queueOpen.value) artworkMode.value = false;
+  if (queueOpen.value) {
+    // Close: keep the current (queue) chrome through the slide-out; the view we
+    // came from is restored only once the animation finishes.
+    restoreArtworkOnLeave = true;
+    queueOpen.value = false;
+  } else {
+    queuePrevArtwork = artworkMode.value;
+    restoreArtworkOnLeave = false;
+    queueOpen.value = true;
+    queuePresent.value = true; // keep the window tall through the slide-in
+    artworkMode.value = false; // the queue always shows over the gradient, not art
+  }
+};
+// Settle the final view only after the queue's slide-out has finished, so nothing
+// flashes into the player controls mid-animation.
+const onQueueAfterLeave = () => {
+  if (restoreArtworkOnLeave) {
+    artworkMode.value = queuePrevArtwork;
+    restoreArtworkOnLeave = false;
+  }
+  queuePresent.value = false;
 };
 
 // Close popovers when clicking elsewhere.
@@ -595,11 +627,13 @@ onUnmounted(() => {
       <!-- ============================ MIDDLE ============================ -->
       <div
         class="relative z-10 min-h-0"
-        :class="(view === 'lyrics' || isArtwork || queueOpen) ? 'flex-1' : ''"
+        :class="(view === 'lyrics' || isArtwork || queuePresent) ? 'flex-1' : ''"
         :data-tauri-drag-region="isArtwork && !queueOpen ? '' : null"
       >
-        <!-- Queue (mirrors the main QueuePanel) -->
-        <div v-if="queueOpen" class="absolute inset-0 flex flex-col">
+        <!-- Queue (mirrors the main QueuePanel) — slides up as a frosted sheet over
+             the lyrics/backdrop; positioned so it overlays whatever is behind it. -->
+        <Transition name="mini-queue" @after-leave="onQueueAfterLeave">
+          <div v-if="queueOpen" class="absolute inset-0 z-10 flex flex-col mini-queue-panel">
           <div class="flex items-center justify-between px-4 py-2.5 shrink-0">
             <h2 class="text-sm font-bold">Queue</h2>
             <div class="flex items-center gap-3">
@@ -623,7 +657,7 @@ onUnmounted(() => {
               </button>
             </div>
           </div>
-          <div ref="queueListEl" class="relative flex-1 px-2 pb-2 overflow-auto mini-scroll">
+          <div ref="queueListEl" class="relative flex-1 px-2 pt-1 pb-36 overflow-auto mini-scroll">
             <div v-if="store.queue.length === 0" class="p-8 text-sm text-center text-gray-600">
               The queue is empty.
             </div>
@@ -674,11 +708,12 @@ onUnmounted(() => {
               </div>
             </TransitionGroup>
           </div>
-        </div>
+          </div>
+        </Transition>
 
-        <!-- Lyrics -->
+        <!-- Lyrics (stays mounted behind the queue; the frosted queue overlays it) -->
         <div
-          v-else-if="view === 'lyrics'"
+          v-if="view === 'lyrics'"
           ref="linesEl"
           class="h-full overflow-y-auto mini-lyrics-scroll px-5 py-[30%]"
           @scroll.passive="onLyricsScroll"
@@ -733,7 +768,7 @@ onUnmounted(() => {
         ref="bottomChromeEl"
         class="z-20 px-4 pt-1 pb-4 shrink-0 transition-opacity duration-300"
         :class="[
-          (isArtwork || view === 'lyrics') ? 'absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/85 via-black/55 to-transparent pt-12' : 'relative',
+          (isArtwork || view === 'lyrics' || queuePresent) ? 'absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/85 via-black/55 to-transparent pt-12' : 'relative',
           bottomChromeVisible ? 'opacity-100' : 'opacity-0 pointer-events-none',
         ]"
       >
@@ -948,9 +983,23 @@ onUnmounted(() => {
               </svg>
               <span
                 v-if="store.autoplayMode"
-                class="absolute -top-1 -right-1 h-3 w-3 rounded-full bg-[var(--accent-color)] ring-2 ring-[#0a0a0a]"
+                class="absolute -top-1.5 -right-1.5 h-3.5 w-3.5 rounded-full bg-[var(--accent-color)] flex items-center justify-center ring-2 ring-[#0a0a0a] shadow"
                 title="Autoplay on"
-              ></span>
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="9"
+                  height="9"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="white"
+                  stroke-width="2.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path d="M12 12c-2-2.67-4-4-6-4a4 4 0 1 0 0 8c2 0 4-1.33 6-4Zm0 0c2 2.67 4 4 6 4a4 4 0 0 0 0-8c-2 0-4 1.33-6 4Z" />
+                </svg>
+              </span>
             </button>
           </div>
         </div>
@@ -1193,6 +1242,41 @@ onUnmounted(() => {
 }
 .queue-leave-to {
   opacity: 0;
+}
+
+/* Queue panel open/close: a frosted sheet that slides up over the lyrics/backdrop
+   and cross-fades out on close. */
+.mini-queue-panel {
+  background-color: rgba(10, 10, 10, 0.72);
+  backdrop-filter: blur(26px) saturate(135%);
+  -webkit-backdrop-filter: blur(26px) saturate(135%);
+}
+/* The blur + background are animated alongside opacity so the frosted sheet truly
+   dissolves. Chromium/WebView2 does NOT fade `backdrop-filter` with opacity alone,
+   so without this the panel stays a solid blurred block and snaps out at the end. */
+.mini-queue-enter-active {
+  transition:
+    opacity 0.32s ease,
+    transform 0.4s cubic-bezier(0.16, 1, 0.3, 1),
+    background-color 0.32s ease,
+    backdrop-filter 0.32s ease,
+    -webkit-backdrop-filter 0.32s ease;
+}
+.mini-queue-leave-active {
+  transition:
+    opacity 0.32s ease,
+    transform 0.34s cubic-bezier(0.33, 0, 0.67, 1),
+    background-color 0.32s ease,
+    backdrop-filter 0.32s ease,
+    -webkit-backdrop-filter 0.32s ease;
+}
+.mini-queue-enter-from,
+.mini-queue-leave-to {
+  opacity: 0;
+  transform: translateY(20px);
+  background-color: rgba(10, 10, 10, 0);
+  backdrop-filter: blur(0px) saturate(100%);
+  -webkit-backdrop-filter: blur(0px) saturate(100%);
 }
 
 .animate-mini-pop {

@@ -112,13 +112,13 @@ const handleKeydown = (e) => {
   }
 
   switch (e.code) {
-    // Play / pause. K is the YouTube-style alias.
+    // Play / pause. K is the YouTube-style alias. Always toggle (and
+    // preventDefault) even when a button has focus — otherwise Space activates
+    // that button instead. This notably bit when restoring from the taskbar with
+    // the minimize/next button still focused: Space would re-minimize / skip.
+    // preventDefault stops the focused button from also firing, so no double-action.
     case 'Space':
     case 'KeyK': {
-      // When a button/link is focused, Space already activates it — don't also
-      // toggle play (would double-fire). Let the native activation handle it.
-      const tag = e.target && e.target.tagName;
-      if (e.code === 'Space' && (tag === 'BUTTON' || tag === 'A')) return;
       e.preventDefault();
       store.togglePlay();
       return;

@@ -159,49 +159,118 @@ pub fn discord_clear(state: tauri::State<DiscordState>) {
     }
 }
 
-// Resolve album art for the current track via the public iTunes Search API
-// (no key required). Returns a public https URL that Discord can proxy as the
-// large image, or `None` when nothing matches (caller falls back to the logo).
-#[tauri::command]
-pub async fn discord_cover_art(title: String, artist: String, album: String) -> Option<String> {
-    let artist = artist.trim();
-    let album = album.trim();
-    let title = title.trim();
-    if artist.is_empty() && album.is_empty() && title.is_empty() {
+// Shared HTTP client for cover-art lookups (cheap to clone — Arc inside).
+fn cover_http() -> reqwest::Client {
+    static HTTP: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    HTTP.get_or_init(|| {
+        reqwest::Client::builder()
+            .user_agent("ts-music")
+            .timeout(std::time::Duration::from_secs(8))
+            .build()
+            .unwrap_or_default()
+    })
+    .clone()
+}
+
+// Strip bits that hurt catalog matching: bracketed groups like "(feat. …)",
+// "(CD2)", "[Remastered]", and a trailing "feat./ft./featuring …" tail; collapse
+// whitespace. A noisy title/album is the main reason a lookup misses.
+fn clean_query(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut depth = 0i32;
+    for c in s.chars() {
+        match c {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth = (depth - 1).max(0),
+            _ if depth == 0 => out.push(c),
+            _ => {}
+        }
+    }
+    let lower = out.to_lowercase();
+    for marker in [" feat.", " feat ", " ft.", " ft ", " featuring "] {
+        if let Some(idx) = lower.find(marker) {
+            out.truncate(idx);
+            break;
+        }
+    }
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+// iTunes Search API → a crisp 600x600 artwork URL for the first match, or None.
+async fn itunes_cover(client: &reqwest::Client, term: &str, entity: &str) -> Option<String> {
+    if term.trim().is_empty() {
         return None;
     }
-
-    // Prefer an album lookup (stable art across a record); fall back to the track.
-    let (entity, term) = if !album.is_empty() {
-        ("album", format!("{} {}", artist, album))
-    } else {
-        ("musicTrack", format!("{} {}", artist, title))
-    };
-
-    static HTTP: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
-    let client = HTTP
-        .get_or_init(|| {
-            reqwest::Client::builder()
-                .user_agent("ts-music")
-                .build()
-                .unwrap_or_default()
-        })
-        .clone();
-
     let resp = client
         .get("https://itunes.apple.com/search")
-        .query(&[
-            ("term", term.as_str()),
-            ("media", "music"),
-            ("entity", entity),
-            ("limit", "1"),
-        ])
+        .query(&[("term", term), ("media", "music"), ("entity", entity), ("limit", "1")])
         .send()
         .await
         .ok()?;
     let v: serde_json::Value = resp.json().await.ok()?;
     let art = v.get("results")?.get(0)?.get("artworkUrl100")?.as_str()?;
-
-    // iTunes serves a tiny 100x100 thumbnail; request a crisp 600x600 instead.
+    // iTunes serves a tiny 100x100 thumbnail; ask for 600x600 instead.
     Some(art.replace("100x100bb", "600x600bb"))
+}
+
+// Deezer search → the largest album cover for the first track match, or None.
+// Different catalog than iTunes (better for some J-pop / indie / regional music),
+// so it's a useful fallback when iTunes has no match.
+async fn deezer_cover(client: &reqwest::Client, q: &str) -> Option<String> {
+    if q.trim().is_empty() {
+        return None;
+    }
+    let resp = client
+        .get("https://api.deezer.com/search")
+        .query(&[("q", q), ("limit", "1")])
+        .send()
+        .await
+        .ok()?;
+    let v: serde_json::Value = resp.json().await.ok()?;
+    let item = v.get("data")?.get(0)?;
+    let cover = item
+        .get("album")
+        .and_then(|a| a.get("cover_xl").or_else(|| a.get("cover_big")).or_else(|| a.get("cover_medium")))
+        .or_else(|| item.get("cover_xl").or_else(|| item.get("cover_big")));
+    Some(cover?.as_str()?.to_string())
+}
+
+// Resolve album art for the current track. Returns a public https URL that Discord
+// can proxy as the large image, or `None` when nothing matches (caller falls back
+// to the logo). Tries several sources/queries so more albums resolve: some records
+// aren't on iTunes under their exact name (or at all), but are on Deezer.
+#[tauri::command]
+pub async fn discord_cover_art(title: String, artist: String, album: String) -> Option<String> {
+    let artist = clean_query(&artist);
+    let album = clean_query(&album);
+    let title = clean_query(&title);
+    if artist.is_empty() && album.is_empty() && title.is_empty() {
+        return None;
+    }
+
+    let client = cover_http();
+
+    // First hit wins. Album art is identical across a record, so an album lookup
+    // is preferred; the track lookups catch singles / mismatched album names.
+    if !album.is_empty() {
+        if let Some(url) = itunes_cover(&client, &format!("{} {}", artist, album), "album").await {
+            return Some(url);
+        }
+    }
+    if !title.is_empty() {
+        if let Some(url) = itunes_cover(&client, &format!("{} {}", artist, title), "musicTrack").await {
+            return Some(url);
+        }
+    }
+    if !title.is_empty() {
+        if let Some(url) = deezer_cover(&client, &format!("{} {}", artist, title)).await {
+            return Some(url);
+        }
+    }
+    if !album.is_empty() {
+        if let Some(url) = deezer_cover(&client, &format!("{} {}", artist, album)).await {
+            return Some(url);
+        }
+    }
+    None
 }
