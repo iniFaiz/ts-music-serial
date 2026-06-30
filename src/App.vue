@@ -28,7 +28,37 @@ watch(
 );
 
 // ---- Global keyboard shortcuts ----
+const SEEK_STEP = 5; // seconds for ←/→
+const SEEK_STEP_BIG = 10; // seconds for Shift+←/→
+const VOLUME_STEP = 0.05; // 5% for ↑/↓
+const VOLUME_STEP_BIG = 0.1; // 10% for Shift+↑/↓
+
+// True when the keystroke is headed into a text field / editable area, where the
+// single-key media shortcuts must not hijack what the user is typing.
+const isTypingTarget = (e) => {
+  const el = e.target;
+  if (!el) return false;
+  const tag = el.tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable;
+};
+
+// Seek relative to the current position, clamped to the track length.
+const seekBy = (delta) => {
+  if (!store.currentSong) return;
+  let target = (store.currentTime || 0) + delta;
+  target = Math.max(0, target);
+  if (store.duration > 0) target = Math.min(store.duration, target);
+  store.seek(target);
+};
+
+// Nudge the volume (0..1), rounded to avoid float drift.
+const bumpVolume = (delta) => {
+  const v = Math.min(1, Math.max(0, Math.round(((store.volume || 0) + delta) * 100) / 100));
+  store.setVolume(v);
+};
+
 const handleKeydown = (e) => {
+  // Window-mode toggles + Escape work everywhere, even inside inputs.
   // Ctrl+Shift+F toggles the fullscreen Now-Playing view and enters native monitor
   // fullscreen. Ignored while the mini player is open (the two window modes conflict).
   if (e.ctrlKey && e.shiftKey && (e.key === 'F' || e.key === 'f')) {
@@ -48,6 +78,94 @@ const handleKeydown = (e) => {
   }
   if (e.key === 'Escape' && store.fullscreenOpen) {
     store.exitFullscreenWithTransition();
+    return;
+  }
+
+  // Everything below is a media shortcut — never steal keystrokes from a text box.
+  if (isTypingTarget(e)) return;
+
+  // Track navigation: Ctrl/Cmd + ←/→ (hardware media keys are left to the OS/SMTC
+  // layer so they aren't handled twice).
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key === 'ArrowRight') {
+    e.preventDefault();
+    store.nextSong(true);
+    return;
+  }
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key === 'ArrowLeft') {
+    e.preventDefault();
+    store.prevSong();
+    return;
+  }
+
+  // Past here we only want bare keys (optionally with Shift) — let any other
+  // Ctrl/Cmd/Alt chord fall through to the browser/app.
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+  // Number row 1..0 → jump to 10%..100% (0 = start). Matches YouTube/most players.
+  if (e.code.length === 6 && e.code.startsWith('Digit')) {
+    if (store.currentSong && store.duration > 0) {
+      e.preventDefault();
+      const n = Number(e.code.slice(5));
+      store.seek((store.duration * n) / 10);
+    }
+    return;
+  }
+
+  switch (e.code) {
+    // Play / pause. K is the YouTube-style alias.
+    case 'Space':
+    case 'KeyK': {
+      // When a button/link is focused, Space already activates it — don't also
+      // toggle play (would double-fire). Let the native activation handle it.
+      const tag = e.target && e.target.tagName;
+      if (e.code === 'Space' && (tag === 'BUTTON' || tag === 'A')) return;
+      e.preventDefault();
+      store.togglePlay();
+      return;
+    }
+    case 'ArrowRight':
+      e.preventDefault();
+      seekBy(e.shiftKey ? SEEK_STEP_BIG : SEEK_STEP);
+      return;
+    case 'ArrowLeft':
+      e.preventDefault();
+      seekBy(e.shiftKey ? -SEEK_STEP_BIG : -SEEK_STEP);
+      return;
+    case 'ArrowUp':
+      e.preventDefault();
+      bumpVolume(e.shiftKey ? VOLUME_STEP_BIG : VOLUME_STEP);
+      return;
+    case 'ArrowDown':
+      e.preventDefault();
+      bumpVolume(e.shiftKey ? -VOLUME_STEP_BIG : -VOLUME_STEP);
+      return;
+    case 'Home':
+      if (store.currentSong) {
+        e.preventDefault();
+        store.seek(0);
+      }
+      return;
+    case 'KeyM':
+      e.preventDefault();
+      store.toggleMute();
+      return;
+    case 'KeyS':
+      e.preventDefault();
+      store.toggleShuffle();
+      return;
+    case 'KeyR':
+      e.preventDefault();
+      store.toggleLoop();
+      return;
+    case 'KeyL':
+      // Like / unlike the current track.
+      if (store.currentSong) {
+        e.preventDefault();
+        store.toggleFavorite(store.currentSong.path);
+      }
+      return;
+    default:
+      return;
   }
 };
 

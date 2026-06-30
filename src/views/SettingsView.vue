@@ -240,6 +240,35 @@
       </p>
     </Section>
 
+    <!-- Keyboard Shortcuts -->
+    <Section
+      title="Keyboard Shortcuts"
+      description="Control playback from anywhere in the app."
+    >
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-1.5">
+        <div
+          v-for="(s, i) in shortcuts"
+          :key="i"
+          class="flex items-center justify-between gap-3 py-1"
+        >
+          <span class="text-sm text-gray-300">{{ s.label }}</span>
+          <span class="flex items-center gap-1 shrink-0">
+            <template v-for="(k, j) in s.keys" :key="j">
+              <span v-if="j > 0" class="text-gray-600 text-xs">+</span>
+              <kbd
+                class="px-1.5 py-0.5 text-xs font-medium text-gray-200 bg-[#2a2a2a] border border-white/10 rounded shadow-sm"
+                >{{ k }}</kbd
+              >
+            </template>
+          </span>
+        </div>
+      </div>
+      <p class="text-xs text-gray-500 mt-3">
+        Shortcuts are ignored while you're typing in a text field. Hardware media
+        keys (play/pause, next, previous) are handled by the system controls.
+      </p>
+    </Section>
+
     <!-- Performance -->
     <Section title="Performance">
       <ToggleInt
@@ -296,6 +325,27 @@ const transitionOptions = [
   { value: 'off', label: 'Off' },
   { value: 'gapless', label: 'Gapless' },
   { value: 'crossfade', label: 'Crossfade' },
+];
+
+// Reference list mirroring the handler in App.vue (handleKeydown).
+const shortcuts = [
+  { keys: ['Space'], label: 'Play / pause' },
+  { keys: ['Ctrl', '←'], label: 'Previous track' },
+  { keys: ['Ctrl', '→'], label: 'Next track' },
+  { keys: ['←'], label: 'Seek back 5s' },
+  { keys: ['→'], label: 'Seek forward 5s' },
+  { keys: ['Shift', '←'], label: 'Seek back 10s' },
+  { keys: ['Shift', '→'], label: 'Seek forward 10s' },
+  { keys: ['↑'], label: 'Volume up' },
+  { keys: ['↓'], label: 'Volume down' },
+  { keys: ['0 – 9'], label: 'Jump to 0–90%' },
+  { keys: ['Home'], label: 'Restart track' },
+  { keys: ['M'], label: 'Mute / unmute' },
+  { keys: ['S'], label: 'Shuffle on / off' },
+  { keys: ['R'], label: 'Repeat mode' },
+  { keys: ['L'], label: 'Like current track' },
+  { keys: ['Ctrl', 'Shift', 'F'], label: 'Fullscreen player' },
+  { keys: ['Ctrl', 'Shift', 'M'], label: 'Mini player' },
 ];
 
 const lyricsOptions = [
