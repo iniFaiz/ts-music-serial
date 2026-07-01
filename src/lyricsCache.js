@@ -56,7 +56,6 @@ export async function loadLyrics(song, { force = false } = {}) {
     artist: song.artist || '',
     album: song.album || '',
     durationSecs: Math.round(song.duration_secs || store.duration || 0),
-    musixmatchToken: store.musixmatchToken || null,
     lyricsSource: store.lyricsSource || 'netease',
     force,
   })

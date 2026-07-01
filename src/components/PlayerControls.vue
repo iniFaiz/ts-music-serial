@@ -902,10 +902,11 @@ const formatTime = (seconds) => {
           class="w-full flex items-center gap-1.5 sm:gap-3 text-[10px] sm:text-xs text-gray-400 font-variant-numeric tabular-nums"
         >
           <span>{{ formatTime(store.currentTime) }}</span>
-          <!-- Fixed-height seek track. The plain slider and the waveform occupy
-               the same space and cross-fade when the waveform is toggled, so the
-               player-bar height never changes (no overflow into the title bar). -->
-          <div class="relative flex-1 h-8 flex items-center">
+          <!-- Seek track. The plain slider and the waveform occupy the same space
+               and cross-fade when toggled. It stays thin when the waveform is off
+               (so the player bar keeps its compact height) and gains room only
+               when the waveform is on. -->
+          <div class="relative flex-1 flex items-center" :class="store.waveformEnabled ? 'h-8' : 'h-5'">
             <input
               type="range"
               min="0"

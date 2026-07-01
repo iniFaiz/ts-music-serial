@@ -72,6 +72,11 @@ const playLastPlaylist = () => {
   }
 };
 
+const exportM3u = () => {
+  menuOpen.value = false;
+  store.exportPlaylistM3u(playlistId.value);
+};
+
 // Suggest a few random library tracks not already in this playlist, sampled from
 // the DB (no full library array in the webview).
 const getSuggestions = async () => {
@@ -247,6 +252,14 @@ const addAndRemoveFromSuggestions = (songPath) => {
             class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors disabled:opacity-40"
           >
             Play last
+          </button>
+          <div class="border-t border-[#3a3a3a] my-1"></div>
+          <button
+            @click="exportM3u"
+            :disabled="songs.length === 0"
+            class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors disabled:opacity-40"
+          >
+            Export as M3U…
           </button>
           <div class="border-t border-[#3a3a3a] my-1"></div>
           <button

@@ -28,6 +28,7 @@ use walkdir::WalkDir;
 mod db;
 mod discord;
 mod lyrics;
+mod playlist_io;
 #[cfg(target_os = "windows")]
 mod thumbbar;
 #[cfg(target_os = "windows")]
@@ -72,7 +73,7 @@ fn parse_rg_db(s: &str) -> Option<f32> {
 }
 
 // Filter supported audio files by extension.
-fn is_audio_file(path: &Path) -> bool {
+pub(crate) fn is_audio_file(path: &Path) -> bool {
     match path.extension() {
         Some(ext) => {
             let ext_str = ext.to_string_lossy().to_lowercase();
@@ -84,7 +85,7 @@ fn is_audio_file(path: &Path) -> bool {
 
 // Allow a scanned directory through the asset protocol so the frontend can
 // stream its audio files (and so cover extraction is permitted for them).
-fn allow_root(app: &AppHandle, path: &str) {
+pub(crate) fn allow_root(app: &AppHandle, path: &str) {
     let _ = app.asset_protocol_scope().allow_directory(path, true);
 }
 
@@ -96,7 +97,7 @@ fn is_allowed_audio(app: &AppHandle, path: &Path) -> bool {
 }
 
 // Extract metadata for a single file.
-fn parse_metadata(path: &Path) -> Option<MusicTrack> {
+pub(crate) fn parse_metadata(path: &Path) -> Option<MusicTrack> {
     let path_str = path.to_string_lossy().to_string();
 
     // Date created (falling back to modified) as a unix timestamp.
@@ -2382,7 +2383,6 @@ async fn get_lyrics(
     artist: String,
     album: String,
     duration_secs: u64,
-    musixmatch_token: Option<String>,
     lyrics_source: String,
     force: bool,
 ) -> Option<lyrics::Lyrics> {
@@ -2455,17 +2455,16 @@ async fn get_lyrics(
         } else if lyrics_source == "netease" {
             result = lyrics::from_netease(client, &title, &artist).await;
         } else if lyrics_source == "musixmatch" {
-            let token = musixmatch_token
-                .as_deref()
-                .map(str::trim)
-                .unwrap_or("");
+            // The user token (if any) lives in the OS credential store, never in
+            // the app DB — read it here rather than accepting it from the webview.
+            let token = musixmatch_token_get().unwrap_or_default();
             result = lyrics::from_musixmatch(
                 client,
                 &title,
                 &artist,
                 &album,
                 duration_secs,
-                token,
+                token.trim(),
             )
             .await;
         }
@@ -2486,6 +2485,40 @@ async fn get_lyrics(
     }
 
     result
+}
+
+// ---------------------------------------------------------------------------
+// Musixmatch token — stored in the OS credential store (never in the app DB)
+// ---------------------------------------------------------------------------
+
+const KEYRING_SERVICE: &str = "ts-music";
+const KEYRING_USER: &str = "musixmatch_token";
+
+fn musixmatch_token_get() -> Option<String> {
+    keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER)
+        .ok()?
+        .get_password()
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+}
+
+// Store (or, for an empty string, clear) the Musixmatch user token securely.
+#[tauri::command]
+fn set_musixmatch_token(token: String) -> Result<(), String> {
+    let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER).map_err(|e| e.to_string())?;
+    if token.trim().is_empty() {
+        // delete_credential errors if none exists; that's fine.
+        let _ = entry.delete_credential();
+        Ok(())
+    } else {
+        entry.set_password(token.trim()).map_err(|e| e.to_string())
+    }
+}
+
+// Whether a token is configured (the value itself is never returned to the UI).
+#[tauri::command]
+fn musixmatch_token_status() -> bool {
+    musixmatch_token_get().is_some()
 }
 
 // ---------------------------------------------------------------------------
@@ -2922,6 +2955,10 @@ pub fn run() {
             player_set_normalization,
             compute_track_gain,
             get_lyrics,
+            set_musixmatch_token,
+            musixmatch_token_status,
+            playlist_io::export_m3u,
+            playlist_io::import_m3u,
             watch_roots,
             smtc_set_metadata,
             smtc_set_playback,

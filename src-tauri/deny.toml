@@ -1,0 +1,44 @@
+# cargo-deny configuration — supply-chain checks for the Rust dependency tree.
+# Run locally with:  cargo deny check   (from src-tauri/)
+# CI runs advisories + bans + sources (see .github/workflows/security.yml).
+
+[advisories]
+version = 2
+# Fail on yanked crates. Known vulnerabilities are denied by default in v2.
+yanked = "deny"
+# Only flag unmaintained crates that we depend on directly (less noise from the
+# deep transitive tree pulled in by tauri/wry).
+unmaintained = "workspace"
+# Add RUSTSEC IDs here to temporarily accept an advisory that has no fix yet.
+ignore = []
+
+[bans]
+# Duplicate versions are common in a big tree (tauri pulls many); warn, don't fail.
+multiple-versions = "warn"
+wildcards = "warn"
+
+[sources]
+# Only crates.io and the standard registry — reject unknown registries / git deps.
+unknown-registry = "deny"
+unknown-git = "deny"
+
+[licenses]
+version = 2
+confidence-threshold = 0.9
+# Permissive licenses we accept. Extend if `cargo deny check licenses` flags a new
+# dependency with an equally-permissive license.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "MPL-2.0",
+    "Unicode-DFS-2016",
+    "Unicode-3.0",
+    "CC0-1.0",
+    "BSL-1.0",
+    "OpenSSL",
+]

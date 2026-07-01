@@ -8,6 +8,7 @@ import PlayerControls from './components/PlayerControls.vue';
 import QueuePanel from './components/QueuePanel.vue';
 import PlaylistCreateModal from './components/PlaylistCreateModal.vue';
 import SmartPlaylistModal from './components/SmartPlaylistModal.vue';
+import CommandPalette from './components/CommandPalette.vue';
 import PlaylistCover from './components/PlaylistCover.vue';
 import TitleBar from './components/TitleBar.vue';
 import FullScreenPlayer from './components/FullScreenPlayer.vue';
@@ -70,6 +71,16 @@ const handleKeydown = (e) => {
   if (e.ctrlKey && e.shiftKey && (e.key === 'M' || e.key === 'm')) {
     e.preventDefault();
     store.toggleMiniPlayer();
+    return;
+  }
+  // Ctrl/Cmd+K opens the command palette (works even inside text inputs).
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && (e.key === 'k' || e.key === 'K')) {
+    e.preventDefault();
+    store.toggleCommandPalette();
+    return;
+  }
+  if (e.key === 'Escape' && store.commandPaletteOpen) {
+    store.closeCommandPalette();
     return;
   }
   if (e.key === 'Escape' && store.miniPlayerOpen) {
@@ -877,6 +888,9 @@ const navigatePlaylist = (pl, event) => {
 
     <!-- Smart-playlist rule editor (global overlay) -->
     <SmartPlaylistModal />
+
+    <!-- Command palette (global overlay, Ctrl+K) -->
+    <CommandPalette />
 
     <!-- Fullscreen Now-Playing + lyrics (global overlay) -->
     <FullScreenPlayer />

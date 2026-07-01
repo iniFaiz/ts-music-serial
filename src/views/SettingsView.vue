@@ -224,14 +224,42 @@
         @update:modelValue="(v) => store.setLyricsSource(v)"
       />
       <div v-if="store.lyricsSource === 'musixmatch'" class="mt-3">
-        <label class="text-sm text-gray-300 font-medium block mb-2">Musixmatch user token (optional)</label>
-        <input
-          :value="store.musixmatchToken"
-          @change="(e) => store.setMusixmatchToken(e.target.value)"
-          type="text"
-          placeholder="Paste your Musixmatch community token"
-          class="w-full bg-[#2a2a2a] text-sm text-white rounded-md px-3 py-2 focus:outline-none focus:ring-1 focus:ring-[var(--accent-color)] placeholder-gray-600"
-        />
+        <label class="text-sm text-gray-300 font-medium block mb-2">
+          Musixmatch user token (optional)
+          <span v-if="store.musixmatchConfigured" class="text-[var(--accent-color)] text-xs ml-1"
+            >✓ configured</span
+          >
+        </label>
+        <div class="flex gap-2">
+          <input
+            v-model="tokenInput"
+            @keyup.enter="saveToken"
+            type="password"
+            :placeholder="
+              store.musixmatchConfigured
+                ? '•••••••• (stored securely)'
+                : 'Paste your Musixmatch community token'
+            "
+            class="flex-1 bg-[#2a2a2a] text-sm text-white rounded-md px-3 py-2 focus:outline-none focus:ring-1 focus:ring-[var(--accent-color)] placeholder-gray-600"
+          />
+          <button
+            @click="saveToken"
+            class="px-3 py-2 bg-[#3a3a3a] hover:bg-[#444] text-white text-sm rounded-md transition-colors shrink-0"
+          >
+            Save
+          </button>
+          <button
+            v-if="store.musixmatchConfigured"
+            @click="store.setMusixmatchToken('')"
+            class="px-3 py-2 text-gray-400 hover:text-white text-sm rounded-md transition-colors shrink-0"
+            title="Remove token"
+          >
+            Clear
+          </button>
+        </div>
+        <p class="text-xs text-gray-500 mt-1">
+          Stored securely in your OS credential manager — never saved in the app database.
+        </p>
       </div>
 
       <div v-if="store.lyricsSource !== 'none'" class="border-t border-white/5 mt-3 pt-3">
@@ -309,8 +337,68 @@
       </p>
     </Section>
 
+    <!-- Sleep timer -->
+    <Section
+      title="Sleep Timer"
+      description="Automatically pause playback after a set time, at the end of the current track, or at the end of the queue."
+    >
+      <div class="flex flex-wrap gap-2">
+        <button
+          v-for="opt in sleepQuick"
+          :key="opt.value"
+          @click="store.setSleepTimer(opt.value)"
+          class="px-3 py-1.5 rounded-md text-sm font-medium transition-colors"
+          :class="
+            isSleepActive(opt.value)
+              ? 'bg-[var(--accent-color)] text-white'
+              : 'bg-[#2a2a2a] text-gray-300 hover:bg-[#3a3a3a]'
+          "
+        >
+          {{ opt.label }}
+        </button>
+      </div>
+      <div class="flex items-center gap-2 mt-3">
+        <input
+          v-model.number="customMin"
+          @keyup.enter="setCustom"
+          type="number"
+          min="1"
+          max="1440"
+          placeholder="Custom minutes"
+          class="w-40 bg-[#2a2a2a] text-sm text-white rounded-md px-3 py-2 focus:outline-none focus:ring-1 focus:ring-[var(--accent-color)] placeholder-gray-600"
+        />
+        <button
+          @click="setCustom"
+          class="px-3 py-2 bg-[#3a3a3a] hover:bg-[#444] text-white text-sm rounded-md transition-colors shrink-0"
+        >
+          Set
+        </button>
+      </div>
+      <p v-if="sleepStatus" class="text-xs text-[var(--accent-color)] mt-3 flex items-center gap-2">
+        <span>{{ sleepStatus }}</span>
+        <button
+          @click="store.setSleepTimer('off')"
+          class="text-gray-400 hover:text-white underline underline-offset-2"
+        >
+          Cancel
+        </button>
+      </p>
+    </Section>
+
     <!-- Library -->
     <Section title="Library">
+      <div class="flex items-center justify-between mb-5">
+        <div>
+          <h3 class="text-white font-medium text-sm">Import playlist</h3>
+          <p class="text-xs text-gray-500">Load an .m3u / .m3u8 file into a new playlist.</p>
+        </div>
+        <button
+          @click="importM3u"
+          class="px-4 py-2 bg-[#3a3a3a] hover:bg-[#444] text-white rounded-md transition-colors text-sm font-medium shrink-0"
+        >
+          Import M3U
+        </button>
+      </div>
       <div class="flex items-center justify-between">
         <div>
           <h3 class="text-white font-medium text-sm">Reset library</h3>
@@ -328,7 +416,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { store } from '../store';
 import { invoke } from '@tauri-apps/api/core';
 import { confirm } from '@tauri-apps/plugin-dialog';
@@ -371,6 +459,7 @@ const shortcuts = [
   { keys: ['S'], label: 'Shuffle on / off' },
   { keys: ['R'], label: 'Repeat mode' },
   { keys: ['L'], label: 'Like current track' },
+  { keys: ['Ctrl', 'K'], label: 'Command palette' },
   { keys: ['Ctrl', 'Shift', 'F'], label: 'Fullscreen player' },
   { keys: ['Ctrl', 'Shift', 'M'], label: 'Mini player' },
 ];
@@ -382,6 +471,47 @@ const lyricsOptions = [
   { value: 'musixmatch', label: 'Musixmatch' },
   { value: 'none', label: 'Off / Disabled' },
 ];
+
+// Musixmatch token is write-only from the UI (kept in the OS credential store).
+const tokenInput = ref('');
+const saveToken = () => {
+  store.setMusixmatchToken(tokenInput.value);
+  tokenInput.value = '';
+};
+
+const sleepQuick = [
+  { value: 'off', label: 'Off' },
+  { value: 'end', label: 'End of track' },
+  { value: 'end-queue', label: 'End of queue' },
+  { value: 15, label: '15m' },
+  { value: 30, label: '30m' },
+  { value: 45, label: '45m' },
+  { value: 60, label: '1h' },
+];
+const customMin = ref(null);
+const setCustom = () => {
+  const v = Number(customMin.value);
+  if (isFinite(v) && v > 0) store.setSleepTimer(v);
+};
+const isSleepActive = (value) => String(store.sleepTimerMode) === String(value);
+
+// Live countdown for a timed sleep timer.
+const now = ref(Date.now());
+let sleepTick = null;
+const sleepStatus = computed(() => {
+  const m = store.sleepTimerMode;
+  if (m === 'off') return null;
+  if (m === 'end') return 'Stops at the end of the current track';
+  if (m === 'end-queue') return 'Stops at the end of the queue';
+  const remain = Math.max(0, store.sleepTimerDeadline - now.value);
+  const mm = Math.floor(remain / 60000);
+  const ss = Math.floor((remain % 60000) / 1000)
+    .toString()
+    .padStart(2, '0');
+  return `Stops in ${mm}:${ss}`;
+});
+
+const importM3u = () => store.importPlaylistM3u();
 
 async function loadDevices() {
   try {
@@ -412,5 +542,13 @@ const confirmReset = async () => {
   if (yes) store.resetLibrary();
 };
 
-onMounted(loadDevices);
+onMounted(() => {
+  loadDevices();
+  sleepTick = setInterval(() => {
+    now.value = Date.now();
+  }, 1000);
+});
+onUnmounted(() => {
+  if (sleepTick) clearInterval(sleepTick);
+});
 </script>

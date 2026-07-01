@@ -689,7 +689,7 @@ const goToAlbum = (albumName) => {
               <div class="mb-2 text-3xl font-bold">Lyrics not found</div>
               <p class="mb-4 text-sm text-white/40">
                 No lyrics were found locally, on LRCLIB, or NetEase
-                <span v-if="!store.musixmatchToken">(add a Musixmatch token in Settings for more sources)</span>.
+                <span v-if="!store.musixmatchConfigured">(add a Musixmatch token in Settings for more sources)</span>.
               </p>
               <button
                 @click="fetchLyrics(true)"

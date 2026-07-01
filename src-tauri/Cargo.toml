@@ -47,6 +47,11 @@ hex = "0.4"
 # Discord Rich Presence (now-playing status). Pure-Rust IPC to the local Discord
 # client; cross-platform.
 discord-rich-presence = "1.1"
+# OS credential store for the (optional) Musixmatch user token, so it is never
+# persisted in the app database as plaintext. `windows-native` uses the Windows
+# Credential Manager; on other targets keyring compiles with a mock backend that
+# simply reports "no token".
+keyring = { version = "3", features = ["windows-native"] }
 
 # Windows-only: native Taskbar thumbnail toolbar buttons (ITaskbarList3).
 # Pinned to the same `windows` major already pulled in by tauri/tao/wry so the

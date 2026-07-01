@@ -1,6 +1,6 @@
 import { reactive } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
-import { open } from '@tauri-apps/plugin-dialog';
+import { open, save } from '@tauri-apps/plugin-dialog';
 import { getCurrentWindow, LogicalSize } from '@tauri-apps/api/window';
 import { idbGet, idbDelete } from './libraryStore';
 import { newSmartPlaylist } from './smartPlaylists';
@@ -32,6 +32,8 @@ let savedWindowSize = null; // PhysicalSize from outerSize()
 // play/pause often fire together) coalesce into a single deep-clone + IDB write.
 let persistStateTimer = null;
 let savedWindowMaximized = false;
+// Active sleep-timer timeout handle (module scope so it's never serialized).
+let sleepTimerHandle = null;
 
 // Directory portion of a file path (handles both / and \ separators).
 function dirName(path) {
@@ -126,8 +128,10 @@ export const store = reactive({
   eqPreampDb: 0,
   eqBands: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
   eqPreset: 'flat',
-  // Optional Musixmatch community user token for the lyrics fallback chain.
-  musixmatchToken: '',
+  // Whether a Musixmatch community token is configured. The token itself lives in
+  // the OS credential store (see set_musixmatch_token) and is never held in JS or
+  // persisted in the DB — this is just a boolean for the UI.
+  musixmatchConfigured: false,
   // Selected lyrics provider: 'lrclib' | 'local' | 'netease' | 'musixmatch' | 'none'
   lyricsSource: 'netease',
   // Show the romanization (romaji) sub-line under lyrics when one is available.
@@ -141,6 +145,13 @@ export const store = reactive({
   // waveform (peaks decoded + cached in Rust). Off by default — the first play of
   // each track triggers a one-time full decode to build its waveform.
   waveformEnabled: false,
+  // Sleep timer (session-only, not persisted). Mode is 'off' | 'end' (stop when
+  // the current track finishes) | a number of minutes. `sleepTimerDeadline` is a
+  // ms epoch for the timed mode, used to show a countdown.
+  sleepTimerMode: 'off',
+  sleepTimerDeadline: 0,
+  // Command palette (Ctrl+K) — instant fuzzy jump to songs/albums/artists/playlists.
+  commandPaletteOpen: false,
 
   // Fullscreen Now-Playing overlay (Apple Music style cover + synced lyrics).
   fullscreenOpen: false,
@@ -271,7 +282,6 @@ export const store = reactive({
           eqPreampDb: this.eqPreampDb,
           eqBands: [...this.eqBands],
           eqPreset: this.eqPreset,
-          musixmatchToken: this.musixmatchToken,
           lyricsSource: this.lyricsSource,
           showRomaji: this.showRomaji,
           lyricsOffsetMs: this.lyricsOffsetMs,
@@ -329,6 +339,7 @@ export const store = reactive({
       await this.refreshFavorites();
       await this.refreshPlaylists();
       await this.refreshRecents();
+      this.refreshMusixmatchStatus();
       this.libraryReady = true;
       this.bumpLibrary();
       await this.restoreState();
@@ -408,7 +419,6 @@ export const store = reactive({
       if (Array.isArray(s.eqBands) && s.eqBands.length === EQ_BAND_COUNT)
         this.eqBands = s.eqBands.map((n) => Number(n) || 0);
       if (typeof s.eqPreset === 'string') this.eqPreset = s.eqPreset;
-      if (typeof s.musixmatchToken === 'string') this.musixmatchToken = s.musixmatchToken;
       if (typeof s.lyricsSource === 'string') this.lyricsSource = s.lyricsSource;
       if (typeof s.showRomaji === 'boolean') this.showRomaji = s.showRomaji;
       if (typeof s.lyricsOffsetMs === 'number') this.lyricsOffsetMs = s.lyricsOffsetMs;
@@ -887,9 +897,23 @@ export const store = reactive({
     this.syncEqualizer();
   },
 
-  setMusixmatchToken(v) {
-    this.musixmatchToken = String(v || '').trim();
-    this.persistState();
+  // Store the Musixmatch token in the OS credential store (empty clears it). The
+  // token never touches the app DB or JS state — only the boolean status is kept.
+  async setMusixmatchToken(v) {
+    const token = String(v || '').trim();
+    try {
+      await invoke('set_musixmatch_token', { token });
+      this.musixmatchConfigured = token.length > 0;
+    } catch (e) {
+      console.error('Failed to store Musixmatch token', e);
+    }
+  },
+  async refreshMusixmatchStatus() {
+    try {
+      this.musixmatchConfigured = await invoke('musixmatch_token_status');
+    } catch {
+      this.musixmatchConfigured = false;
+    }
   },
   setLyricsSource(v) {
     this.lyricsSource = String(v || 'netease');
@@ -1697,6 +1721,15 @@ export const store = reactive({
   async nextSong(userTriggered = false) {
     if (!this.currentSong || this.queue.length === 0) return;
 
+    // Sleep timer "stop after current track": end playback instead of advancing.
+    if (!userTriggered && this.sleepTimerMode === 'end') {
+      this.sleepTimerMode = 'off';
+      this.sleepTimerDeadline = 0;
+      this.isPlaying = false;
+      this.playbackFinished = true;
+      return;
+    }
+
     if (this.loopMode === 2 && !userTriggered) {
       return;
     }
@@ -1724,6 +1757,15 @@ export const store = reactive({
     }
 
     if (nextIndex >= this.queue.length) {
+      // Sleep timer "stop at end of queue": stop here even if loop/autoplay would
+      // otherwise keep going.
+      if (!userTriggered && this.sleepTimerMode === 'end-queue') {
+        this.sleepTimerMode = 'off';
+        this.sleepTimerDeadline = 0;
+        this.isPlaying = false;
+        this.playbackFinished = true;
+        return;
+      }
       if (this.loopMode === 1) {
         nextIndex = 0;
       } else if (this.autoplayMode) {
@@ -1864,6 +1906,106 @@ export const store = reactive({
     this.persistState();
   },
 
+  // ---- Sleep timer ------------------------------------------------------
+
+  // mode: 'off' | 'end' (stop after the current track) | 'end-queue' (stop when
+  // the queue finishes) | number of minutes (incl. custom values).
+  setSleepTimer(mode) {
+    if (sleepTimerHandle) {
+      clearTimeout(sleepTimerHandle);
+      sleepTimerHandle = null;
+    }
+    if (mode === 'off' || mode === null || mode === undefined) {
+      this.sleepTimerMode = 'off';
+      this.sleepTimerDeadline = 0;
+      return;
+    }
+    if (mode === 'end' || mode === 'end-queue') {
+      this.sleepTimerMode = mode;
+      this.sleepTimerDeadline = 0;
+      return;
+    }
+    const raw = Number(mode);
+    if (!isFinite(raw) || raw <= 0) {
+      this.sleepTimerMode = 'off';
+      this.sleepTimerDeadline = 0;
+      return;
+    }
+    const minutes = Math.min(1440, Math.max(1, Math.round(raw))); // clamp 1min–24h
+    this.sleepTimerMode = minutes;
+    this.sleepTimerDeadline = Date.now() + minutes * 60000;
+    sleepTimerHandle = setTimeout(() => {
+      sleepTimerHandle = null;
+      this.isPlaying = false;
+      this.sleepTimerMode = 'off';
+      this.sleepTimerDeadline = 0;
+    }, minutes * 60000);
+  },
+
+  // ---- Command palette (Ctrl+K) -----------------------------------------
+
+  openCommandPalette() {
+    this.commandPaletteOpen = true;
+  },
+  closeCommandPalette() {
+    this.commandPaletteOpen = false;
+  },
+  toggleCommandPalette() {
+    this.commandPaletteOpen = !this.commandPaletteOpen;
+  },
+
+  // ---- Playlist import / export (M3U / M3U8) -----------------------------
+
+  // Export a playlist to an .m3u8 file the user picks via a save dialog.
+  async exportPlaylistM3u(id) {
+    const pl = this.getPlaylist(id);
+    if (!pl) return;
+    try {
+      const safeName = (pl.name || 'playlist').replace(/[\\/:*?"<>|]/g, '_');
+      const dest = await save({
+        defaultPath: `${safeName}.m3u8`,
+        filters: [{ name: 'Playlist', extensions: ['m3u8', 'm3u'] }],
+      });
+      if (!dest) return;
+      const count = await invoke('export_m3u', { dest, playlistId: id });
+      this.statusMessage = `Exported ${count} tracks to ${dest}`;
+    } catch (e) {
+      console.error('Failed to export playlist', e);
+      this.statusMessage = `Export failed: ${e}`;
+    }
+  },
+
+  // Import an .m3u/.m3u8 file into a new playlist and return it (for navigation).
+  async importPlaylistM3u() {
+    try {
+      const src = await open({
+        multiple: false,
+        filters: [{ name: 'Playlist', extensions: ['m3u8', 'm3u'] }],
+      });
+      if (!src) return null;
+      const paths = await invoke('import_m3u', { src });
+      if (!Array.isArray(paths) || paths.length === 0) {
+        this.statusMessage = 'No playable tracks found in that playlist';
+        return null;
+      }
+      // Watch/authorize scope may have changed (new folders); refresh watcher.
+      this.roots = await invoke('db_roots');
+      this.watchRoots();
+
+      const base = String(src).replace(/\\/g, '/').split('/').pop() || 'Imported Playlist';
+      const name = base.replace(/\.(m3u8?|M3U8?)$/, '');
+      const pl = await this.createPlaylist(name);
+      if (pl) await this.addToPlaylist(pl.id, paths);
+      this.scanCount = await invoke('db_count');
+      this.statusMessage = `Imported ${paths.length} tracks into "${name}"`;
+      return pl;
+    } catch (e) {
+      console.error('Failed to import playlist', e);
+      this.statusMessage = `Import failed: ${e}`;
+      return null;
+    }
+  },
+
   // Pick a random track from the library for unlimited-queue autoplay. Avoids
   // immediately repeating the current song when the library has alternatives.
   // A random track from the whole library (for unlimited-queue autoplay), chosen
@@ -1886,6 +2028,9 @@ export const store = reactive({
   // when that reactive field lands and then sees the resolved path.
   nextUpPath() {
     if (!this.currentSong || this.queue.length === 0) return null;
+    // Sleep timer "stop after current track": never pre-decode a next track, or
+    // gapless/crossfade would advance past the point we mean to stop at.
+    if (this.sleepTimerMode === 'end') return null;
     if (this.loopMode === 2) return this.currentSong.path; // repeat-one
 
     if (this.preselectedNextSong) {
@@ -1911,6 +2056,8 @@ export const store = reactive({
     if (i < 0) return null;
     let n = i + 1;
     if (n >= this.queue.length) {
+      // Stop-at-end-of-queue: don't prepare a continuation.
+      if (this.sleepTimerMode === 'end-queue') return null;
       if (this.loopMode === 1) {
         n = 0;
       } else if (this.autoplayMode) {
