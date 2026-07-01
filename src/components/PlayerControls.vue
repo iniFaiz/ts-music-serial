@@ -6,7 +6,9 @@ import { listen } from '@tauri-apps/api/event';
 import { useRouter } from 'vue-router';
 import CoverImage from './CoverImage.vue';
 import Visualizer from './Visualizer.vue';
+import WaveformSeekbar from './WaveformSeekbar.vue';
 import { navigateWithTransition } from '../viewTransition';
+import { loadWaveform, getCachedWaveform } from '../waveformCache';
 
 const router = useRouter();
 const playerCoverRef = ref(null);
@@ -15,6 +17,35 @@ const playerCoverRef = ref(null);
 // issues commands and polls the backend for the current position/duration.
 const seekValue = ref(0);
 const playbackError = ref(null);
+
+// Precomputed waveform (peaks) for the current track, when the waveform seek bar
+// is enabled. Null while loading / unavailable, so we fall back to the slider.
+const waveformPeaks = ref(null);
+
+async function resolveWaveform(path) {
+  if (!store.waveformEnabled || !path) {
+    waveformPeaks.value = null;
+    return;
+  }
+  const cached = getCachedWaveform(path);
+  if (cached !== undefined) {
+    waveformPeaks.value = cached;
+    return;
+  }
+  waveformPeaks.value = null; // show the slider until peaks arrive
+  const result = await loadWaveform(path);
+  // Ignore a stale result if the track changed while decoding.
+  if (store.currentSong && store.currentSong.path === path) {
+    waveformPeaks.value = result;
+  }
+}
+
+// Re-resolve when the track changes or the setting is toggled on.
+watch(
+  () => [store.currentSong && store.currentSong.path, store.waveformEnabled],
+  () => resolveWaveform(store.currentSong && store.currentSong.path),
+  { immediate: true }
+);
 
 const navigateToArtist = (artistName) => {
   if (!artistName || artistName === 'Unknown Artist') return;
@@ -871,19 +902,37 @@ const formatTime = (seconds) => {
           class="w-full flex items-center gap-1.5 sm:gap-3 text-[10px] sm:text-xs text-gray-400 font-variant-numeric tabular-nums"
         >
           <span>{{ formatTime(store.currentTime) }}</span>
-          <input
-            type="range"
-            min="0"
-            :max="Math.max(store.duration || 100, seekValue)"
-            v-model.number="seekValue"
-            @input="onSeekInput"
-            @change="onSeekCommit"
-            class="seeker-input flex-1 rounded-lg appearance-none cursor-pointer accent-[var(--accent-color)] disabled:opacity-30 disabled:cursor-not-allowed disabled:pointer-events-none"
-            :style="{
-              background: `linear-gradient(to right, var(--accent-color) ${progressPercentage}%, #4b5563 ${progressPercentage}%)`,
-            }"
-            :disabled="!store.currentSong"
-          />
+          <!-- Fixed-height seek track. The plain slider and the waveform occupy
+               the same space and cross-fade when the waveform is toggled, so the
+               player-bar height never changes (no overflow into the title bar). -->
+          <div class="relative flex-1 h-8 flex items-center">
+            <input
+              type="range"
+              min="0"
+              :max="Math.max(store.duration || 100, seekValue)"
+              v-model.number="seekValue"
+              @input="onSeekInput"
+              @change="onSeekCommit"
+              class="seeker-input absolute inset-x-0 top-1/2 -translate-y-1/2 w-full rounded-lg appearance-none cursor-pointer accent-[var(--accent-color)] transition-opacity duration-300 disabled:cursor-not-allowed"
+              :class="store.waveformEnabled ? 'opacity-0 pointer-events-none' : 'opacity-100'"
+              :style="{
+                background: `linear-gradient(to right, var(--accent-color) ${progressPercentage}%, #4b5563 ${progressPercentage}%)`,
+              }"
+              :disabled="!store.currentSong"
+            />
+            <Transition name="wf-fade">
+              <WaveformSeekbar
+                v-if="store.waveformEnabled"
+                class="absolute inset-0"
+                :peaks="waveformPeaks"
+                :current="seekValue"
+                :duration="Math.max(store.duration || 100, seekValue)"
+                :disabled="!store.currentSong"
+                @input="(v) => { seekValue = v; onSeekInput(); }"
+                @commit="(v) => { seekValue = v; onSeekCommit(); }"
+              />
+            </Transition>
+          </div>
           <span>{{ formatTime(store.duration) }}</span>
         </div>
       </div>
@@ -1039,6 +1088,18 @@ const formatTime = (seconds) => {
 </template>
 
 <style scoped>
+/* Waveform ↔ slider cross-fade when the seek bar is toggled. The seek track has
+   a fixed height, so only opacity changes — the bars also rise from the baseline
+   in JS (see WaveformSeekbar) for a lively toggle-on. */
+.wf-fade-enter-active,
+.wf-fade-leave-active {
+  transition: opacity 0.3s ease;
+}
+.wf-fade-enter-from,
+.wf-fade-leave-to {
+  opacity: 0;
+}
+
 /* Custom styled range slider thumb for generic sliders (e.g., volume) */
 input[type='range']::-webkit-slider-thumb {
   -webkit-appearance: none;

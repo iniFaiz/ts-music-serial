@@ -168,6 +168,18 @@
           Real-time spectrum next to the player controls. Disable if you notice high CPU usage.
         </p>
       </div>
+
+      <div class="border-t border-white/5 pt-1 mt-1">
+        <ToggleInt
+          :modelValue="store.waveformEnabled"
+          @update:modelValue="(v) => store.setWaveformEnabled(v)"
+          label="Waveform seek bar"
+        />
+        <p class="text-xs text-gray-500">
+          Replace the seek slider with the track's amplitude waveform. Each track is decoded
+          once to build it (cached afterwards), so the first play may take a moment.
+        </p>
+      </div>
     </Section>
 
     <!-- Mini Player -->

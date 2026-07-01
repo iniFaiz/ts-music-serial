@@ -137,6 +137,10 @@ export const store = reactive({
   // playhead the lyrics see forward); negative = later. For sources that are
   // systematically off. Applied to every lyric view's current-time.
   lyricsOffsetMs: 0,
+  // Waveform seek bar: replace the plain seek slider with a precomputed amplitude
+  // waveform (peaks decoded + cached in Rust). Off by default — the first play of
+  // each track triggers a one-time full decode to build its waveform.
+  waveformEnabled: false,
 
   // Fullscreen Now-Playing overlay (Apple Music style cover + synced lyrics).
   fullscreenOpen: false,
@@ -272,6 +276,7 @@ export const store = reactive({
           showRomaji: this.showRomaji,
           lyricsOffsetMs: this.lyricsOffsetMs,
           miniAlwaysOnTop: this.miniAlwaysOnTop,
+          waveformEnabled: this.waveformEnabled,
         },
       });
       await invoke('db_kv_set', {
@@ -408,6 +413,7 @@ export const store = reactive({
       if (typeof s.showRomaji === 'boolean') this.showRomaji = s.showRomaji;
       if (typeof s.lyricsOffsetMs === 'number') this.lyricsOffsetMs = s.lyricsOffsetMs;
       if (typeof s.miniAlwaysOnTop === 'boolean') this.miniAlwaysOnTop = s.miniAlwaysOnTop;
+      if (typeof s.waveformEnabled === 'boolean') this.waveformEnabled = s.waveformEnabled;
 
       // Re-select the saved output device (the audio thread starts on default).
       if (this.outputDevice) {
@@ -1850,6 +1856,11 @@ export const store = reactive({
   setVisualizerEnabled(val) {
     this.visualizerEnabled = !!val;
     this.syncVisualizer();
+    this.persistState();
+  },
+
+  setWaveformEnabled(val) {
+    this.waveformEnabled = !!val;
     this.persistState();
   },
 
