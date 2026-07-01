@@ -22,7 +22,7 @@ use std::ffi::c_void;
 use std::mem::size_of;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Mutex;
+use parking_lot::Mutex;
 
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -344,7 +344,7 @@ pub fn init(app: &AppHandle) {
     unsafe { inner.add_or_update() };
 
     if let Some(controller) = app.try_state::<ThumbbarController>() {
-        *controller.0.lock().unwrap() = Some(inner);
+        *controller.0.lock() = Some(inner);
     }
 
     // Leak one AppHandle clone (lives for the whole process) as the subclass
@@ -362,13 +362,12 @@ pub fn set_playing(app: &AppHandle, playing: bool) {
     let app2 = app.clone();
     let _ = app.run_on_main_thread(move || {
         if let Some(controller) = app2.try_state::<ThumbbarController>() {
-            if let Ok(mut guard) = controller.0.lock() {
-                if let Some(inner) = guard.as_mut() {
-                    if inner.playing != playing {
-                        inner.playing = playing;
-                        if inner.added {
-                            unsafe { inner.update() };
-                        }
+            let mut guard = controller.0.lock();
+            if let Some(inner) = guard.as_mut() {
+                if inner.playing != playing {
+                    inner.playing = playing;
+                    if inner.added {
+                        unsafe { inner.update() };
                     }
                 }
             }
@@ -445,10 +444,9 @@ unsafe extern "system" fn subclass_proc(
 // Run `f` against the live controller state, if present.
 unsafe fn with_inner<F: FnOnce(&mut Inner)>(app: &AppHandle, f: F) {
     if let Some(controller) = app.try_state::<ThumbbarController>() {
-        if let Ok(mut guard) = controller.0.lock() {
-            if let Some(inner) = guard.as_mut() {
-                f(inner);
-            }
+        let mut guard = controller.0.lock();
+        if let Some(inner) = guard.as_mut() {
+            f(inner);
         }
     }
 }

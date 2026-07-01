@@ -1,25 +1,24 @@
-import { invoke } from '@tauri-apps/api/core';
+import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 
 // Shared, module-level cover cache.
 //
-// Cover art is extracted by the Rust `get_track_cover` command, which opens the
-// audio file, parses its tags and base64-encodes the embedded picture. That work
-// must NOT be repeated every time a CoverImage component mounts (e.g. on every
-// page navigation), otherwise covers visibly flash/reload. This cache keeps each
-// resolved cover for the lifetime of the app session so subsequent renders are
-// instant.
+// The Rust `get_track_cover_path` command ensures a downscaled JPEG thumbnail
+// exists on disk (in cover_cache_dir) and returns its filesystem path. We then
+// wrap that path with `convertFileSrc` so the webview loads the image directly
+// through the asset protocol — no base64, no image bytes crossing IPC on every
+// render. The webview caches the decoded image itself, so re-mounting a
+// CoverImage across page navigation is essentially free.
 //
-//   cache:    path -> data URL string, or null when the file has no cover art.
+//   cache:    path -> asset URL string, or null when the file has no cover art.
 //   inflight: path -> Promise, so concurrent requests for the same path share a
 //             single backend call instead of firing N identical invokes.
 //
-// The cache is LRU-bounded: each cover is a base64 data URL (~20-40KB), so an
-// unbounded Map would grow to tens of MB on a large library scrolled through in
-// one session. The Rust disk cache (cover_cache_dir) stays the source of truth,
-// so an evicted entry just re-decodes quickly on next view.
+// Entries are now just short URL strings (not base64 blobs), so the cache is
+// cheap; the LRU cap only guards against pathological unbounded growth. An
+// evicted entry re-resolves with a single cheap disk-existence check.
 const cache = new Map();
 const inflight = new Map();
-const MAX_COVERS = 500;
+const MAX_COVERS = 2000;
 
 // Promote a key to most-recently-used (Map keeps insertion order, so re-inserting
 // moves it to the end where it survives eviction longest).
@@ -58,9 +57,11 @@ export async function loadCover(path) {
   }
   if (inflight.has(path)) return inflight.get(path);
 
-  const request = invoke('get_track_cover', { path })
+  const request = invoke('get_track_cover_path', { path })
     .then((result) => {
-      const value = result ?? null;
+      // Backend returns the on-disk thumbnail path (or null for no art). Convert
+      // it to an asset-protocol URL the <img> can load without base64/IPC.
+      const value = result ? convertFileSrc(result) : null;
       cacheSet(path, value);
       return value;
     })

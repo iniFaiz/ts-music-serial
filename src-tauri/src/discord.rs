@@ -5,7 +5,7 @@
 // Presence on/off — no Developer Portal setup required. Album art is resolved at
 // runtime from the public iTunes Search API, so no art assets need uploading.
 
-use std::sync::Mutex;
+use parking_lot::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use discord_rich_presence::{activity, DiscordIpc, DiscordIpcClient};
@@ -65,7 +65,7 @@ pub fn discord_set_enabled(
     state: tauri::State<DiscordState>,
     enabled: bool,
 ) -> Result<(), String> {
-    let mut inner = state.0.lock().map_err(|_| "discord state poisoned")?;
+    let mut inner = state.0.lock();
     inner.enabled = enabled;
 
     if !enabled {
@@ -91,10 +91,7 @@ pub fn discord_update(
     position: f64,
     duration: f64,
 ) {
-    let mut inner = match state.0.lock() {
-        Ok(g) => g,
-        Err(_) => return,
-    };
+    let mut inner = state.0.lock();
     if !inner.enabled {
         return;
     }
@@ -152,10 +149,9 @@ pub fn discord_update(
 // Clear the presence (e.g. playback stopped) but stay connected.
 #[tauri::command]
 pub fn discord_clear(state: tauri::State<DiscordState>) {
-    if let Ok(mut inner) = state.0.lock() {
-        if let Some(client) = inner.client.as_mut() {
-            let _ = client.clear_activity();
-        }
+    let mut inner = state.0.lock();
+    if let Some(client) = inner.client.as_mut() {
+        let _ = client.clear_activity();
     }
 }
 

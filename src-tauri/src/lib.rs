@@ -7,8 +7,13 @@ use std::hash::{Hash, Hasher};
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+// parking_lot's Mutex never poisons and its guard is returned directly (no
+// Result), so there is no lock().unwrap() panic path. Mutex::new is const, so
+// it still works for the process-wide statics below.
+use parking_lot::Mutex;
 
 use base64::{engine::general_purpose, Engine as _};
 use lofty::picture::MimeType;
@@ -366,6 +371,50 @@ async fn get_track_cover(app: AppHandle, path: String) -> Result<Option<String>,
     Ok(result)
 }
 
+// Ensure the on-disk cover thumbnail exists and return its filesystem path.
+//
+// This is the fast path used by the UI: instead of base64-encoding the image
+// and shipping tens of KB over IPC on every render (which also doubles the
+// image's memory — once as a JS data URL, once as the decoded bitmap), the
+// frontend loads the returned path directly through the asset protocol
+// (convertFileSrc). The webview then caches the decoded image itself, so
+// re-renders across navigation cost nothing.
+//
+// Returns None when the file has no embeddable/decodable cover art.
+#[tauri::command]
+async fn get_track_cover_path(app: AppHandle, path: String) -> Result<Option<String>, String> {
+    let path_buf = PathBuf::from(&path);
+    if !is_allowed_audio(&app, &path_buf) {
+        return Err("Path is not within an allowed music folder".to_string());
+    }
+
+    let cache = cover_cache_dir(&app);
+
+    // Same CPU-bound decode/downscale as get_track_cover, on the blocking pool,
+    // but the result lives on disk (as {key}.jpg) rather than crossing the IPC
+    // boundary. The key embeds mtime+size, so it self-invalidates on file change.
+    let result = tauri::async_runtime::spawn_blocking(move || -> Option<String> {
+        let dir = cache?;
+        let key = cover_cache_key(&path_buf)?;
+        let file = dir.join(format!("{key}.jpg"));
+
+        // Fast path: thumbnail already cached on disk.
+        if file.exists() {
+            return Some(file.to_string_lossy().into_owned());
+        }
+
+        // Decode → downscale → cache a JPEG thumbnail, then hand back its path.
+        let (raw, _mime) = extract_cover(&path_buf)?;
+        let thumb = make_thumbnail(&raw)?;
+        fs::write(&file, &thumb).ok()?;
+        Some(file.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|e| format!("Cover task failed: {e}"))?;
+
+    Ok(result)
+}
+
 // ---------------------------------------------------------------------------
 // Native audio playback
 //
@@ -478,15 +527,15 @@ impl Clone for AudioPlayer {
 impl AudioPlayer {
     // Clone out the current sink handle (if any) without holding the lock.
     fn sink(&self) -> Option<Arc<Sink>> {
-        self.current_track.lock().unwrap().as_ref().map(|t| t.sink.clone())
+        self.current_track.lock().as_ref().map(|t| t.sink.clone())
     }
     // Effective sink volume = user volume * normalization factor. Capped above
     // 1.0 (≈ +12 dB) so normalization can boost quiet tracks; rodio amplifies
     // values > 1.0 and the peak limiter in player_set_normalization guards
     // against clipping.
     fn effective_volume(&self) -> f32 {
-        let vol = *self.last_volume.lock().unwrap();
-        let factor = *self.norm_factor.lock().unwrap();
+        let vol = *self.last_volume.lock();
+        let factor = *self.norm_factor.lock();
         (vol * factor).clamp(0.0, 4.0)
     }
 }
@@ -1045,11 +1094,11 @@ async fn player_load(
 
     // Stop all active sinks and clear fading list
     {
-        let mut fading_guard = player.fading_tracks.lock().unwrap();
+        let mut fading_guard = player.fading_tracks.lock();
         for t in fading_guard.drain(..) {
             t.sink.stop();
         }
-        let mut current_guard = player.current_track.lock().unwrap();
+        let mut current_guard = player.current_track.lock();
         if let Some(t) = current_guard.take() {
             if let Some(secs) = fade_in_secs {
                 if secs > 0.0 {
@@ -1098,15 +1147,15 @@ async fn player_load(
     spectrum.reset(); // clear the visualizer during the load gap
     // Apply the requested volume together with the active normalization factor.
     let user_vol = volume.clamp(0.0, 1.0) as f32;
-    *last_volume.lock().unwrap() = user_vol;
-    let factor = *norm_factor.lock().unwrap();
+    *last_volume.lock() = user_vol;
+    let factor = *norm_factor.lock();
     sink.set_volume(user_vol * factor);
 
     // Reuse a pre-decoded next track when it matches (near-gapless); otherwise
     // read + decode on the blocking pool.
     let prepared_decoder = {
-        let mut g = prepared.lock().unwrap();
-        let mut target_g = player.prepared_target_path.lock().unwrap();
+        let mut g = prepared.lock();
+        let mut target_g = player.prepared_target_path.lock();
         if g.as_ref().map(|p| p.path == path).unwrap_or(false) {
             *target_g = None;
             g.take()
@@ -1150,7 +1199,7 @@ async fn player_load(
     } else {
         duration_hint.max(0.0)
     };
-    *duration_slot.lock().unwrap() = duration;
+    *duration_slot.lock() = duration;
     // Equalize, then tap the decoded samples for the visualizer on their way to
     // the sink (so the bars reflect what you actually hear). In crossfade mode
     // each track is eased in with a fade.
@@ -1184,7 +1233,7 @@ async fn player_load(
 
     // Save as current track
     {
-        let mut current_guard = player.current_track.lock().unwrap();
+        let mut current_guard = player.current_track.lock();
         *current_guard = Some(ActiveTrack {
             path: path.clone(),
             sink: sink.clone(),
@@ -1232,12 +1281,12 @@ async fn player_prepare_next(
 
     // Set target path and clear any stale prepared track
     {
-        let mut target_g = player.prepared_target_path.lock().unwrap();
+        let mut target_g = player.prepared_target_path.lock();
         if target_g.as_ref() == Some(&path) {
             return Ok(());
         }
         *target_g = Some(path.clone());
-        *player.prepared.lock().unwrap() = None;
+        *player.prepared.lock() = None;
     }
 
     let prepared = player.prepared.clone();
@@ -1249,7 +1298,7 @@ async fn player_prepare_next(
     {
         // Check if this path is still the target before continuing with RG tags and saving
         {
-            let target_g = prepared_target_path.lock().unwrap();
+            let target_g = prepared_target_path.lock();
             if target_g.as_ref() != Some(&path_clone) {
                 return Ok(());
             }
@@ -1276,13 +1325,13 @@ async fn player_prepare_next(
 
         // Check again after metadata read
         {
-            let target_g = prepared_target_path.lock().unwrap();
+            let target_g = prepared_target_path.lock();
             if target_g.as_ref() != Some(&path_clone) {
                 return Ok(());
             }
         }
 
-        *prepared.lock().unwrap() = Some(PreparedTrack {
+        *prepared.lock() = Some(PreparedTrack {
             path: path_clone,
             decoder: dec,
             duration: dur,
@@ -1308,7 +1357,7 @@ fn player_pause(app: AppHandle, player: State<AudioPlayer>) {
         sink.pause();
     }
     // Also pause all fading tracks!
-    let fading = player.fading_tracks.lock().unwrap();
+    let fading = player.fading_tracks.lock();
     for track in fading.iter() {
         track.sink.pause();
     }
@@ -1329,7 +1378,7 @@ fn player_resume(app: AppHandle, player: State<AudioPlayer>) {
         sink.play();
     }
     // Also resume all fading tracks!
-    let fading = player.fading_tracks.lock().unwrap();
+    let fading = player.fading_tracks.lock();
     for track in fading.iter() {
         track.sink.play();
     }
@@ -1338,12 +1387,12 @@ fn player_resume(app: AppHandle, player: State<AudioPlayer>) {
 #[tauri::command]
 fn player_set_volume(player: State<AudioPlayer>, volume: f64) {
     let user_vol = volume.clamp(0.0, 1.0) as f32;
-    *player.last_volume.lock().unwrap() = user_vol;
+    *player.last_volume.lock() = user_vol;
     let eff_vol = player.effective_volume();
     if let Some(sink) = player.sink() {
         sink.set_volume(eff_vol);
     }
-    let mut fading = player.fading_tracks.lock().unwrap();
+    let mut fading = player.fading_tracks.lock();
     for track in fading.iter_mut() {
         track.initial_volume = eff_vol;
     }
@@ -1362,13 +1411,13 @@ fn player_seek(app: AppHandle, player: State<AudioPlayer>, position: f64) -> Res
     }
     // Stop all fading tracks on manual seek
     {
-        let mut fading_guard = player.fading_tracks.lock().unwrap();
+        let mut fading_guard = player.fading_tracks.lock();
         for t in fading_guard.drain(..) {
             t.sink.stop();
         }
     }
     if let Some(sink) = player.sink() {
-        let duration = *player.duration.lock().unwrap();
+        let duration = *player.duration.lock();
         // Keep the target inside the track; seeking to/past the end can error.
         let target = if duration > 0.1 {
             position.clamp(0.0, duration - 0.1)
@@ -1390,11 +1439,11 @@ fn player_stop(app: AppHandle, player: State<AudioPlayer>) {
         }
     }
     {
-        let mut fading_guard = player.fading_tracks.lock().unwrap();
+        let mut fading_guard = player.fading_tracks.lock();
         for t in fading_guard.drain(..) {
             t.sink.stop();
         }
-        let mut current_guard = player.current_track.lock().unwrap();
+        let mut current_guard = player.current_track.lock();
         if let Some(t) = current_guard.take() {
             t.sink.stop();
         }
@@ -1415,10 +1464,10 @@ fn player_status(app: AppHandle, player: State<AudioPlayer>) -> PlayerStatus {
     match player.sink() {
         Some(sink) => {
             let empty = sink.empty();
-            let path = player.current_track.lock().unwrap().as_ref().map(|t| t.path.clone());
+            let path = player.current_track.lock().as_ref().map(|t| t.path.clone());
             PlayerStatus {
                 position: sink.get_pos().as_secs_f64(),
-                duration: *player.duration.lock().unwrap(),
+                duration: *player.duration.lock(),
                 playing: !sink.is_paused() && !empty,
                 finished: player.active.load(Ordering::SeqCst) && empty,
                 path,
@@ -1436,8 +1485,8 @@ fn player_status(app: AppHandle, player: State<AudioPlayer>) -> PlayerStatus {
 
 #[tauri::command]
 fn player_set_transition(player: State<AudioPlayer>, mode: String, crossfade_secs: f64) {
-    *player.transition_mode.lock().unwrap() = mode;
-    *player.crossfade_secs.lock().unwrap() = crossfade_secs;
+    *player.transition_mode.lock() = mode;
+    *player.crossfade_secs.lock() = crossfade_secs;
 }
 
 #[tauri::command]
@@ -1446,8 +1495,8 @@ fn player_set_normalization_settings(
     enabled: bool,
     preamp_db: f64,
 ) {
-    *player.normalization_enabled.lock().unwrap() = enabled;
-    *player.normalization_preamp_db.lock().unwrap() = preamp_db;
+    *player.normalization_enabled.lock() = enabled;
+    *player.normalization_preamp_db.lock() = preamp_db;
 }
 
 // Latest six frequency-band levels (0..1), low → high. Returns all-zero when no
@@ -1532,13 +1581,13 @@ fn open_device_stream(
         Some(stream) => {
             let sink = Sink::connect_new(stream.mixer());
             let vol =
-                (*last_volume.lock().unwrap() * *norm_factor.lock().unwrap()).clamp(0.0, 4.0);
+                (*last_volume.lock() * *norm_factor.lock()).clamp(0.0, 4.0);
             sink.set_volume(vol);
-            *slot.lock().unwrap() = Some(Arc::new(sink));
+            *slot.lock() = Some(Arc::new(sink));
             Some(stream)
         }
         None => {
-            *slot.lock().unwrap() = None;
+            *slot.lock() = None;
             None
         }
     }
@@ -1572,7 +1621,7 @@ fn init_audio_player() -> AudioPlayer {
                     // Stop and drop the old sink, then drop the old stream by
                     // overwriting it with the freshly opened one.
                     {
-                        let mut guard = slot_t.lock().unwrap();
+                        let mut guard = slot_t.lock();
                         if let Some(s) = guard.take() {
                             s.stop();
                         }
@@ -1597,7 +1646,7 @@ fn init_audio_player() -> AudioPlayer {
                 }
                 AudioCommand::CloseStream(reply) => {
                     {
-                        let mut guard = slot_t.lock().unwrap();
+                        let mut guard = slot_t.lock();
                         if let Some(s) = guard.take() {
                             s.stop();
                         }
@@ -1664,10 +1713,7 @@ fn spawn_player_ticker(app: AppHandle, player: AudioPlayer) {
 
             // 1. Process fading tracks (MUST run even if active is false, so fading tracks fade out and stop!)
             {
-                let mut fading = match player.fading_tracks.lock() {
-                    Ok(f) => f,
-                    Err(_) => continue,
-                };
+                let mut fading = player.fading_tracks.lock();
                 let now = Instant::now();
                 fading.retain(|track| {
                     if now >= track.fade_end {
@@ -1696,10 +1742,7 @@ fn spawn_player_ticker(app: AppHandle, player: AudioPlayer) {
             let current_gen = player.generation.load(Ordering::SeqCst);
 
             let (current_sink, position, duration, empty) = {
-                let current_guard = match player.current_track.lock() {
-                    Ok(g) => g,
-                    Err(_) => continue,
-                };
+                let current_guard = player.current_track.lock();
                 if let Some(ref track) = *current_guard {
                     let pos = track.sink.get_pos().as_secs_f64();
                     let dur = track.duration;
@@ -1710,18 +1753,8 @@ fn spawn_player_ticker(app: AppHandle, player: AudioPlayer) {
                 }
             };
 
-            let mode = {
-                match player.transition_mode.lock() {
-                    Ok(m) => m.clone(),
-                    Err(_) => "off".to_string(),
-                }
-            };
-            let crossfade_secs = {
-                match player.crossfade_secs.lock() {
-                    Ok(s) => *s,
-                    Err(_) => 6.0,
-                }
-            };
+            let mode = player.transition_mode.lock().clone();
+            let crossfade_secs = *player.crossfade_secs.lock();
 
             // --- True-gapless boundary: promote a queued next track ----------
             // When a next track was appended ahead onto the shared sink, watch
@@ -1733,9 +1766,9 @@ fn spawn_player_ticker(app: AppHandle, player: AudioPlayer) {
                     // A manual load replaced the sink (and stopped the queued
                     // track with it) — drop the now-stale entry.
                 } else if q.sink.len() <= 1 {
-                    let user_vol = *player.last_volume.lock().unwrap();
-                    let norm_enabled = *player.normalization_enabled.lock().unwrap();
-                    let preamp_db = *player.normalization_preamp_db.lock().unwrap();
+                    let user_vol = *player.last_volume.lock();
+                    let norm_enabled = *player.normalization_enabled.lock();
+                    let preamp_db = *player.normalization_preamp_db.lock();
                     let factor = if norm_enabled {
                         let total_db = q.gain_db.map(|g| g as f64).unwrap_or(0.0) + preamp_db;
                         let mut f = 10f64.powf(total_db / 20.0);
@@ -1748,17 +1781,15 @@ fn spawn_player_ticker(app: AppHandle, player: AudioPlayer) {
                     } else {
                         1.0
                     };
-                    *player.norm_factor.lock().unwrap() = factor;
+                    *player.norm_factor.lock() = factor;
                     q.sink.set_volume(user_vol * factor);
-                    *player.duration.lock().unwrap() = q.duration;
-                    if let Ok(mut cg) = player.current_track.lock() {
-                        *cg = Some(ActiveTrack {
-                            path: q.path.clone(),
-                            sink: q.sink.clone(),
-                            duration: q.duration,
-                            start_time: Instant::now(),
-                        });
-                    }
+                    *player.duration.lock() = q.duration;
+                    *player.current_track.lock() = Some(ActiveTrack {
+                        path: q.path.clone(),
+                        sink: q.sink.clone(),
+                        duration: q.duration,
+                        start_time: Instant::now(),
+                    });
                     let _ = app.emit("track-changed", serde_json::json!({ "path": q.path }));
                     // Re-read fresh state next tick rather than acting on the
                     // outgoing track's stale position/duration this iteration.
@@ -1771,42 +1802,22 @@ fn spawn_player_ticker(app: AppHandle, player: AudioPlayer) {
 
             if mode == "crossfade" && (duration > crossfade_secs && position >= (duration - crossfade_secs) || empty) {
                 if transition_triggered_for_gen != current_gen {
-                    let has_prep = {
-                        if let Ok(p_guard) = player.prepared.lock() {
-                            p_guard.is_some()
-                        } else {
-                            false
-                        }
-                    };
+                    let has_prep = player.prepared.lock().is_some();
 
                     if has_prep {
-                        let prepared_opt = {
-                            let mut p_guard = match player.prepared.lock() {
-                                Ok(g) => g,
-                                Err(_) => continue,
-                            };
-                            p_guard.take()
-                        };
+                        let prepared_opt = player.prepared.lock().take();
                         // Consuming the prepared track invalidates the "currently
                         // preparing" marker; clear it so the next prepare_next call
                         // (for the track after this one) is never mistaken for a no-op.
-                        if let Ok(mut t) = player.prepared_target_path.lock() {
-                            *t = None;
-                        }
+                        *player.prepared_target_path.lock() = None;
 
                         if let Some(prep) = prepared_opt {
                             let (reply_tx, reply_rx) = mpsc::channel();
                             if player.cmd_tx.send(AudioCommand::CreateSink(reply_tx)).is_ok() {
                                 if let Ok(Ok(new_sink)) = reply_rx.recv_timeout(Duration::from_secs(2)) {
-                                    let mut current_guard = match player.current_track.lock() {
-                                        Ok(g) => g,
-                                        Err(_) => continue,
-                                    };
+                                    let mut current_guard = player.current_track.lock();
                                     if let Some(ref old_track) = *current_guard {
-                                        let mut fading_guard = match player.fading_tracks.lock() {
-                                            Ok(g) => g,
-                                            Err(_) => continue,
-                                        };
+                                        let mut fading_guard = player.fading_tracks.lock();
                                         fading_guard.push(FadingTrack {
                                             sink: old_track.sink.clone(),
                                             fade_end: Instant::now() + Duration::from_secs_f64(crossfade_secs),
@@ -1827,11 +1838,11 @@ fn spawn_player_ticker(app: AppHandle, player: AudioPlayer) {
                                     transition_triggered_for_gen = current_gen;
 
                                     let next_dur = prep.duration;
-                                    *player.duration.lock().unwrap() = next_dur;
+                                    *player.duration.lock() = next_dur;
 
                                     // Apply normalization to the new sink
-                                    let norm_enabled = *player.normalization_enabled.lock().unwrap();
-                                    let preamp_db = *player.normalization_preamp_db.lock().unwrap();
+                                    let norm_enabled = *player.normalization_enabled.lock();
+                                    let preamp_db = *player.normalization_preamp_db.lock();
                                     let factor = if norm_enabled {
                                         let total_db = prep.gain_db.map(|g| g as f64).unwrap_or(0.0) + preamp_db;
                                         let mut f = 10f64.powf(total_db / 20.0);
@@ -1844,13 +1855,13 @@ fn spawn_player_ticker(app: AppHandle, player: AudioPlayer) {
                                     } else {
                                         1.0
                                     };
-                                    *player.norm_factor.lock().unwrap() = factor;
+                                    *player.norm_factor.lock() = factor;
 
                                     let equalized = EqualizerSource::new(prep.decoder, player.equalizer.clone());
                                     let tapped = SpectrumSource::new(equalized, player.spectrum.clone(), player.generation.clone(), new_gen);
                                     new_sink.append(tapped.fade_in(Duration::from_secs_f64(crossfade_secs)));
 
-                                    let user_vol = *player.last_volume.lock().unwrap();
+                                    let user_vol = *player.last_volume.lock();
                                     new_sink.set_volume(user_vol * factor);
                                     new_sink.play();
 
@@ -1877,20 +1888,12 @@ fn spawn_player_ticker(app: AppHandle, player: AudioPlayer) {
                 // starts the instant the current source ends — one continuous
                 // sink, no fade, no gap. The boundary handler above promotes it
                 // to the current track once it actually begins.
-                let prepared_opt = {
-                    let mut p_guard = match player.prepared.lock() {
-                        Ok(g) => g,
-                        Err(_) => continue,
-                    };
-                    p_guard.take()
-                };
+                let prepared_opt = player.prepared.lock().take();
                 if let Some(prep) = prepared_opt {
                     // Consuming the prepared track invalidates the "currently
                     // preparing" marker; clear it so the next prepare_next call
                     // (for the track after this one) is never mistaken for a no-op.
-                    if let Ok(mut t) = player.prepared_target_path.lock() {
-                        *t = None;
-                    }
+                    *player.prepared_target_path.lock() = None;
                     // Reserve the generation now so this track's spectrum tap is
                     // live the moment it becomes the active source. (The outgoing
                     // track's visualizer goes quiet for the short lead window —
@@ -1992,7 +1995,7 @@ fn player_set_normalization(
     } else {
         1.0
     };
-    *player.norm_factor.lock().unwrap() = factor;
+    *player.norm_factor.lock() = factor;
     if let Some(sink) = player.sink() {
         sink.set_volume(player.effective_volume());
     }
@@ -2009,7 +2012,7 @@ fn loudness_cache_file(app: &AppHandle) -> Option<PathBuf> {
 
 fn read_loudness(app: &AppHandle, key: &str) -> Option<f32> {
     let file = loudness_cache_file(app)?;
-    let _g = LOUDNESS_LOCK.lock().ok()?;
+    let _g = LOUDNESS_LOCK.lock();
     let data = fs::read_to_string(&file).ok()?;
     let map: HashMap<String, f32> = serde_json::from_str(&data).ok()?;
     map.get(key).copied()
@@ -2277,7 +2280,7 @@ fn watch_roots(state: State<FileWatcher>, roots: Vec<String>) -> Result<(), Stri
         let _ = watcher.watch(Path::new(root), RecursiveMode::Recursive);
     }
 
-    *state.watcher.lock().unwrap() = Some(watcher);
+    *state.watcher.lock() = Some(watcher);
     Ok(())
 }
 
@@ -2349,7 +2352,7 @@ fn init_media_controls(app: &AppHandle) {
     });
 
     if let Some(controller) = app.try_state::<Arc<MediaController>>() {
-        *controller.0.lock().unwrap() = Some(controls);
+        *controller.0.lock() = Some(controls);
     }
 }
 
@@ -2378,17 +2381,16 @@ fn smtc_set_metadata(
 
     let arc = controller.inner().clone();
     let _ = app.run_on_main_thread(move || {
-        if let Ok(mut guard) = arc.0.lock() {
-            if let Some(controls) = guard.as_mut() {
-                let metadata = souvlaki::MediaMetadata {
-                    title: Some(&title),
-                    artist: Some(&artist),
-                    album: Some(&album),
-                    cover_url: cover_uri.as_deref(),
-                    duration: Some(Duration::from_secs_f64(duration.max(0.0))),
-                };
-                let _ = controls.set_metadata(metadata);
-            }
+        let mut guard = arc.0.lock();
+        if let Some(controls) = guard.as_mut() {
+            let metadata = souvlaki::MediaMetadata {
+                title: Some(&title),
+                artist: Some(&artist),
+                album: Some(&album),
+                cover_url: cover_uri.as_deref(),
+                duration: Some(Duration::from_secs_f64(duration.max(0.0))),
+            };
+            let _ = controls.set_metadata(metadata);
         }
     });
 }
@@ -2403,18 +2405,17 @@ fn smtc_set_playback(
 ) {
     let arc = controller.inner().clone();
     let _ = app.run_on_main_thread(move || {
-        if let Ok(mut guard) = arc.0.lock() {
-            if let Some(controls) = guard.as_mut() {
-                let progress = Some(souvlaki::MediaPosition(Duration::from_secs_f64(
-                    position.max(0.0),
-                )));
-                let state = if playing {
-                    souvlaki::MediaPlayback::Playing { progress }
-                } else {
-                    souvlaki::MediaPlayback::Paused { progress }
-                };
-                let _ = controls.set_playback(state);
-            }
+        let mut guard = arc.0.lock();
+        if let Some(controls) = guard.as_mut() {
+            let progress = Some(souvlaki::MediaPosition(Duration::from_secs_f64(
+                position.max(0.0),
+            )));
+            let state = if playing {
+                souvlaki::MediaPlayback::Playing { progress }
+            } else {
+                souvlaki::MediaPlayback::Paused { progress }
+            };
+            let _ = controls.set_playback(state);
         }
     });
 
@@ -2512,11 +2513,11 @@ fn player_delete_file(app: AppHandle, path: String) -> Result<(), String> {
 async fn set_wasapi_exclusive(app: tauri::AppHandle, player: tauri::State<'_, AudioPlayer>, enabled: bool) -> Result<(), String> {
     player.exclusive_enabled.store(enabled, Ordering::SeqCst);
     if enabled {
-        let mut fading_guard = player.fading_tracks.lock().unwrap();
+        let mut fading_guard = player.fading_tracks.lock();
         for t in fading_guard.drain(..) {
             t.sink.stop();
         }
-        let mut current_guard = player.current_track.lock().unwrap();
+        let mut current_guard = player.current_track.lock();
         if let Some(t) = current_guard.take() {
             t.sink.stop();
         }
@@ -2596,13 +2597,20 @@ pub fn run() {
 
     builder
         .setup(move |_app| {
+            // Allow the cover-thumbnail cache dir through the asset protocol so
+            // the webview can load cached covers by path (convertFileSrc) instead
+            // of receiving them base64-encoded over IPC.
+            if let Some(dir) = cover_cache_dir(_app.handle()) {
+                let _ = _app.asset_protocol_scope().allow_directory(&dir, false);
+            }
+
             #[cfg(target_os = "windows")]
             {
                 init_media_controls(_app.handle());
                 thumbbar::init(_app.handle());
             }
             // Start the debounced filesystem-change → library-changed pump.
-            if let Some(rx) = fs_rx.lock().unwrap().take() {
+            if let Some(rx) = fs_rx.lock().take() {
                 spawn_fs_coalescer(_app.handle().clone(), rx);
             }
             
@@ -2617,6 +2625,7 @@ pub fn run() {
             scan_paths,
             filter_existing,
             get_track_cover,
+            get_track_cover_path,
             restore_roots,
             player_load,
             player_prepare_next,

@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, onMounted, onUnmounted, TransitionGroup } from 'vue';
+import { computed, ref, watch, nextTick, onMounted, onUnmounted, TransitionGroup } from 'vue';
 import { useRouter } from 'vue-router';
 import { invoke } from '@tauri-apps/api/core';
 import { store } from '../store';
@@ -58,6 +58,119 @@ const sortedSongs = computed(() => {
     return 0;
   });
 });
+
+// ---- Virtualized windowing for large, non-reorderable lists ----
+// `content-visibility` (below) already culls painting of off-screen rows, but
+// thousands of rows still cost DOM nodes on mount and Vue vnode-diffing on every
+// store change (currentSong/isPlaying/favorites). For big library-style lists we
+// render only the visible window (+buffer) and pad the wrapper so scroll geometry
+// and the scrollbar stay correct. Reorderable lists (playlists/favorites) are
+// never windowed, so drag-to-reorder keeps every row in the DOM.
+const VIRT_THRESHOLD = 80;
+const BUFFER_ROWS = 8;
+const rowsWrapper = ref(null);
+const rowPitch = ref(56); // px per row incl. row gap; measured from real rows
+const viewStart = ref(0);
+const viewEnd = ref(60);
+let scrollParentEl = null;
+let scrollRafPending = false;
+
+const virtualize = computed(
+  () => !canReorder.value && sortedSongs.value.length > VIRT_THRESHOLD,
+);
+
+// Rows to actually render, each carrying its real index in the full list so the
+// track number / current-song highlight stay correct. Destructured in the
+// template ({ song, index }), so the row markup is identical to the full render.
+const renderRows = computed(() => {
+  const songs = sortedSongs.value;
+  if (!virtualize.value) {
+    return songs.map((song, index) => ({ song, index }));
+  }
+  const total = songs.length;
+  const start = Math.max(0, Math.min(viewStart.value, total));
+  const end = Math.min(viewEnd.value, total);
+  const out = [];
+  for (let i = start; i < end; i++) out.push({ song: songs[i], index: i });
+  return out;
+});
+
+// Pad the wrapper so the rendered slice sits at the correct scroll offset and the
+// scrollbar reflects the full list height (null when not windowing).
+const virtualPadStyle = computed(() => {
+  if (!virtualize.value) return null;
+  const total = sortedSongs.value.length;
+  const start = Math.max(0, Math.min(viewStart.value, total));
+  const end = Math.min(viewEnd.value, total);
+  return {
+    paddingTop: `${start * rowPitch.value}px`,
+    paddingBottom: `${(total - end) * rowPitch.value}px`,
+  };
+});
+
+const findScrollParent = (el) => {
+  let node = el ? el.parentElement : null;
+  while (node) {
+    const oy = getComputedStyle(node).overflowY;
+    if (oy === 'auto' || oy === 'scroll') return node;
+    node = node.parentElement;
+  }
+  return null;
+};
+
+const measureRowPitch = () => {
+  if (!virtualize.value) return;
+  const wrap = rowsWrapper.value;
+  if (!wrap || typeof wrap.querySelectorAll !== 'function') return;
+  const rows = wrap.querySelectorAll('.song-row');
+  if (rows.length >= 2) {
+    const d = rows[1].getBoundingClientRect().top - rows[0].getBoundingClientRect().top;
+    if (d > 10) rowPitch.value = d;
+  } else if (rows.length === 1) {
+    const h = rows[0].getBoundingClientRect().height;
+    if (h > 10) rowPitch.value = h + 2; // + space-y gap
+  }
+};
+
+const updateWindow = () => {
+  if (!virtualize.value) return;
+  const total = sortedSongs.value.length;
+  const wrap = rowsWrapper.value;
+  if (!wrap || typeof wrap.getBoundingClientRect !== 'function') return;
+  if (!scrollParentEl) {
+    // No scrollable ancestor found — render everything (safe fallback).
+    viewStart.value = 0;
+    viewEnd.value = total;
+    return;
+  }
+  const prect = scrollParentEl.getBoundingClientRect();
+  const wrect = wrap.getBoundingClientRect();
+  const pitch = rowPitch.value || 56;
+  const above = Math.max(0, prect.top - wrect.top); // px of rows scrolled past the top
+  const start = Math.max(0, Math.floor(above / pitch) - BUFFER_ROWS);
+  const visible = Math.ceil(scrollParentEl.clientHeight / pitch) + BUFFER_ROWS * 2;
+  viewStart.value = start;
+  viewEnd.value = Math.min(total, start + visible);
+};
+
+const onScrollOrResize = () => {
+  if (scrollRafPending) return;
+  scrollRafPending = true;
+  requestAnimationFrame(() => {
+    scrollRafPending = false;
+    measureRowPitch();
+    updateWindow();
+  });
+};
+
+// Re-window when the list content or the windowing eligibility changes.
+watch(
+  () => [sortedSongs.value.length, virtualize.value],
+  () => nextTick(() => {
+    measureRowPitch();
+    updateWindow();
+  }),
+);
 
 const playSong = (song) => {
   store.playSong(song, sortedSongs.value);
@@ -500,12 +613,28 @@ onMounted(() => {
   window.addEventListener('click', closeMenu);
   window.addEventListener('scroll', closeMenuOnScroll, true);
   window.addEventListener('resize', closeMenu);
+
+  // Virtualization: track the scroll ancestor so we can window large lists.
+  scrollParentEl = findScrollParent(songListContainer.value);
+  if (scrollParentEl) {
+    scrollParentEl.addEventListener('scroll', onScrollOrResize, { passive: true });
+  }
+  window.addEventListener('resize', onScrollOrResize);
+  nextTick(() => {
+    measureRowPitch();
+    updateWindow();
+  });
 });
 
 onUnmounted(() => {
   window.removeEventListener('click', closeMenu);
   window.removeEventListener('scroll', closeMenuOnScroll, true);
   window.removeEventListener('resize', closeMenu);
+  if (scrollParentEl) {
+    scrollParentEl.removeEventListener('scroll', onScrollOrResize);
+    scrollParentEl = null;
+  }
+  window.removeEventListener('resize', onScrollOrResize);
   hideTooltip();
   // Cleanup playlist drag listeners
   document.removeEventListener('mousemove', onPlMouseMove);
@@ -565,10 +694,12 @@ onUnmounted(() => {
       :is="canReorder ? TransitionGroup : 'div'"
       :name="canReorder ? 'song-list' : null"
       :tag="canReorder ? 'div' : null"
+      ref="rowsWrapper"
+      :style="virtualPadStyle"
       class="space-y-0.5"
     >
       <div
-        v-for="(song, index) in sortedSongs"
+        v-for="{ song, index } in renderRows"
         :key="song.path"
         :data-song-path="song.path"
         :data-artist-key="song.artist"

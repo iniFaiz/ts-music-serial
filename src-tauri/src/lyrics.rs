@@ -622,7 +622,7 @@ async fn netease_lyric_classic(client: &reqwest::Client, ids: &str) -> Option<Ly
 
 // ---- Provider: Musixmatch (requires a community user token) ----------------
 
-use std::sync::Mutex;
+use parking_lot::Mutex;
 
 static CACHED_TOKEN: Mutex<Option<String>> = Mutex::new(None);
 static CACHED_COOKIE: Mutex<Option<String>> = Mutex::new(None);
@@ -923,15 +923,11 @@ pub async fn from_musixmatch(
 
     // 1. If no user token in settings, check memory cache
     if current_token.trim().is_empty() {
-        if let Ok(guard) = CACHED_TOKEN.lock() {
-            if let Some(cached) = &*guard {
-                current_token = cached.clone();
-            }
+        if let Some(cached) = &*CACHED_TOKEN.lock() {
+            current_token = cached.clone();
         }
-        if let Ok(guard) = CACHED_COOKIE.lock() {
-            if let Some(cached) = &*guard {
-                current_cookie = cached.clone();
-            }
+        if let Some(cached) = &*CACHED_COOKIE.lock() {
+            current_cookie = cached.clone();
         }
     }
 
@@ -942,12 +938,8 @@ pub async fn from_musixmatch(
             current_cookie = cookie.clone();
 
             // Save to memory cache
-            if let Ok(mut guard) = CACHED_TOKEN.lock() {
-                *guard = Some(t);
-            }
-            if let Ok(mut guard) = CACHED_COOKIE.lock() {
-                *guard = Some(cookie);
-            }
+            *CACHED_TOKEN.lock() = Some(t);
+            *CACHED_COOKIE.lock() = Some(cookie);
         } else {
             return None;
         }
@@ -974,12 +966,8 @@ pub async fn from_musixmatch(
             current_cookie = cookie.clone();
 
             // Update memory cache
-            if let Ok(mut guard) = CACHED_TOKEN.lock() {
-                *guard = Some(t);
-            }
-            if let Ok(mut guard) = CACHED_COOKIE.lock() {
-                *guard = Some(cookie);
-            }
+            *CACHED_TOKEN.lock() = Some(t);
+            *CACHED_COOKIE.lock() = Some(cookie);
 
             // Retry with new token and sticky cookies
             v = fetch_musixmatch_raw(client, title, artist, album, duration, &current_token, &current_cookie).await?;
@@ -1007,12 +995,8 @@ pub async fn from_musixmatch(
             current_cookie = cookie.clone();
 
             // Update memory cache
-            if let Ok(mut guard) = CACHED_TOKEN.lock() {
-                *guard = Some(t);
-            }
-            if let Ok(mut guard) = CACHED_COOKIE.lock() {
-                *guard = Some(cookie);
-            }
+            *CACHED_TOKEN.lock() = Some(t);
+            *CACHED_COOKIE.lock() = Some(cookie);
             v_fuzzy = fetch_musixmatch_fuzzy(client, title, artist, &current_token, &current_cookie).await?;
         }
     }
@@ -1039,12 +1023,8 @@ pub async fn from_musixmatch(
                 current_cookie = cookie.clone();
                 
                 // Update memory cache
-                if let Ok(mut guard) = CACHED_TOKEN.lock() {
-                    *guard = Some(t);
-                }
-                if let Ok(mut guard) = CACHED_COOKIE.lock() {
-                    *guard = Some(cookie);
-                }
+                *CACHED_TOKEN.lock() = Some(t);
+                *CACHED_COOKIE.lock() = Some(cookie);
                 v_cleaned = fetch_musixmatch_fuzzy(client, &cleaned_title, artist, &current_token, &current_cookie).await?;
             }
         }

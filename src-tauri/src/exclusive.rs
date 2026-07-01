@@ -19,8 +19,12 @@
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc};
 use std::thread::JoinHandle;
+
+// Shares Arc<Mutex<f32>> (last_volume/norm_factor) with lib.rs's PlayerState, so
+// this must use the same parking_lot::Mutex type.
+use parking_lot::Mutex;
 use std::time::Duration;
 
 use lofty::prelude::*;
@@ -106,7 +110,7 @@ impl ExclusivePlayer {
     pub fn stop(&self) {
         self.shared.stop.store(true, Ordering::SeqCst);
         self.generation.fetch_add(1, Ordering::SeqCst);
-        if let Some(handle) = self.thread.lock().unwrap().take() {
+        if let Some(handle) = self.thread.lock().take() {
             let _ = handle.join();
         }
         self.shared.active.store(false, Ordering::SeqCst);
@@ -135,7 +139,7 @@ impl ExclusivePlayer {
             duration,
             playing: self.shared.playing.load(Ordering::Relaxed) && !finished,
             finished: self.shared.active.load(Ordering::Relaxed) && finished,
-            path: self.current_path.lock().unwrap().clone(),
+            path: self.current_path.lock().clone(),
         }
     }
 
@@ -157,8 +161,8 @@ impl ExclusivePlayer {
         self.shared.finished.store(false, Ordering::SeqCst);
         self.shared.position_frames.store(0, Ordering::SeqCst);
         self.shared.seek_ms.store(-1, Ordering::SeqCst);
-        *self.last_volume.lock().unwrap() = volume.clamp(0.0, 1.0) as f32;
-        *self.current_path.lock().unwrap() = Some(path.clone());
+        *self.last_volume.lock() = volume.clamp(0.0, 1.0) as f32;
+        *self.current_path.lock() = Some(path.clone());
 
         let (init_tx, init_rx) = mpsc::channel::<Result<PlaybackInfo, String>>();
         let shared = self.shared.clone();
@@ -184,7 +188,7 @@ impl ExclusivePlayer {
                 init_tx,
             );
         });
-        *self.thread.lock().unwrap() = Some(handle);
+        *self.thread.lock() = Some(handle);
 
         // Covers file decode + device negotiation + start; generous so large
         // hi-res files on a slow disk don't spuriously fall back to shared mode.
@@ -497,7 +501,7 @@ fn render_loop(
     // plays uninitialised memory at startup (a classic source of an initial pop
     // or burst of noise). MSDN recommends priming an exclusive buffer like this.
     {
-        let volume = (*last_volume.lock().unwrap() * *norm_factor.lock().unwrap()).clamp(0.0, 4.0);
+        let volume = (*last_volume.lock() * *norm_factor.lock()).clamp(0.0, 4.0);
         if let Ok(frames) = audio_client.get_available_space_in_frames() {
             let frames = frames as usize;
             if frames > 0 {
@@ -580,7 +584,7 @@ fn render_loop(
         let playing = shared.playing.load(Ordering::SeqCst);
         if playing && !finished {
             let volume =
-                (*last_volume.lock().unwrap() * *norm_factor.lock().unwrap()).clamp(0.0, 4.0);
+                (*last_volume.lock() * *norm_factor.lock()).clamp(0.0, 4.0);
             let mut produced: u64 = 0;
             'fill: for f in 0..frames {
                 for c in 0..ch {

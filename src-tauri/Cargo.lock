@@ -5588,6 +5588,7 @@ dependencies = [
  "lofty",
  "md-5",
  "notify",
+ "parking_lot",
  "rayon",
  "reqwest",
  "rodio",
