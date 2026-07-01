@@ -1,15 +1,14 @@
 <script setup>
 import { ref, computed, watch } from 'vue';
 import { useRouter } from 'vue-router';
+import { invoke } from '@tauri-apps/api/core';
 import { store } from '../store';
-import PlaylistCover from './PlaylistCover.vue';
 import {
   FIELDS,
   FIELD_MAP,
   SORT_OPTIONS,
   operatorsFor,
   operatorNeedsValue,
-  evaluateSmartPlaylist,
   newSmartPlaylist,
 } from '../smartPlaylists';
 
@@ -29,9 +28,34 @@ const initForm = () => {
   }
   // Limit checkbox derives from the numeric limit.
   limitEnabled.value = Number(form.value.limit) > 0;
+  loadSuggestionSources();
 };
 
 const limitEnabled = ref(false);
+
+// Datalist suggestion sources + genre-availability hint, loaded from the DB when
+// the modal opens (no full library array in the webview).
+const genreOptions = ref([]);
+const artistOptions = ref([]);
+const albumOptions = ref([]);
+const libraryHasGenre = ref(true);
+
+const loadSuggestionSources = async () => {
+  try {
+    const [artists, albums, genres, hasGenre] = await Promise.all([
+      invoke('db_artists', { search: null }),
+      invoke('db_albums', { search: null }),
+      invoke('db_top_genres', { limit: 500 }),
+      invoke('db_has_genre'),
+    ]);
+    artistOptions.value = artists.map((a) => a.artist).filter(Boolean);
+    albumOptions.value = albums.map((a) => a.album).filter(Boolean);
+    genreOptions.value = genres.map((g) => g.genre).filter(Boolean);
+    libraryHasGenre.value = hasGenre;
+  } catch (e) {
+    console.error('Failed to load smart-playlist suggestions', e);
+  }
+};
 
 watch(
   () => store.smartModal.open,
@@ -92,19 +116,6 @@ const removeCondition = (i) => {
   form.value.rules.conditions.splice(i, 1);
 };
 
-// ---- Datalist suggestions from the library ----
-const uniqueValues = (key) => {
-  const set = new Set();
-  for (const s of store.songs) {
-    const v = s[key];
-    if (v) set.add(v);
-  }
-  return [...set].sort((a, b) => String(a).localeCompare(String(b))).slice(0, 500);
-};
-const genreOptions = computed(() => uniqueValues('genre'));
-const artistOptions = computed(() => uniqueValues('artist'));
-const albumOptions = computed(() => uniqueValues('album'));
-
 const datalistFor = (cond) => {
   if (cond.field === 'genre') return 'dl-genre';
   if (cond.field === 'artist') return 'dl-artist';
@@ -112,12 +123,31 @@ const datalistFor = (cond) => {
   return undefined;
 };
 
-// ---- Live preview ----
-const previewCount = computed(() => {
-  const limit = limitEnabled.value ? Number(form.value.limit) || 0 : 0;
-  const sp = { ...form.value, limit };
-  return evaluateSmartPlaylist(sp, store.songs, store.insightCtx).length;
-});
+// ---- Live preview (evaluated natively against the DB, debounced) ----
+const previewCount = ref(0);
+let previewTimer = null;
+const recomputePreview = () => {
+  if (previewTimer) clearTimeout(previewTimer);
+  previewTimer = setTimeout(async () => {
+    const limit = limitEnabled.value ? Number(form.value.limit) || 0 : 0;
+    try {
+      const tracks = await invoke('db_smart_tracks', {
+        rules: form.value.rules,
+        sortBy: form.value.sortBy,
+        sortOrder: form.value.sortOrder,
+        limit,
+      });
+      previewCount.value = tracks.length;
+    } catch {
+      previewCount.value = 0;
+    }
+  }, 200);
+};
+watch(
+  [() => form.value.rules, () => limitEnabled.value, () => form.value.limit, () => store.libraryVersion],
+  recomputePreview,
+  { deep: true, immediate: true }
+);
 
 const showSortOrder = computed(
   () => form.value.sortBy && form.value.sortBy !== 'none' && form.value.sortBy !== 'random'
@@ -127,11 +157,10 @@ const showSortOrder = computed(
 const usesGenre = computed(() =>
   (form.value.rules.conditions || []).some((c) => c.field === 'genre')
 );
-const libraryHasGenre = computed(() => store.songs.some((s) => s.genre));
 
 const canSave = computed(() => (form.value.name || '').trim().length > 0);
 
-const save = () => {
+const save = async () => {
   if (!canSave.value) return;
   const payload = {
     name: form.value.name.trim(),
@@ -145,12 +174,12 @@ const save = () => {
     liveUpdate: form.value.liveUpdate,
   };
   if (store.smartModal.mode === 'edit') {
-    store.updateSmartPlaylist(store.smartModal.smartId, payload);
+    await store.updateSmartPlaylist(store.smartModal.smartId, payload);
     store.closeSmartModal();
   } else {
-    const sp = store.createSmartPlaylist(payload);
+    const sp = await store.createSmartPlaylist(payload);
     store.closeSmartModal();
-    router.push('/smart/' + sp.id);
+    if (sp) router.push('/smart/' + sp.id);
   }
 };
 

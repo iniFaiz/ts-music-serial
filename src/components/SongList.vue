@@ -342,17 +342,23 @@ const hideTooltip = () => {
 
 const infoModalOpen = ref(false);
 const infoSong = ref(null);
+const infoStat = ref({ playCount: 0, lastPlayed: 0, skipCount: 0 });
 const copyStatus = ref('Copy Path');
 
-const showFileInfo = () => {
+const showFileInfo = async () => {
   infoSong.value = menu.value.song;
   infoModalOpen.value = true;
   closeMenu();
+  // Play stats live in the DB now; fetch them for the opened track.
+  infoStat.value = infoSong.value
+    ? await store.statFor(infoSong.value.path)
+    : { playCount: 0, lastPlayed: 0, skipCount: 0 };
 };
 
 const closeInfoModal = () => {
   infoModalOpen.value = false;
   infoSong.value = null;
+  infoStat.value = { playCount: 0, lastPlayed: 0, skipCount: 0 };
   copyStatus.value = 'Copy Path';
 };
 
@@ -1077,14 +1083,14 @@ onUnmounted(() => {
                 </div>
                 <div class="grid grid-cols-[100px_1fr] gap-2 items-baseline">
                   <span class="text-gray-500">Plays:</span>
-                  <span class="text-white font-medium">{{ infoSong ? store.statFor(infoSong.path).playCount : 0 }}</span>
+                  <span class="text-white font-medium">{{ infoStat.playCount || 0 }}</span>
                 </div>
                 <div class="grid grid-cols-[100px_1fr] gap-2 items-baseline">
                   <span class="text-gray-500">Last Played:</span>
                   <span class="text-white font-medium">
                     {{
-                      infoSong && store.statFor(infoSong.path).lastPlayed
-                        ? new Date(store.statFor(infoSong.path).lastPlayed).toLocaleString()
+                      infoStat.lastPlayed
+                        ? new Date(infoStat.lastPlayed).toLocaleString()
                         : 'Never'
                     }}
                   </span>

@@ -1,7 +1,9 @@
 <script setup>
 import { computed } from 'vue';
+import { invoke } from '@tauri-apps/api/core';
 import { useRouter } from 'vue-router';
 import { store } from '../store';
+import { useQuery } from '../useLibraryData';
 import { COLLECTIONS, TOP_PICKS_ORDER, getCollection } from '../collections';
 import { SMART_TEMPLATES } from '../smartPlaylists';
 import SmartCover from '../components/SmartCover.vue';
@@ -39,26 +41,35 @@ const greeting = computed(() => {
   return 'Good evening';
 });
 
-const hasSongs = computed(() => store.songs.length > 0);
+const hasSongs = computed(() => store.scanCount > 0);
 
-// ---- Insight song collections (live) ----
-const recentlyPlayed = computed(() => store.recentlyPlayedSongs);
-const onRepeat = computed(() => store.onRepeatSongs);
-const mostPlayed = computed(() => store.mostPlayedSongs);
-const recentlyAdded = computed(() => store.recentlyAddedSongs);
+// ---- Insight song collections (fetched from the DB; refetch on stats change) --
+const { data: recentlyPlayed } = useQuery(() => store.recentlyPlayed(60), {
+  watchStats: true,
+  initial: [],
+});
+const { data: onRepeat } = useQuery(() => store.onRepeat(60), { watchStats: true, initial: [] });
+const { data: mostPlayed } = useQuery(() => store.mostPlayed(60), { watchStats: true, initial: [] });
+const { data: recentlyAdded } = useQuery(() => store.recentlyAdded(60), { initial: [] });
 
 // ---- Big "Top Picks" gradient cards ----
-const topPicks = computed(() =>
-  TOP_PICKS_ORDER.map((k) => COLLECTIONS[k])
-    .filter(Boolean)
-    .map((c) => ({ ...c, count: c.songs(store).length }))
-    .filter((c) => c.count > 0)
+// Only need to know which collections currently have any tracks (the card shows
+// no count), so this refetches with the library/stats.
+const { data: topPicks } = useQuery(
+  async () => {
+    const entries = TOP_PICKS_ORDER.map((k) => COLLECTIONS[k]).filter(Boolean);
+    const counted = await Promise.all(
+      entries.map(async (c) => ({ ...c, count: (await c.fetch(store)).length }))
+    );
+    return counted.filter((c) => c.count > 0);
+  },
+  { watchStats: true, initial: [] }
 );
 
-const playCollection = (key) => {
+const playCollection = async (key) => {
   const c = getCollection(key);
   if (!c) return;
-  const l = c.songs(store);
+  const l = await c.fetch(store);
   if (l.length) {
     store.recordRecent('collection', key);
     store.playSong(l[0], l);
@@ -67,10 +78,10 @@ const playCollection = (key) => {
 
 // ---- Smart playlists ----
 const smartPlaylists = computed(() => store.smartPlaylists);
-const smartCount = (sp) => store.smartSongs(sp.id).length;
+const smartCount = (sp) => sp.track_count || 0;
 
-const createFromTemplate = (t) => {
-  const sp = store.createSmartPlaylist({
+const createFromTemplate = async (t) => {
+  const sp = await store.createSmartPlaylist({
     name: t.name,
     description: t.description,
     color: t.color,
@@ -79,24 +90,37 @@ const createFromTemplate = (t) => {
     sortOrder: t.sortOrder,
     limit: t.limit,
   });
-  router.push('/smart/' + sp.id);
+  if (sp) router.push('/smart/' + sp.id);
 };
 
 // ---- Stations ----
-const artistStations = computed(() => store.topArtists.slice(0, 14));
-const genreStations = computed(() => store.topGenres.slice(0, 14));
+const { data: artistStations } = useQuery(() => store.topArtists(14), {
+  watchStats: true,
+  initial: [],
+});
+const { data: genreStations } = useQuery(() => store.topGenres(14), {
+  watchStats: true,
+  initial: [],
+});
 const hasStations = computed(() => artistStations.value.length > 0 || genreStations.value.length > 0);
 
-// ---- Recently Played (mixed: songs + containers) ----
-const albumCover = (name) => {
-  const s = store.songs.find((x) => x.album === name);
-  return s ? s.path : null;
-};
+// ---- Cover maps for resolving recent album/station cards ----
+const { data: albumRows } = useQuery(() => invoke('db_albums', { search: null }), { initial: [] });
+const albumCoverMap = computed(() => {
+  const m = new Map();
+  for (const a of albumRows.value) m.set(a.album, a.cover_path);
+  return m;
+});
+const artistCoverMap = computed(() => {
+  const m = new Map();
+  for (const a of artistStations.value) m.set(a.name, a.coverPath);
+  return m;
+});
 
 const resolveRecent = (r) => {
   if (r.type === 'playlist') {
     const pl = store.getPlaylist(r.key);
-    if (!pl) return null;
+    if (!pl || pl.is_smart) return null;
     return { kind: 'playlist', id: pl.id, title: pl.name, sub: 'Playlist', cover: pl.cover, name: pl.name };
   }
   if (r.type === 'smart') {
@@ -110,23 +134,20 @@ const resolveRecent = (r) => {
     return { kind: 'collection', key: r.key, title: c.title, sub: 'Mix', color: c.color, icon: c.icon };
   }
   if (r.type === 'album') {
-    const cover = albumCover(r.key);
-    if (!cover) return null;
-    return { kind: 'album', name: r.key, title: r.key, sub: 'Album', coverPath: cover };
+    const cover = albumCoverMap.value.get(r.key);
+    return { kind: 'album', name: r.key, title: r.key, sub: 'Album', coverPath: cover || null };
   }
   if (r.type === 'station') {
     const idx = r.key.indexOf(':');
     const stationType = r.key.slice(0, idx);
     const name = r.key.slice(idx + 1);
-    const pool = store.songs.find((s) => (stationType === 'genre' ? s.genre === name : s.artist === name));
-    if (!pool) return null;
     return {
       kind: 'station',
       stationType,
       name,
       title: name,
       sub: stationType === 'genre' ? 'Genre Station' : 'Station',
-      coverPath: stationType === 'artist' ? pool.path : null,
+      coverPath: stationType === 'artist' ? artistCoverMap.value.get(name) || null : null,
     };
   }
   return null;
@@ -138,15 +159,12 @@ const recentItems = computed(() => {
     const resolved = resolveRecent(r);
     if (resolved) items.push({ ...resolved, ts: r.ts });
   }
-  for (const s of store.recentlyPlayedSongs.slice(0, 14)) {
-    items.push({
-      kind: 'song',
-      song: s,
-      title: s.title,
-      sub: s.artist,
-      ts: store.statFor(s.path).lastPlayed,
-    });
-  }
+  // Recently-played songs come back newest-first; anchor synthetic timestamps so
+  // they interleave with the container recents in that order.
+  const now = Date.now();
+  recentlyPlayed.value.slice(0, 14).forEach((s, i) => {
+    items.push({ kind: 'song', song: s, title: s.title, sub: s.artist, ts: now - i });
+  });
   items.sort((a, b) => b.ts - a.ts);
   return items.slice(0, 20);
 });
@@ -180,13 +198,12 @@ const onRecentPlay = (item) => {
       store.playSong(item.song, recentlyPlayed.value);
       break;
     case 'album': {
-      const songs = store.songs
-        .filter((s) => s.album === item.name)
-        .sort((a, b) => (a.track_number || 0) - (b.track_number || 0));
-      if (songs.length) {
-        store.recordRecent('album', item.name);
-        store.playSong(songs[0], songs);
-      }
+      invoke('db_album_tracks', { album: item.name }).then((songs) => {
+        if (songs.length) {
+          store.recordRecent('album', item.name);
+          store.playSong(songs[0], songs);
+        }
+      });
       break;
     }
     case 'playlist':

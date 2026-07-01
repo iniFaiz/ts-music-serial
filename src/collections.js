@@ -13,7 +13,7 @@ export const COLLECTIONS = {
     subtitle: 'Pick up where you left off',
     color: '#1fb6ff,#0b3d91',
     icon: 'clock',
-    songs: (store) => store.recentlyPlayedSongs,
+    fetch: (store) => store.recentlyPlayed(500),
     rules: { match: 'all', conditions: [{ field: 'lastPlayed', op: 'played', value: '' }] },
     sortBy: 'lastPlayed',
     sortOrder: 'desc',
@@ -24,7 +24,7 @@ export const COLLECTIONS = {
     subtitle: "Songs you can't stop playing",
     color: '#ff6a3d,#b81d54',
     icon: 'repeat',
-    songs: (store) => store.onRepeatSongs,
+    fetch: (store) => store.onRepeat(500),
     rules: {
       match: 'all',
       conditions: [
@@ -41,7 +41,7 @@ export const COLLECTIONS = {
     subtitle: 'Your all-time top tracks',
     color: '#8e44ff,#2d1b69',
     icon: 'fire',
-    songs: (store) => store.mostPlayedSongs,
+    fetch: (store) => store.mostPlayed(500),
     rules: { match: 'all', conditions: [{ field: 'playCount', op: 'gte', value: 1 }] },
     sortBy: 'playCount',
     sortOrder: 'desc',
@@ -52,7 +52,7 @@ export const COLLECTIONS = {
     subtitle: 'Fresh in your library',
     color: '#19c37d,#0b6e4f',
     icon: 'sparkles',
-    songs: (store) => store.recentlyAddedSongs,
+    fetch: (store) => store.recentlyAdded(500),
     rules: { match: 'all', conditions: [] },
     sortBy: 'dateAdded',
     sortOrder: 'desc',
@@ -64,7 +64,7 @@ export const COLLECTIONS = {
     subtitle: "Loved songs you've missed lately",
     color: '#36d1dc,#1a4a8a',
     icon: 'heart',
-    songs: (store) => store.rediscoverSongs,
+    fetch: (store) => store.rediscover(500),
     rules: {
       match: 'all',
       conditions: [

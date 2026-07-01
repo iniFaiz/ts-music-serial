@@ -10,8 +10,9 @@ defineOptions({ name: 'PlaylistsView' });
 const router = useRouter();
 
 const playlists = computed(() => store.playlists);
-const smartCount = (pl) => store.smartSongs(pl.id).length;
-const cardCount = (pl) => (store.isSmart(pl) ? smartCount(pl) : pl.paths.length);
+// db_playlists returns a live track_count for every row (item count for normal
+// playlists, evaluated-rule count for smart ones).
+const cardCount = (pl) => pl.track_count || 0;
 
 function newSmartPlaylist() {
   store.openSmartModal('create');

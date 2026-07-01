@@ -18,7 +18,7 @@ import { useRouter } from 'vue-router';
 import { store } from '../store';
 import { loadCover, getCachedCover, hasCachedCover } from '../coverCache';
 import { loadLyrics, activeLineIndex } from '../lyricsCache';
-import { extractColorsFromImage, defaultPalette } from '../colorExtract';
+import { extractColorsForPath, defaultPalette } from '../colorExtract';
 import LyricContent from './LyricContent.vue';
 import LosslessBadge from './LosslessBadge.vue';
 import CoverImage from './CoverImage.vue';
@@ -79,7 +79,8 @@ async function fetchLyrics(force = false) {
 // Re-derive the backdrop colors whenever the cover changes; the blobs ease
 // between palettes (CSS transition) for a smooth per-track background change.
 watch(coverUrl, async (url) => {
-  colors.value = url ? await extractColorsFromImage(url) : defaultPalette();
+  const path = song.value?.path;
+  colors.value = path || url ? await extractColorsForPath(path, url) : defaultPalette();
 }, { immediate: true });
 
 watch(

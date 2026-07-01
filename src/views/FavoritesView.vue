@@ -1,9 +1,12 @@
 <script setup>
-import { computed, ref, onMounted, onUnmounted } from 'vue';
+import { ref, onMounted, onUnmounted } from 'vue';
+import { invoke } from '@tauri-apps/api/core';
 import { store } from '../store';
 import SongList from '../components/SongList.vue';
+import { useQuery } from '../useLibraryData';
 
-const songs = computed(() => store.favoriteSongs);
+// Liked songs, in saved order, fetched from the DB (re-runs when favorites change).
+const { data: songs } = useQuery(() => invoke('db_favorites'), { initial: [] });
 
 const playAll = () => {
   if (songs.value.length > 0) store.playSong(songs.value[0], songs.value);

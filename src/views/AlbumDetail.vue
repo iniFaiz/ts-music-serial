@@ -1,10 +1,12 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { invoke } from '@tauri-apps/api/core';
 import { useRoute, useRouter } from 'vue-router';
 import { store } from '../store';
 import SongList from '../components/SongList.vue';
 import CoverImage from '../components/CoverImage.vue';
 import { navigateWithTransition } from '../viewTransition';
+import { useQuery } from '../useLibraryData';
 
 const route = useRoute();
 const router = useRouter();
@@ -27,15 +29,11 @@ onUnmounted(() => {
   window.removeEventListener('click', closeMenu);
 });
 
-const albumSongs = computed(() => {
-  return store.songs
-    .filter((s) => s.album === albumName)
-    .sort((a, b) => {
-      const tA = a.track_number || 0;
-      const tB = b.track_number || 0;
-      return tA - tB;
-    });
-});
+// Album tracks, ordered by track number in SQL.
+const { data: albumSongs } = useQuery(
+  () => invoke('db_album_tracks', { album: albumName }),
+  { initial: [] }
+);
 
 const albumInfo = computed(() => {
   if (albumSongs.value.length === 0) return {};

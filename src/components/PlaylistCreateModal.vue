@@ -65,16 +65,16 @@ const downscale = (dataUrl) => {
 
 const cancel = () => store.closePlaylistModal();
 
-const save = () => {
+const save = async () => {
   if (store.playlistModal.mode === 'edit' && store.playlistModal.playlistId) {
-    store.updatePlaylist(store.playlistModal.playlistId, title.value, description.value, cover.value);
+    await store.updatePlaylist(store.playlistModal.playlistId, title.value, description.value, cover.value);
     store.closePlaylistModal();
   } else {
-    const pl = store.createPlaylist(title.value, description.value, cover.value);
     const pending = store.playlistModal.pendingSongPath;
-    if (pending) store.addToPlaylist(pl.id, pending);
+    const pl = await store.createPlaylist(title.value, description.value, cover.value);
+    if (pl && pending) await store.addToPlaylist(pl.id, pending);
     store.closePlaylistModal();
-    router.push('/playlists/' + pl.id);
+    if (pl) router.push('/playlists/' + pl.id);
   }
 };
 </script>

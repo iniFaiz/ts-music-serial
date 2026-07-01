@@ -2,9 +2,8 @@ import { reactive } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { getCurrentWindow, LogicalSize } from '@tauri-apps/api/window';
-import { idbGet, idbSet, idbDelete } from './libraryStore';
-import { sortTracks } from './sortTracks';
-import { evaluateSmartPlaylist, newSmartPlaylist } from './smartPlaylists';
+import { idbGet, idbDelete } from './libraryStore';
+import { newSmartPlaylist } from './smartPlaylists';
 import { EQ_PRESETS, EQ_BAND_COUNT, EQ_MIN_DB, EQ_MAX_DB, matchPreset } from './equalizer';
 
 const appWindow = getCurrentWindow();
@@ -57,7 +56,14 @@ function isUnderRoot(filePath, root) {
 }
 
 export const store = reactive({
-  songs: [],
+  // Query-driven library: the full track list lives in SQLite (Rust), not here.
+  // Views fetch what they render via db_* commands and re-run whenever these
+  // counters bump. `libraryVersion` = structural changes (tracks / favorites /
+  // playlists); `statsVersion` = play-count / last-played updates (so Home
+  // insights refresh without forcing every list to reload).
+  libraryVersion: 0,
+  statsVersion: 0,
+  libraryReady: false,
   roots: [],
   loading: false,
   statusMessage: 'Ready to scan',
@@ -150,9 +156,9 @@ export const store = reactive({
   favorites: [],
   playlists: [], // [{ id, name, paths: [] }]
 
-  // Per-track play statistics: { [path]: { playCount, lastPlayed, skipCount } }.
-  // `lastPlayed` is a ms epoch. Drives Home insights and smart playlists.
-  stats: {},
+  // Play statistics now live in the SQLite `stats` table (see db.rs); the
+  // frontend records plays/skips via db_record_* and reads them back through the
+  // insight/query commands rather than holding a per-path map here.
   // Smart playlists live in the same `playlists` array as normal ones, flagged
   // by the presence of a `rules` object, so they share ordering, drag-reorder
   // and rendering. `smartPlaylists` / `normalPlaylists` getters split them.
@@ -171,14 +177,51 @@ export const store = reactive({
   queuePanelOpen: false,
   lyricsPanelOpen: false,
 
-  // Persist the current library + scanned roots to IndexedDB. JSON round-trips
-  // strip Vue's reactive proxies so the values can be structured-cloned.
-  async persist() {
+  // ---- Query-driven library helpers --------------------------------------
+
+  // Bump the structural version so every useQuery view refetches. Call after any
+  // change to tracks / favorites / playlists.
+  bumpLibrary() {
+    this.libraryVersion++;
+  },
+  // Bump only the stats version (Home insights) so play/skip accounting doesn't
+  // force every track list in the app to reload.
+  bumpStats() {
+    this.statsVersion++;
+  },
+
+  // Reload the small caches the UI reads synchronously: favorite paths (for
+  // isFavorite checks), playlist metadata, and recent containers. The heavy
+  // track lists are always fetched on demand by views.
+  async refreshFavorites() {
     try {
-      await idbSet('library', JSON.parse(JSON.stringify(this.songs)));
-      await idbSet('roots', [...this.roots]);
+      this.favorites = await invoke('db_favorite_paths');
     } catch (e) {
-      console.error('Failed to persist library', e);
+      console.error('Failed to load favorites', e);
+    }
+  },
+  async refreshPlaylists() {
+    try {
+      this.playlists = await invoke('db_playlists');
+    } catch (e) {
+      console.error('Failed to load playlists', e);
+    }
+  },
+  async refreshRecents() {
+    try {
+      this.recents = await invoke('db_recents');
+    } catch (e) {
+      console.error('Failed to load recents', e);
+    }
+  },
+
+  // Fetch a single track object by path (queue hydration / gapless prepare).
+  async getTrackByPath(path) {
+    if (!path) return null;
+    try {
+      return await invoke('db_track', { path });
+    } catch {
+      return null;
     }
   },
 
@@ -206,13 +249,13 @@ export const store = reactive({
   },
 
   async _writeAppState() {
+    // Favorites, playlists, stats and recents each live in their own SQLite
+    // table (written directly by their mutations), so app-state persistence is
+    // now just the settings + the live playback session, stored as two kv rows.
     try {
-      await idbSet('app_state', {
-        favorites: [...this.favorites],
-        playlists: JSON.parse(JSON.stringify(this.playlists)),
-        stats: JSON.parse(JSON.stringify(this.stats)),
-        recents: JSON.parse(JSON.stringify(this.recents)),
-        settings: {
+      await invoke('db_kv_set', {
+        key: 'settings',
+        value: {
           outputDevice: this.outputDevice,
           normalizationEnabled: this.normalizationEnabled,
           normalizationPreampDb: this.normalizationPreampDb,
@@ -230,7 +273,10 @@ export const store = reactive({
           lyricsOffsetMs: this.lyricsOffsetMs,
           miniAlwaysOnTop: this.miniAlwaysOnTop,
         },
-        playback: {
+      });
+      await invoke('db_kv_set', {
+        key: 'playback',
+        value: {
           songPath: this.currentSong ? this.currentSong.path : null,
           positionSecs: this.currentTime || 0,
           queuePaths: this.queue.map((s) => s.path),
@@ -249,28 +295,14 @@ export const store = reactive({
 
   async loadLibrary() {
     try {
-      // One-time migration from the old localStorage cache.
-      const legacy = localStorage.getItem('music_library');
-      if (legacy) {
-        try {
-          await idbSet('library', JSON.parse(legacy));
-        } catch (e) {
-          console.error('Failed to migrate legacy library', e);
-        }
-        localStorage.removeItem('music_library');
+      // One-time migration of the legacy IndexedDB blob into SQLite, the first
+      // time the DB is empty. After this the DB is the sole source of truth.
+      if ((await invoke('db_count')) === 0) {
+        await this.migrateFromIndexedDb();
       }
 
-      const [songs, roots] = await Promise.all([idbGet('library'), idbGet('roots')]);
-      this.songs = Array.isArray(songs) ? songs : [];
-
-      // Roots authorize streaming/cover access. If unknown (e.g. migrated
-      // data), fall back to each track's containing folder.
-      let resolvedRoots = Array.isArray(roots) ? roots : [];
-      if (resolvedRoots.length === 0 && this.songs.length > 0) {
-        resolvedRoots = [...new Set(this.songs.map((s) => dirName(s.path)))];
-        await idbSet('roots', resolvedRoots);
-      }
-      this.roots = resolvedRoots;
+      this.roots = await invoke('db_roots');
+      this.scanCount = await invoke('db_count');
 
       if (this.roots.length > 0) {
         try {
@@ -282,47 +314,80 @@ export const store = reactive({
         this.watchRoots();
       }
 
-      if (this.songs.length > 0) {
-        this.scanCount = this.songs.length;
-        this.statusMessage = `Loaded ${this.songs.length} songs`;
+      if (this.scanCount > 0) {
+        this.statusMessage = `Loaded ${this.scanCount} songs`;
         this.scanComplete = true;
       }
 
-      // Restore likes, playlists and the last playback session.
+      // Load the small synchronous caches (favorite paths, playlist metadata,
+      // recents), then restore settings + the last playback session.
+      await this.refreshFavorites();
+      await this.refreshPlaylists();
+      await this.refreshRecents();
+      this.libraryReady = true;
+      this.bumpLibrary();
       await this.restoreState();
     } catch (e) {
       console.error('Failed to load library', e);
     }
   },
 
-  async restoreState() {
-    let state;
+  // Seed SQLite from the old IndexedDB (or localStorage) data, once. Reads the
+  // legacy library / roots / app_state blobs and hands them to db_import, which
+  // populates the tracks, stats, favorites, playlists and recents tables plus
+  // the settings/playback kv rows.
+  async migrateFromIndexedDb() {
     try {
-      state = await idbGet('app_state');
+      let library = await idbGet('library');
+      if (!Array.isArray(library)) {
+        const legacy = localStorage.getItem('music_library');
+        if (legacy) {
+          try {
+            library = JSON.parse(legacy);
+          } catch {
+            library = null;
+          }
+        }
+      }
+      const roots = (await idbGet('roots')) || [];
+      const state = (await idbGet('app_state')) || {};
+      const tracks = Array.isArray(library) ? library : [];
+
+      // Fall back to each track's folder as a root when none were recorded.
+      let resolvedRoots = Array.isArray(roots) ? roots : [];
+      if (resolvedRoots.length === 0 && tracks.length > 0) {
+        resolvedRoots = [...new Set(tracks.map((s) => dirName(s.path)))];
+      }
+
+      if (tracks.length > 0 || state.favorites || state.playlists || state.settings) {
+        await invoke('db_import', { tracks, roots: resolvedRoots, state });
+        if (tracks.length > 0) {
+          this.statusMessage = `Migrated ${tracks.length} songs to database`;
+        }
+      }
+
+      // Drop the big legacy library blob (keep app_state harmlessly for safety).
+      try {
+        await idbDelete('library');
+        localStorage.removeItem('music_library');
+      } catch {
+        /* ignore */
+      }
+    } catch (e) {
+      console.error('IndexedDB → SQLite migration failed', e);
+    }
+  },
+
+  async restoreState() {
+    let s, pb;
+    try {
+      s = await invoke('db_kv_get', { key: 'settings' });
+      pb = await invoke('db_kv_get', { key: 'playback' });
     } catch (e) {
       console.error('Failed to read app state', e);
       return;
     }
-    if (!state) return;
 
-    this.favorites = Array.isArray(state.favorites) ? state.favorites : [];
-    this.playlists = Array.isArray(state.playlists) ? state.playlists : [];
-    // Migrate legacy separately-stored smart playlists into the unified array.
-    if (Array.isArray(state.smartPlaylists) && state.smartPlaylists.length) {
-      const seen = new Set(this.playlists.map((p) => p.id));
-      for (const sp of state.smartPlaylists) {
-        if (!seen.has(sp.id)) this.playlists.push(sp);
-      }
-    }
-    // Every playlist (smart included) needs a `paths` array so library-pruning
-    // code can filter it unconditionally.
-    this.playlists.forEach((p) => {
-      if (!Array.isArray(p.paths)) p.paths = [];
-    });
-    this.stats = state.stats && typeof state.stats === 'object' ? state.stats : {};
-    this.recents = Array.isArray(state.recents) ? state.recents : [];
-
-    const s = state.settings;
     if (s) {
       if (typeof s.outputDevice !== 'undefined') this.outputDevice = s.outputDevice;
       if (typeof s.normalizationEnabled === 'boolean')
@@ -365,7 +430,6 @@ export const store = reactive({
     }
     this.syncEqualizer();
 
-    const pb = state.playback;
     if (!pb) return;
 
     if (typeof pb.volume === 'number') this.volume = pb.volume;
@@ -376,25 +440,39 @@ export const store = reactive({
     if (typeof pb.visualizerEnabled === 'boolean') this.visualizerEnabled = pb.visualizerEnabled;
     this.syncVisualizer();
 
-    const byPath = new Map(this.songs.map((s) => [s.path, s]));
-    if (Array.isArray(pb.queuePaths)) {
-      this.queue = pb.queuePaths.map((p) => byPath.get(p)).filter(Boolean);
+    // Rehydrate the saved queue from the DB (order preserved by db_tracks_by_paths).
+    if (Array.isArray(pb.queuePaths) && pb.queuePaths.length) {
+      try {
+        this.queue = await invoke('db_tracks_by_paths', { paths: pb.queuePaths });
+      } catch {
+        this.queue = [];
+      }
     }
 
     // Re-load the last track but leave it paused at the saved position; the
     // PlayerControls watcher reads pendingSeek/pendingAutoplay when it loads.
-    if (pb.songPath && byPath.has(pb.songPath)) {
-      this.pendingSeek = pb.positionSecs || 0;
-      this.pendingAutoplay = false;
-      this.currentTime = pb.positionSecs || 0;
-      this.isPlaying = false;
-      this.currentSong = byPath.get(pb.songPath);
+    if (pb.songPath) {
+      const song = await this.getTrackByPath(pb.songPath);
+      if (song) {
+        this.pendingSeek = pb.positionSecs || 0;
+        this.pendingAutoplay = false;
+        this.currentTime = pb.positionSecs || 0;
+        this.isPlaying = false;
+        this.currentSong = song;
+      }
     }
   },
 
   async resetLibrary() {
-    this.songs = [];
+    try {
+      await invoke('db_reset');
+    } catch (e) {
+      console.error('Failed to reset database', e);
+    }
     this.roots = [];
+    this.favorites = [];
+    this.playlists = [];
+    this.recents = [];
     this.scanCount = 0;
     this.currentSong = null;
     this.currentTime = 0;
@@ -402,22 +480,20 @@ export const store = reactive({
     this.queue = [];
     this.isPlaying = false;
     this.scanComplete = false;
-    this.favorites = [];
-    this.playlists = [];
-    this.stats = {};
-    this.recents = [];
     this.statusMessage = 'Library reset';
+    this.bumpLibrary();
     try {
       await invoke('player_stop');
     } catch (e) {
       console.error('Failed to stop player during reset', e);
     }
+    // Drop any lingering legacy IndexedDB blobs too.
     try {
       await idbDelete('library');
       await idbDelete('roots');
       await idbDelete('app_state');
     } catch (e) {
-      console.error('Failed to reset library', e);
+      console.error('Failed to clear legacy caches', e);
     }
   },
 
@@ -453,23 +529,22 @@ export const store = reactive({
       });
       const endTime = performance.now();
 
-      const existingPaths = new Set(this.songs.map((s) => s.path));
-      const newSongs = result.filter((s) => !existingPaths.has(s.path));
-
-      this.songs = sortTracks([...this.songs, ...newSongs]);
+      // Persist scanned tracks straight into SQLite; returns how many were new.
+      const added = await invoke('db_upsert_tracks', { tracks: result });
 
       if (!this.roots.includes(path)) {
         this.roots = [...this.roots, path];
+        await invoke('db_set_roots', { roots: [...this.roots] });
         this.watchRoots();
       }
-      await this.persist();
 
       const timeSeconds = ((endTime - startTime) / 1000).toFixed(2);
-      this.statusMessage = `Added ${newSongs.length} new tracks in ${timeSeconds}s`;
+      this.statusMessage = `Added ${added} new tracks in ${timeSeconds}s`;
 
       this.scanDuration = timeSeconds;
-      this.scanCount = this.songs.length;
+      this.scanCount = await invoke('db_count');
       this.scanComplete = true;
+      this.bumpLibrary();
     } catch (error) {
       this.statusMessage = `Error: ${error}`;
     } finally {
@@ -487,36 +562,35 @@ export const store = reactive({
     this.statusMessage = 'Adding dropped items...';
     try {
       const result = await invoke('scan_paths', { paths: list });
-      const existingPaths = new Set(this.songs.map((s) => s.path));
-      const newSongs = result.filter((s) => !existingPaths.has(s.path));
-      this.songs = sortTracks([...this.songs, ...newSongs]);
+      const added = await invoke('db_upsert_tracks', { tracks: result });
 
       // Register new roots so the watcher and streaming scope cover them. A
-      // dropped path that contains new tracks is treated as a folder root;
-      // otherwise fall back to each new track's containing folder.
+      // dropped path that contains scanned tracks is treated as a folder root;
+      // otherwise fall back to each scanned track's containing folder.
       const newRoots = [];
       for (const p of list) {
         if (
           !this.roots.some((r) => isUnderRoot(p, r)) &&
           !newRoots.includes(p) &&
-          newSongs.some((s) => isUnderRoot(s.path, p))
+          result.some((s) => isUnderRoot(s.path, p))
         ) {
           newRoots.push(p);
         }
       }
-      for (const d of new Set(newSongs.map((s) => dirName(s.path)))) {
+      for (const d of new Set(result.map((s) => dirName(s.path)))) {
         if (!this.roots.some((r) => isUnderRoot(d, r)) && !newRoots.some((r) => isUnderRoot(d, r))) {
           newRoots.push(d);
         }
       }
       if (newRoots.length) {
         this.roots = [...this.roots, ...newRoots];
+        await invoke('db_set_roots', { roots: [...this.roots] });
         this.watchRoots();
       }
-      await this.persist();
-      this.scanCount = this.songs.length;
+      this.scanCount = await invoke('db_count');
       this.scanComplete = true;
-      this.statusMessage = `Added ${newSongs.length} new tracks`;
+      this.bumpLibrary();
+      this.statusMessage = `Added ${added} new tracks`;
     } catch (e) {
       this.statusMessage = `Error: ${e}`;
     } finally {
@@ -529,9 +603,16 @@ export const store = reactive({
   // Remove a scanned folder and every track that lives inside it.
   async removeRoot(root) {
     this.roots = this.roots.filter((r) => normPath(r) !== normPath(root));
-    const removed = this.songs.filter((s) => isUnderRoot(s.path, root));
+    await invoke('db_set_roots', { roots: [...this.roots] });
+
+    let removed = [];
+    try {
+      removed = await invoke('db_remove_under_root', { root });
+    } catch (e) {
+      console.error('Failed to remove folder tracks', e);
+    }
     if (removed.length) {
-      const removedSet = new Set(removed.map((s) => s.path));
+      const removedSet = new Set(removed);
       // Stop playback if the current track is being removed.
       if (this.currentSong && removedSet.has(this.currentSong.path)) {
         this.isPlaying = false;
@@ -545,16 +626,13 @@ export const store = reactive({
         }
       }
       this.queue = this.queue.filter((s) => !removedSet.has(s.path));
-      this.songs = this.songs.filter((s) => !removedSet.has(s.path));
-      this.favorites = this.favorites.filter((p) => !removedSet.has(p));
-      this.playlists.forEach((pl) => {
-        pl.paths = pl.paths.filter((p) => !removedSet.has(p));
-      });
+      // Favorites/playlist items were cascaded in the DB; refresh the caches.
+      await this.refreshFavorites();
+      await this.refreshPlaylists();
     }
-    await this.persist();
-    await this.flushState();
-    this.scanCount = this.songs.length;
+    this.scanCount = await invoke('db_count');
     this.statusMessage = `Removed folder: ${root}`;
+    this.bumpLibrary();
     this.watchRoots();
   },
 
@@ -565,32 +643,26 @@ export const store = reactive({
     this.loading = true;
     this.statusMessage = 'Refreshing library...';
     try {
-      const existingPaths = new Set(this.songs.map((s) => s.path));
-      let merged = this.songs;
       for (const root of this.roots) {
         const result = await invoke('scan_music_folder', {
           path: root,
           useParallelism: this.useParallelism,
         });
-        const newSongs = result.filter((s) => !existingPaths.has(s.path));
-        newSongs.forEach((s) => existingPaths.add(s.path));
-        if (newSongs.length) merged = [...merged, ...newSongs];
+        await invoke('db_upsert_tracks', { tracks: result });
       }
 
-      // Prune tracks whose files were deleted.
+      // Prune tracks whose files were deleted; drop them from the queue too.
       try {
-        const alive = new Set(await invoke('filter_existing', { paths: merged.map((s) => s.path) }));
-        merged = merged.filter((s) => alive.has(s.path));
+        const gone = new Set(await invoke('db_prune_missing'));
+        if (gone.size) this.queue = this.queue.filter((s) => !gone.has(s.path));
       } catch {
-        /* backend prune unavailable — keep all */
+        /* prune unavailable — keep all */
       }
 
-      this.songs = sortTracks(merged);
-      this.queue = this.queue.filter((s) => this.songs.some((x) => x.path === s.path));
-      await this.persist();
-      this.scanCount = this.songs.length;
+      this.scanCount = await invoke('db_count');
       this.scanComplete = true;
-      this.statusMessage = `Library refreshed — ${this.songs.length} tracks`;
+      this.bumpLibrary();
+      this.statusMessage = `Library refreshed — ${this.scanCount} tracks`;
     } catch (e) {
       this.statusMessage = `Error: ${e}`;
     } finally {
@@ -598,34 +670,32 @@ export const store = reactive({
     }
   },
 
-  // Wipe and rebuild the library from scratch by re-scanning every root.
+  // Rebuild the library by re-scanning every root (refreshes all metadata) and
+  // pruning files that no longer exist.
   async reindexLibrary() {
     if (this.roots.length === 0) return;
     this.loading = true;
     this.statusMessage = 'Reindexing...';
     const startTime = performance.now();
     try {
-      const collected = [];
-      const seen = new Set();
       for (const root of this.roots) {
         const result = await invoke('scan_music_folder', {
           path: root,
           useParallelism: this.useParallelism,
         });
-        for (const s of result) {
-          if (!seen.has(s.path)) {
-            seen.add(s.path);
-            collected.push(s);
-          }
-        }
+        await invoke('db_upsert_tracks', { tracks: result });
       }
-      this.songs = sortTracks(collected);
-      this.queue = this.queue.filter((s) => seen.has(s.path));
-      await this.persist();
+      try {
+        const gone = new Set(await invoke('db_prune_missing'));
+        if (gone.size) this.queue = this.queue.filter((s) => !gone.has(s.path));
+      } catch {
+        /* ignore */
+      }
       const secs = ((performance.now() - startTime) / 1000).toFixed(2);
-      this.scanCount = this.songs.length;
+      this.scanCount = await invoke('db_count');
       this.scanComplete = true;
-      this.statusMessage = `Reindexed ${this.songs.length} tracks in ${secs}s`;
+      this.bumpLibrary();
+      this.statusMessage = `Reindexed ${this.scanCount} tracks in ${secs}s`;
     } catch (e) {
       this.statusMessage = `Error: ${e}`;
     } finally {
@@ -983,7 +1053,9 @@ export const store = reactive({
     if (newQueue && newQueue.length > 0) {
       this.queue = [...newQueue];
     } else if (this.queue.length === 0) {
-      this.queue = [...this.songs];
+      // No explicit queue: start one with just this track (views normally pass
+      // the visible list; autoplay/next then extends it from the DB).
+      this.queue = song ? [{ ...song }] : [];
     }
     // Preserve pendingSeek if already set (e.g. by onSeekCommit on a finished track)
     if (this.pendingSeek === null) {
@@ -1077,46 +1149,79 @@ export const store = reactive({
 
   // ---- Favorites --------------------------------------------------------
 
+  // `favorites` is a cached array of paths (small) kept in sync with the DB so
+  // isFavorite() stays a synchronous check for list rendering.
   isFavorite(path) {
     return this.favorites.includes(path);
   },
 
-  toggleFavorite(path) {
+  async toggleFavorite(path) {
     if (!path) return;
+    // Optimistic local update for instant UI, then reconcile with the DB.
     const idx = this.favorites.indexOf(path);
     if (idx >= 0) this.favorites.splice(idx, 1);
     else this.favorites.push(path);
-    this.persistState();
+    try {
+      await invoke('db_toggle_favorite', { path });
+    } catch (e) {
+      console.error('Failed to toggle favorite', e);
+    }
+    this.bumpLibrary();
   },
 
-  get favoriteSongs() {
-    const byPath = new Map(this.songs.map((s) => [s.path, s]));
-    return this.favorites.map((p) => byPath.get(p)).filter(Boolean);
-  },
-
-  moveInFavorites(from, to) {
+  async moveInFavorites(from, to) {
     if (from === to) return;
     if (from < 0 || from >= this.favorites.length) return;
     if (to < 0 || to >= this.favorites.length) return;
     const [item] = this.favorites.splice(from, 1);
     this.favorites.splice(to, 0, item);
-    this.persistState();
+    try {
+      await invoke('db_move_favorite', { from, to });
+    } catch (e) {
+      console.error('Failed to reorder favorites', e);
+    }
+    this.bumpLibrary();
   },
 
   // ---- Playlists --------------------------------------------------------
 
-  createPlaylist(name, description = '', cover = null) {
+  // Write a playlist row (create or update) to the DB. Field names mirror the
+  // db_playlists shape (is_smart/sort_by/limit_n…); Tauri maps them to the
+  // command's snake_case params.
+  async _savePlaylist(pl) {
+    try {
+      await invoke('db_upsert_playlist', {
+        id: pl.id,
+        name: pl.name || 'Playlist',
+        description: pl.description || '',
+        color: pl.color ?? null,
+        cover: pl.cover ?? null,
+        isSmart: !!pl.is_smart,
+        rules: pl.rules ?? null,
+        sortBy: pl.sort_by ?? null,
+        sortOrder: pl.sort_order ?? null,
+        limitN: pl.limit_n ?? null,
+        liveUpdate: pl.live_update ?? null,
+      });
+    } catch (e) {
+      console.error('Failed to save playlist', e);
+    }
+  },
+
+  async createPlaylist(name, description = '', cover = null) {
     const id = 'pl_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-    const playlist = {
+    await this._savePlaylist({
       id,
       name: (name || '').trim() || 'New Playlist',
       description: (description || '').trim(),
+      color: null,
       cover: cover || null,
-      paths: [],
-    };
-    this.playlists.push(playlist);
-    this.persistState();
-    return playlist;
+      is_smart: false,
+      rules: null,
+    });
+    await this.refreshPlaylists();
+    this.bumpLibrary();
+    return this.getPlaylist(id);
   },
 
   // Playlist-create/edit modal.
@@ -1136,76 +1241,81 @@ export const store = reactive({
     this.playlistModal.playlistId = null;
   },
 
-  deletePlaylist(id) {
-    const idx = this.playlists.findIndex((p) => p.id === id);
-    if (idx >= 0) {
-      this.playlists.splice(idx, 1);
-      this.persistState();
+  async deletePlaylist(id) {
+    try {
+      await invoke('db_delete_playlist', { id });
+    } catch (e) {
+      console.error('Failed to delete playlist', e);
     }
+    await this.refreshPlaylists();
+    this.bumpLibrary();
   },
 
-  renamePlaylist(id, name) {
-    const pl = this.playlists.find((p) => p.id === id);
+  async renamePlaylist(id, name) {
+    const pl = this.getPlaylist(id);
     if (pl && name && name.trim()) {
       pl.name = name.trim();
-      this.persistState();
+      await this._savePlaylist(pl);
+      this.bumpLibrary();
     }
   },
 
-  updatePlaylist(id, name, description, cover) {
-    const pl = this.playlists.find((p) => p.id === id);
-    if (pl) {
-      pl.name = (name || '').trim() || 'New Playlist';
-      pl.description = (description || '').trim();
-      if (cover !== undefined) {
-        pl.cover = cover;
-      }
-      this.persistState();
-    }
+  async updatePlaylist(id, name, description, cover) {
+    const pl = this.getPlaylist(id);
+    if (!pl) return;
+    pl.name = (name || '').trim() || 'New Playlist';
+    pl.description = (description || '').trim();
+    if (cover !== undefined) pl.cover = cover;
+    await this._savePlaylist(pl);
+    this.bumpLibrary();
   },
 
   getPlaylist(id) {
     return this.playlists.find((p) => p.id === id);
   },
 
-  movePlaylistOrder(from, to) {
+  async movePlaylistOrder(from, to) {
     if (from === to) return;
     if (from < 0 || from >= this.playlists.length) return;
     if (to < 0 || to >= this.playlists.length) return;
     const [item] = this.playlists.splice(from, 1);
     this.playlists.splice(to, 0, item);
-    this.persistState();
+    try {
+      await invoke('db_move_playlist_order', { from, to });
+    } catch (e) {
+      console.error('Failed to reorder playlists', e);
+    }
   },
 
-  addToPlaylist(id, paths) {
-    const pl = this.getPlaylist(id);
-    if (!pl) return;
+  async addToPlaylist(id, paths) {
     const list = Array.isArray(paths) ? paths : [paths];
-    for (const path of list) {
-      if (!pl.paths.includes(path)) pl.paths.push(path);
+    try {
+      await invoke('db_playlist_add', { id, paths: list });
+    } catch (e) {
+      console.error('Failed to add to playlist', e);
     }
-    this.persistState();
+    await this.refreshPlaylists();
+    this.bumpLibrary();
   },
 
-  removeFromPlaylist(id, path) {
-    const pl = this.getPlaylist(id);
-    if (!pl) return;
-    const idx = pl.paths.indexOf(path);
-    if (idx >= 0) {
-      pl.paths.splice(idx, 1);
-      this.persistState();
+  async removeFromPlaylist(id, path) {
+    try {
+      await invoke('db_playlist_remove', { id, path });
+    } catch (e) {
+      console.error('Failed to remove from playlist', e);
     }
+    await this.refreshPlaylists();
+    this.bumpLibrary();
   },
 
-  moveInPlaylist(id, from, to) {
+  async moveInPlaylist(id, from, to) {
     if (from === to) return;
-    const pl = this.getPlaylist(id);
-    if (!pl) return;
-    if (from < 0 || from >= pl.paths.length) return;
-    if (to < 0 || to >= pl.paths.length) return;
-    const [item] = pl.paths.splice(from, 1);
-    pl.paths.splice(to, 0, item);
-    this.persistState();
+    try {
+      await invoke('db_playlist_move_item', { id, from, to });
+    } catch (e) {
+      console.error('Failed to reorder playlist', e);
+    }
+    this.bumpLibrary();
   },
 
   async deleteSong(path) {
@@ -1233,22 +1343,17 @@ export const store = reactive({
     }
 
     this.queue = this.queue.filter((s) => s.path !== path);
-    this.songs = this.songs.filter((s) => s.path !== path);
-
-    const favIdx = this.favorites.indexOf(path);
-    if (favIdx >= 0) {
-      this.favorites.splice(favIdx, 1);
+    try {
+      await invoke('db_remove_paths', { paths: [path] });
+    } catch (e) {
+      console.error('Failed to remove track from DB', e);
     }
+    const favIdx = this.favorites.indexOf(path);
+    if (favIdx >= 0) this.favorites.splice(favIdx, 1);
+    await this.refreshPlaylists();
 
-    this.playlists.forEach((pl) => {
-      pl.paths = pl.paths.filter((p) => p !== path);
-    });
-    delete this.stats[path];
-
-    await this.persist();
-    await this.persistState();
-
-    this.scanCount = this.songs.length;
+    this.scanCount = await invoke('db_count');
+    this.bumpLibrary();
     this.statusMessage = `Deleted file: ${path}`;
   },
 
@@ -1270,34 +1375,33 @@ export const store = reactive({
     }
 
     this.queue = this.queue.filter((s) => s.path !== path);
-    this.songs = this.songs.filter((s) => s.path !== path);
-
-    const favIdx = this.favorites.indexOf(path);
-    if (favIdx >= 0) {
-      this.favorites.splice(favIdx, 1);
+    try {
+      await invoke('db_remove_paths', { paths: [path] });
+    } catch (e) {
+      console.error('Failed to remove track from DB', e);
     }
+    const favIdx = this.favorites.indexOf(path);
+    if (favIdx >= 0) this.favorites.splice(favIdx, 1);
+    await this.refreshPlaylists();
 
-    this.playlists.forEach((pl) => {
-      pl.paths = pl.paths.filter((p) => p !== path);
-    });
-    delete this.stats[path];
-
-    await this.persist();
-    await this.persistState();
-
-    this.scanCount = this.songs.length;
+    this.scanCount = await invoke('db_count');
+    this.bumpLibrary();
     this.statusMessage = `Removed file from list: ${path}`;
   },
 
-  playlistSongs(id) {
-    const pl = this.getPlaylist(id);
-    if (!pl) return [];
-    const byPath = new Map(this.songs.map((s) => [s.path, s]));
-    return pl.paths.map((p) => byPath.get(p)).filter(Boolean);
+  // Fetch a normal playlist's tracks (in order) or a smart playlist's evaluated
+  // matches from the DB. Async — views call it through useQuery.
+  async playlistSongs(id) {
+    try {
+      return await invoke('db_playlist_tracks', { id });
+    } catch (e) {
+      console.error('Failed to load playlist tracks', e);
+      return [];
+    }
   },
 
-  playPlaylist(id) {
-    const list = this.playlistSongs(id);
+  async playPlaylist(id) {
+    const list = await this.playlistSongs(id);
     if (list.length > 0) {
       this.recordRecent('playlist', id);
       this.playSong(list[0], list);
@@ -1306,139 +1410,118 @@ export const store = reactive({
 
   // ---- Play statistics --------------------------------------------------
 
-  // Stats for a path, with safe defaults so callers never see undefined.
-  statFor(path) {
-    return this.stats[path] || { playCount: 0, lastPlayed: 0, skipCount: 0 };
-  },
-
-  // Mark that playback of a track has begun. Updates "last played" (drives the
-  // Recently Played row) but not the play count — that only lands once the
-  // listener has heard enough of the track (see recordPlay).
+  // Record accounting now lives in the SQLite `stats` table. These fire-and-
+  // forget into the DB and bump `statsVersion` so Home insights refresh.
   recordPlayStart(path) {
     if (!path) return;
-    const cur = this.stats[path] || { playCount: 0, lastPlayed: 0, skipCount: 0 };
-    this.stats[path] = { ...cur, lastPlayed: Date.now() };
-    this.persistState();
+    invoke('db_record_play_start', { path }).catch(() => {});
+    this.bumpStats();
   },
 
   // Count a completed/substantial listen toward the play count.
   recordPlay(path) {
     if (!path) return;
-    const cur = this.stats[path] || { playCount: 0, lastPlayed: 0, skipCount: 0 };
-    this.stats[path] = { ...cur, playCount: (cur.playCount || 0) + 1, lastPlayed: Date.now() };
-    this.persistState();
+    invoke('db_record_play', { path }).catch(() => {});
+    this.bumpStats();
   },
 
   // Count a skip (track abandoned early). Lightweight signal, not surfaced
   // prominently but kept for future "less interested" heuristics.
   recordSkip(path) {
     if (!path) return;
-    const cur = this.stats[path] || { playCount: 0, lastPlayed: 0, skipCount: 0 };
-    this.stats[path] = { ...cur, skipCount: (cur.skipCount || 0) + 1 };
-    this.persistState();
+    invoke('db_record_skip', { path }).catch(() => {});
+    this.bumpStats();
   },
 
-  // Total number of plays across the library (for the Home summary).
-  get totalPlayCount() {
-    let n = 0;
-    for (const k in this.stats) n += this.stats[k].playCount || 0;
-    return n;
-  },
-
-  // Approximate total listening time in seconds (playCount × track duration).
-  get totalListenSeconds() {
-    const byPath = new Map(this.songs.map((s) => [s.path, s]));
-    let secs = 0;
-    for (const k in this.stats) {
-      const song = byPath.get(k);
-      if (song) secs += (this.stats[k].playCount || 0) * (song.duration_secs || 0);
+  // Per-track stats for the info modal. Returns the frontend-friendly camelCase
+  // shape. Async — callers await it when a detail view opens.
+  async statFor(path) {
+    try {
+      const r = await invoke('db_stat', { path });
+      return { playCount: r.play_count, lastPlayed: r.last_played, skipCount: r.skip_count };
+    } catch {
+      return { playCount: 0, lastPlayed: 0, skipCount: 0 };
     }
-    return secs;
   },
 
-  // ---- Insight collections (live, derived from the library + stats) ------
-  // Each getter returns songs newest/strongest first. Views slice for display.
-
-  // Adapter passed to the smart-playlist engine and reused by the getters.
-  get insightCtx() {
-    return {
-      now: Date.now(),
-      stat: (p) => this.stats[p] || { playCount: 0, lastPlayed: 0, skipCount: 0 },
-      isFavorite: (p) => this.favorites.includes(p),
-    };
-  },
-
-  get recentlyPlayedSongs() {
-    return this.songs
-      .filter((s) => this.statFor(s.path).lastPlayed > 0)
-      .sort((a, b) => this.statFor(b.path).lastPlayed - this.statFor(a.path).lastPlayed);
-  },
-
-  get mostPlayedSongs() {
-    return this.songs
-      .filter((s) => this.statFor(s.path).playCount > 0)
-      .sort((a, b) => this.statFor(b.path).playCount - this.statFor(a.path).playCount);
-  },
-
-  // "On Repeat": tracks played repeatedly and recently (last 45 days). Scored by
-  // play count, with ties broken by recency.
-  get onRepeatSongs() {
-    const cutoff = Date.now() - 45 * 86400000;
-    return this.songs
-      .filter((s) => {
-        const st = this.statFor(s.path);
-        return st.playCount >= 2 && st.lastPlayed >= cutoff;
-      })
-      .sort((a, b) => {
-        const sa = this.statFor(a.path);
-        const sb = this.statFor(b.path);
-        return sb.playCount - sa.playCount || sb.lastPlayed - sa.lastPlayed;
-      });
-  },
-
-  get recentlyAddedSongs() {
-    return [...this.songs].sort((a, b) => (b.date_added || 0) - (a.date_added || 0));
-  },
-
-  // "Rediscover": liked songs not played in the last 60 days (or never), shuffled.
-  get rediscoverSongs() {
-    const cutoff = Date.now() - 60 * 86400000;
-    const list = this.songs.filter((s) => {
-      if (!this.favorites.includes(s.path)) return false;
-      const lp = this.statFor(s.path).lastPlayed;
-      return lp === 0 || lp < cutoff;
-    });
-    for (let i = list.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [list[i], list[j]] = [list[j], list[i]];
+  // Library-wide totals for the Home summary.
+  async statsSummary() {
+    try {
+      const r = await invoke('db_stats_summary');
+      return { totalPlays: r.total_plays, totalSeconds: r.total_seconds };
+    } catch {
+      return { totalPlays: 0, totalSeconds: 0 };
     }
-    return list;
   },
 
-  // Top artists by play count (falling back to track count), for Stations.
-  get topArtists() {
-    const map = new Map();
-    for (const s of this.songs) {
-      if (!s.artist || s.artist === 'Unknown Artist') continue;
-      const cur = map.get(s.artist) || { name: s.artist, plays: 0, tracks: 0, coverPath: s.path };
-      cur.plays += this.statFor(s.path).playCount || 0;
-      cur.tracks += 1;
-      map.set(s.artist, cur);
+  // ---- Insight collections (fetched from the DB, newest/strongest first) ---
+  // Each is an async loader; views drive them through useQuery so they refetch
+  // when the library or play stats change.
+
+  async recentlyPlayed(limit = 60) {
+    try {
+      return await invoke('db_recently_played', { limit });
+    } catch {
+      return [];
     }
-    return [...map.values()].sort((a, b) => b.plays - a.plays || b.tracks - a.tracks);
+  },
+  async mostPlayed(limit = 60) {
+    try {
+      return await invoke('db_most_played', { limit });
+    } catch {
+      return [];
+    }
+  },
+  async onRepeat(limit = 60) {
+    try {
+      return await invoke('db_on_repeat', { limit });
+    } catch {
+      return [];
+    }
+  },
+  async recentlyAdded(limit = 60) {
+    try {
+      return await invoke('db_recently_added', { limit });
+    } catch {
+      return [];
+    }
+  },
+  async rediscover(limit = 60) {
+    try {
+      return await invoke('db_rediscover', { limit });
+    } catch {
+      return [];
+    }
   },
 
-  // Top genres by play count (falling back to track count), for Stations.
-  get topGenres() {
-    const map = new Map();
-    for (const s of this.songs) {
-      if (!s.genre) continue;
-      const cur = map.get(s.genre) || { name: s.genre, plays: 0, tracks: 0, coverPath: s.path };
-      cur.plays += this.statFor(s.path).playCount || 0;
-      cur.tracks += 1;
-      map.set(s.genre, cur);
+  // Top artists / genres for Stations. Mapped to { name, plays, tracks, coverPath }
+  // so the Home station cards stay unchanged.
+  async topArtists(limit = 14) {
+    try {
+      const rows = await invoke('db_top_artists', { limit });
+      return rows.map((r) => ({
+        name: r.artist,
+        plays: r.plays,
+        tracks: r.track_count,
+        albums: r.album_count,
+        coverPath: r.cover_path,
+      }));
+    } catch {
+      return [];
     }
-    return [...map.values()].sort((a, b) => b.plays - a.plays || b.tracks - a.tracks);
+  },
+  async topGenres(limit = 14) {
+    try {
+      const rows = await invoke('db_top_genres', { limit });
+      return rows.map((r) => ({
+        name: r.genre,
+        plays: r.plays,
+        tracks: r.track_count,
+        coverPath: r.cover_path,
+      }));
+    } catch {
+      return [];
+    }
   },
 
   // ---- Recently-played containers ---------------------------------------
@@ -1447,19 +1530,23 @@ export const store = reactive({
   // played, so the Home "Recently Played" shelf can surface it.
   recordRecent(type, key) {
     if (!type || !key) return;
+    // Optimistic local update (Home shelf reads store.recents) then persist.
     this.recents = this.recents.filter((r) => !(r.type === type && r.key === key));
     this.recents.unshift({ type, key, ts: Date.now() });
     if (this.recents.length > 40) this.recents.length = 40;
-    this.persistState();
+    invoke('db_record_recent', { kind: type, key }).catch(() => {});
   },
 
   // ---- Stations ---------------------------------------------------------
 
   // Play a shuffled "station" built from every track by an artist or genre.
-  playStation(type, key) {
-    let pool;
-    if (type === 'genre') pool = this.songs.filter((s) => s.genre === key);
-    else pool = this.songs.filter((s) => s.artist === key);
+  async playStation(type, key) {
+    let pool = [];
+    try {
+      pool = await invoke('db_station_tracks', { kind: type, key });
+    } catch (e) {
+      console.error('Failed to load station', e);
+    }
     if (pool.length === 0) return;
     const list = [...pool];
     for (let i = list.length - 1; i > 0; i--) {
@@ -1474,59 +1561,103 @@ export const store = reactive({
 
   // ---- Smart playlists --------------------------------------------------
 
-  // Smart playlists are entries in `playlists` that carry a `rules` object;
-  // normal ones don't. These getters split the unified array for views.
+  // Smart playlists are rows flagged `is_smart` in the shared playlists cache;
+  // normal ones aren't. These getters split the unified array for views.
   get smartPlaylists() {
-    return this.playlists.filter((p) => p && p.rules);
+    return this.playlists.filter((p) => p && p.is_smart);
   },
   get normalPlaylists() {
-    return this.playlists.filter((p) => p && !p.rules);
+    return this.playlists.filter((p) => p && !p.is_smart);
   },
   isSmart(pl) {
-    return !!(pl && pl.rules);
+    return !!(pl && pl.is_smart);
   },
 
+  // Return a smart playlist normalised to the camelCase shape the editor uses
+  // (the cache stores snake_case as returned by db_playlists).
   getSmartPlaylist(id) {
-    return this.playlists.find((p) => p.id === id && p.rules);
+    const p = this.playlists.find((x) => x.id === id && x.is_smart);
+    if (!p) return null;
+    return {
+      id: p.id,
+      name: p.name,
+      description: p.description,
+      color: p.color,
+      cover: p.cover,
+      rules: p.rules,
+      sortBy: p.sort_by,
+      sortOrder: p.sort_order,
+      limit: p.limit_n,
+      liveUpdate: p.live_update,
+    };
   },
 
-  // Evaluate a smart playlist's rules against the live library.
-  smartSongs(id) {
-    const sp = this.getSmartPlaylist(id);
-    if (!sp) return [];
-    return evaluateSmartPlaylist(sp, this.songs, this.insightCtx);
+  // Evaluate a smart playlist's rules against the live library (native).
+  async smartSongs(id) {
+    try {
+      return await invoke('db_playlist_tracks', { id });
+    } catch (e) {
+      console.error('Failed to evaluate smart playlist', e);
+      return [];
+    }
   },
 
-  playSmartPlaylist(id) {
-    const list = this.smartSongs(id);
+  async playSmartPlaylist(id) {
+    const list = await this.smartSongs(id);
     if (list.length > 0) {
       this.recordRecent('smart', id);
       this.playSong(list[0], list);
     }
   },
 
-  createSmartPlaylist(data) {
+  async createSmartPlaylist(data) {
     const sp = newSmartPlaylist(data || {});
-    sp.paths = []; // keep a paths array so library-pruning code stays uniform
-    this.playlists.push(sp);
-    this.persistState();
-    return sp;
+    await this._savePlaylist({
+      id: sp.id,
+      name: sp.name,
+      description: sp.description,
+      color: sp.color,
+      cover: sp.cover,
+      is_smart: true,
+      rules: sp.rules,
+      sort_by: sp.sortBy,
+      sort_order: sp.sortOrder,
+      limit_n: sp.limit,
+      live_update: sp.liveUpdate,
+    });
+    await this.refreshPlaylists();
+    this.bumpLibrary();
+    return this.getPlaylist(sp.id);
   },
 
-  updateSmartPlaylist(id, data) {
-    const idx = this.playlists.findIndex((p) => p.id === id && p.rules);
-    if (idx >= 0) {
-      this.playlists[idx] = { ...this.playlists[idx], ...data, id };
-      this.persistState();
-    }
+  async updateSmartPlaylist(id, data) {
+    const pl = this.playlists.find((p) => p.id === id && p.is_smart);
+    if (!pl) return;
+    await this._savePlaylist({
+      id,
+      name: data.name ?? pl.name,
+      description: data.description ?? pl.description,
+      color: data.color ?? pl.color,
+      cover: data.cover !== undefined ? data.cover : pl.cover,
+      is_smart: true,
+      rules: data.rules ?? pl.rules,
+      sort_by: data.sortBy ?? pl.sort_by,
+      sort_order: data.sortOrder ?? pl.sort_order,
+      limit_n: data.limit ?? pl.limit_n,
+      live_update: data.liveUpdate ?? pl.live_update,
+    });
+    await this.refreshPlaylists();
+    this.bumpLibrary();
   },
 
-  deleteSmartPlaylist(id) {
-    const idx = this.playlists.findIndex((p) => p.id === id && p.rules);
-    if (idx >= 0) {
-      this.playlists.splice(idx, 1);
-      this.persistState();
+  async deleteSmartPlaylist(id) {
+    try {
+      await invoke('db_delete_playlist', { id });
+    } catch (e) {
+      console.error('Failed to delete smart playlist', e);
     }
+    await this.refreshPlaylists();
+    this.bumpLibrary();
   },
 
   openSmartModal(mode = 'create', smartId = null) {
@@ -1557,7 +1688,7 @@ export const store = reactive({
     this.persistState();
   },
 
-  nextSong(userTriggered = false) {
+  async nextSong(userTriggered = false) {
     if (!this.currentSong || this.queue.length === 0) return;
 
     if (this.loopMode === 2 && !userTriggered) {
@@ -1591,7 +1722,7 @@ export const store = reactive({
         nextIndex = 0;
       } else if (this.autoplayMode) {
         // Unlimited queue: append a random track and continue into it.
-        const song = this.pickRandomSong();
+        const song = await this.pickRandomSong();
         if (!song) {
           this.isPlaying = false;
           return;
@@ -1724,29 +1855,32 @@ export const store = reactive({
 
   // Pick a random track from the library for unlimited-queue autoplay. Avoids
   // immediately repeating the current song when the library has alternatives.
-  pickRandomSong() {
-    if (this.songs.length === 0) return null;
-    if (this.songs.length === 1) return this.songs[0];
-    const currentPath = this.currentSong ? this.currentSong.path : null;
-    let pick;
-    let tries = 0;
-    do {
-      pick = this.songs[Math.floor(Math.random() * this.songs.length)];
-    } while (currentPath && pick.path === currentPath && ++tries < 10);
-    return pick;
+  // A random track from the whole library (for unlimited-queue autoplay), chosen
+  // natively so we never need the full list in the webview.
+  async pickRandomSong() {
+    try {
+      return await invoke('db_random_track', {
+        exclude: this.currentSong ? this.currentSong.path : null,
+      });
+    } catch {
+      return null;
+    }
   },
 
   // Path of the track that will play next under the current queue/loop settings,
   // or null when it's unpredictable (shuffle / autoplay-random). Used to
-  // pre-decode the next track for gapless playback.
+  // pre-decode the next track for gapless playback. For the autoplay-random case
+  // the pick needs a DB round-trip, so it kicks off an async prefetch that sets
+  // `preselectedNextSong` and returns null this tick; the caller's watcher re-runs
+  // when that reactive field lands and then sees the resolved path.
   nextUpPath() {
     if (!this.currentSong || this.queue.length === 0) return null;
     if (this.loopMode === 2) return this.currentSong.path; // repeat-one
-    
+
     if (this.preselectedNextSong) {
       return this.preselectedNextSong.path;
     }
-    
+
     if (this.shuffleMode) {
       const currentIndex = this.queue.findIndex((s) => s.path === this.currentSong.path);
       let nextIndex;
@@ -1761,7 +1895,7 @@ export const store = reactive({
       this.preselectedNextSong = this.queue[nextIndex];
       return this.preselectedNextSong.path;
     }
-    
+
     const i = this.queue.findIndex((s) => s.path === this.currentSong.path);
     if (i < 0) return null;
     let n = i + 1;
@@ -1769,10 +1903,16 @@ export const store = reactive({
       if (this.loopMode === 1) {
         n = 0;
       } else if (this.autoplayMode) {
-        const song = this.pickRandomSong();
-        if (song) {
-          this.preselectedNextSong = { ...song };
-          return this.preselectedNextSong.path;
+        // Prefetch a random track; the watcher re-runs once it's set.
+        if (!this._prefetchingRandom) {
+          this._prefetchingRandom = true;
+          this.pickRandomSong()
+            .then((song) => {
+              if (song) this.preselectedNextSong = { ...song };
+            })
+            .finally(() => {
+              this._prefetchingRandom = false;
+            });
         }
         return null;
       } else {
@@ -1780,17 +1920,6 @@ export const store = reactive({
       }
     }
     return this.queue[n] ? this.queue[n].path : null;
-  },
-
-  get filteredSongs() {
-    if (!this.searchQuery) return this.songs;
-    const lower = this.searchQuery.toLowerCase();
-    return this.songs.filter(
-      (song) =>
-        (song.title && song.title.toLowerCase().includes(lower)) ||
-        (song.artist && song.artist.toLowerCase().includes(lower)) ||
-        (song.album && song.album.toLowerCase().includes(lower))
-    );
   },
 });
 

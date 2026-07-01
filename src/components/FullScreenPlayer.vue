@@ -5,7 +5,7 @@ import { loadCover, getCachedCover, hasCachedCover } from '../coverCache';
 import { loadLyrics, activeLineIndex } from '../lyricsCache';
 import { useRouter } from 'vue-router';
 import LyricContent from './LyricContent.vue';
-import { extractColorsFromImage, defaultPalette } from '../colorExtract';
+import { extractColorsForPath, defaultPalette } from '../colorExtract';
 
 const router = useRouter();
 const coverUrl = ref(null);
@@ -311,8 +311,9 @@ const remaining = computed(() =>
 const colors = ref(defaultPalette());
 
 watch(coverUrl, async (newUrl) => {
-  if (newUrl) {
-    colors.value = await extractColorsFromImage(newUrl);
+  const path = store.currentSong?.path;
+  if (path || newUrl) {
+    colors.value = await extractColorsForPath(path, newUrl);
   } else {
     colors.value = defaultPalette();
   }

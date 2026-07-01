@@ -1,5 +1,5 @@
 use rayon::prelude::*;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::fs;
@@ -25,6 +25,7 @@ use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink, Source};
 use tauri::{AppHandle, Emitter, Manager, State};
 use walkdir::WalkDir;
 
+mod db;
 mod discord;
 mod lyrics;
 #[cfg(target_os = "windows")]
@@ -38,25 +39,27 @@ const SUPPORTED_EXTS: [&str; 6] = ["mp3", "flac", "wav", "m4a", "ogg", "aac"];
 // all the UI ever displays, so this slashes memory use and IPC payload size.
 const THUMB_SIZE: u32 = 300;
 
-// Data sent to the frontend.
-#[derive(Serialize, Clone, Debug)]
-struct MusicTrack {
-    path: String,
-    title: String,
-    artist: String,
-    album: String,
-    genre: Option<String>,
-    duration_secs: u64,
-    date_added: u64,
-    year: Option<u32>,
-    track_number: Option<u32>,
-    has_cover: bool,
-    sample_rate: Option<u32>,
-    bit_depth: Option<u8>,
+// Data sent to the frontend. Also `Deserialize` so a previously-scanned library
+// (e.g. from the IndexedDB→SQLite migration) can round-trip back through the DB
+// layer (see `db`).
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct MusicTrack {
+    pub path: String,
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+    pub genre: Option<String>,
+    pub duration_secs: u64,
+    pub date_added: u64,
+    pub year: Option<u32>,
+    pub track_number: Option<u32>,
+    pub has_cover: bool,
+    pub sample_rate: Option<u32>,
+    pub bit_depth: Option<u8>,
     // ReplayGain track gain/peak read from tags (if present), used by the volume
     // normalization feature. `None` when the file carries no ReplayGain tags.
-    track_gain_db: Option<f32>,
-    track_peak: Option<f32>,
+    pub track_gain_db: Option<f32>,
+    pub track_peak: Option<f32>,
 }
 
 // Parse a ReplayGain gain string like "-6.54 dB" / "+3.2" into decibels.
@@ -324,6 +327,90 @@ fn make_thumbnail(data: &[u8]) -> Option<Vec<u8>> {
     Some(buf)
 }
 
+// Extract up to three vibrant, visually-distinct colors from a decoded image for
+// the Apple-Music-style animated gradient backdrop. This is a direct port of the
+// frontend canvas heuristic (colorExtract.js) so the palette is identical whether
+// it is computed here or (as a fallback) in the webview: downscale to a tiny
+// grid, drop near-black/near-white/grey pixels, rank the rest by saturation and
+// pick three that are far enough apart in RGB space.
+fn extract_palette_from_image(img: &image::DynamicImage) -> Vec<String> {
+    struct Px {
+        r: i32,
+        g: i32,
+        b: i32,
+        sat: i32,
+    }
+
+    let small = img.thumbnail(12, 12).to_rgba8();
+
+    let mut pxs: Vec<Px> = Vec::new();
+    for p in small.pixels() {
+        let [r, g, b, a] = p.0;
+        if a < 150 {
+            continue;
+        }
+        let (r, g, b) = (r as i32, g as i32, b as i32);
+        let sat = r.max(g).max(b) - r.min(g).min(b);
+        let bright = (r + g + b) / 3;
+        // Ignore extreme blacks/whites/greys for vibrancy.
+        if bright > 240 && sat < 20 {
+            continue;
+        }
+        if bright < 15 && sat < 10 {
+            continue;
+        }
+        pxs.push(Px { r, g, b, sat });
+    }
+
+    // Fallback: an all-grey/mono cover leaves nothing after filtering, so keep
+    // every pixel rather than returning the default palette.
+    if pxs.is_empty() {
+        for p in small.pixels() {
+            let [r, g, b, _a] = p.0;
+            let (r, g, b) = (r as i32, g as i32, b as i32);
+            let sat = r.max(g).max(b) - r.min(g).min(b);
+            pxs.push(Px { r, g, b, sat });
+        }
+    }
+
+    pxs.sort_by(|a, b| b.sat.cmp(&a.sat));
+
+    let mut chosen: Vec<usize> = Vec::new();
+    for (i, p) in pxs.iter().enumerate() {
+        let similar = chosen.iter().any(|&ci| {
+            let c = &pxs[ci];
+            let (dr, dg, db) = (c.r - p.r, c.g - p.g, c.b - p.b);
+            ((dr * dr + dg * dg + db * db) as f64).sqrt() < 65.0
+        });
+        if !similar {
+            chosen.push(i);
+            if chosen.len() >= 3 {
+                break;
+            }
+        }
+    }
+    // Not enough distinct colors: top up with the next-most-saturated pixels.
+    if chosen.len() < 3 {
+        for i in 0..pxs.len() {
+            if !chosen.contains(&i) {
+                chosen.push(i);
+                if chosen.len() >= 3 {
+                    break;
+                }
+            }
+        }
+    }
+
+    let mut out: Vec<String> = chosen
+        .iter()
+        .map(|&i| format!("rgb({}, {}, {})", pxs[i].r, pxs[i].g, pxs[i].b))
+        .collect();
+    while out.len() < 3 {
+        out.push("rgb(60, 60, 60)".to_string());
+    }
+    out
+}
+
 // Return album cover art as a base64 data URL (downscaled thumbnail), using a
 // disk cache so repeated requests across sessions are cheap.
 #[tauri::command]
@@ -411,6 +498,61 @@ async fn get_track_cover_path(app: AppHandle, path: String) -> Result<Option<Str
     })
     .await
     .map_err(|e| format!("Cover task failed: {e}"))?;
+
+    Ok(result)
+}
+
+// Return the 3-color gradient palette for a track's cover art, computed natively
+// (see extract_palette_from_image) instead of decoding the cover a second time in
+// the webview canvas. The result is cached on disk next to the thumbnail as a
+// `{key}.pal` sidecar; the key embeds mtime+size, so it self-invalidates exactly
+// like the thumbnail. Returns None only when the file has no decodable cover.
+#[tauri::command]
+async fn get_track_palette(app: AppHandle, path: String) -> Result<Option<Vec<String>>, String> {
+    let path_buf = PathBuf::from(&path);
+    if !is_allowed_audio(&app, &path_buf) {
+        return Err("Path is not within an allowed music folder".to_string());
+    }
+
+    let cache = cover_cache_dir(&app);
+
+    let result = tauri::async_runtime::spawn_blocking(move || -> Option<Vec<String>> {
+        let key = cover_cache_key(&path_buf);
+
+        // Fast path: a previously computed palette cached on disk.
+        if let (Some(dir), Some(k)) = (&cache, &key) {
+            if let Ok(text) = fs::read_to_string(dir.join(format!("{k}.pal"))) {
+                if let Ok(colors) = serde_json::from_str::<Vec<String>>(&text) {
+                    if colors.len() == 3 {
+                        return Some(colors);
+                    }
+                }
+            }
+        }
+
+        // Decode from the cached thumbnail when present (cheap: 300px JPEG),
+        // otherwise extract + downscale the embedded cover once.
+        let img = match (&cache, &key) {
+            (Some(dir), Some(k)) if dir.join(format!("{k}.jpg")).exists() => {
+                let bytes = fs::read(dir.join(format!("{k}.jpg"))).ok()?;
+                image::load_from_memory(&bytes).ok()?
+            }
+            _ => {
+                let (raw, _mime) = extract_cover(&path_buf)?;
+                image::load_from_memory(&raw).ok()?
+            }
+        };
+
+        let palette = extract_palette_from_image(&img);
+        if let (Some(dir), Some(k)) = (&cache, &key) {
+            if let Ok(text) = serde_json::to_string(&palette) {
+                let _ = fs::write(dir.join(format!("{k}.pal")), text);
+            }
+        }
+        Some(palette)
+    })
+    .await
+    .map_err(|e| format!("Palette task failed: {e}"))?;
 
     Ok(result)
 }
@@ -2606,6 +2748,12 @@ pub fn run() {
 
     builder
         .setup(move |_app| {
+            // Open the SQLite library database (source of truth for tracks, stats,
+            // playlists, favorites, recents). Managed here so every db_* command
+            // can reach it via State<Db>.
+            let database = db::init(_app.handle())?;
+            _app.manage(database);
+
             // Allow the cover-thumbnail cache dir through the asset protocol so
             // the webview can load cached covers by path (convertFileSrc) instead
             // of receiving them base64-encoded over IPC.
@@ -2635,6 +2783,7 @@ pub fn run() {
             filter_existing,
             get_track_cover,
             get_track_cover_path,
+            get_track_palette,
             restore_roots,
             player_load,
             player_prepare_next,
@@ -2663,7 +2812,56 @@ pub fn run() {
             discord::discord_set_enabled,
             discord::discord_update,
             discord::discord_clear,
-            discord::discord_cover_art
+            discord::discord_cover_art,
+            db::db_import,
+            db::db_upsert_tracks,
+            db::db_remove_paths,
+            db::db_remove_under_root,
+            db::db_prune_missing,
+            db::db_count,
+            db::db_reset,
+            db::db_roots,
+            db::db_set_roots,
+            db::db_tracks_page,
+            db::db_search,
+            db::db_tracks_by_paths,
+            db::db_track,
+            db::db_random_track,
+            db::db_albums,
+            db::db_album_tracks,
+            db::db_artists,
+            db::db_artist_tracks,
+            db::db_station_tracks,
+            db::db_has_genre,
+            db::db_smart_tracks,
+            db::db_record_play_start,
+            db::db_record_play,
+            db::db_record_skip,
+            db::db_stat,
+            db::db_stats_summary,
+            db::db_recently_played,
+            db::db_most_played,
+            db::db_on_repeat,
+            db::db_recently_added,
+            db::db_rediscover,
+            db::db_top_artists,
+            db::db_top_genres,
+            db::db_favorite_paths,
+            db::db_favorites,
+            db::db_toggle_favorite,
+            db::db_move_favorite,
+            db::db_playlists,
+            db::db_playlist_tracks,
+            db::db_upsert_playlist,
+            db::db_delete_playlist,
+            db::db_move_playlist_order,
+            db::db_playlist_add,
+            db::db_playlist_remove,
+            db::db_playlist_move_item,
+            db::db_recents,
+            db::db_record_recent,
+            db::db_kv_get,
+            db::db_kv_set
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

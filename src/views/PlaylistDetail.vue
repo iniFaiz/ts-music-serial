@@ -1,17 +1,24 @@
 <script setup>
 import { computed, ref, watch, onMounted, onUnmounted } from 'vue';
+import { invoke } from '@tauri-apps/api/core';
 import { useRoute, useRouter } from 'vue-router';
 import { store } from '../store';
 import SongList from '../components/SongList.vue';
 import PlaylistCover from '../components/PlaylistCover.vue';
 import CoverImage from '../components/CoverImage.vue';
+import { useQuery } from '../useLibraryData';
 
 const route = useRoute();
 const router = useRouter();
 
 const playlistId = computed(() => route.params.id);
 const playlist = computed(() => store.getPlaylist(playlistId.value));
-const songs = computed(() => store.playlistSongs(playlistId.value));
+// Playlist tracks (in order) fetched from the DB; re-runs on library changes or
+// when the route id changes.
+const { data: songs } = useQuery(
+  () => invoke('db_playlist_tracks', { id: playlistId.value }),
+  { deps: [() => playlistId.value], initial: [] }
+);
 
 const suggestedSongs = ref([]);
 
@@ -65,25 +72,29 @@ const playLastPlaylist = () => {
   }
 };
 
-const getSuggestions = () => {
-  if (!store.songs || store.songs.length === 0) {
-    suggestedSongs.value = [];
-    return;
+// Suggest a few random library tracks not already in this playlist, sampled from
+// the DB (no full library array in the webview).
+const getSuggestions = async () => {
+  const currentPaths = new Set((songs.value || []).map((s) => s.path));
+  const seen = new Set(currentPaths);
+  const picks = [];
+  for (let i = 0; i < 24 && picks.length < 5; i++) {
+    let t = null;
+    try {
+      t = await invoke('db_random_track', { exclude: null });
+    } catch {
+      t = null;
+    }
+    if (t && !seen.has(t.path)) {
+      seen.add(t.path);
+      picks.push(t);
+    }
   }
-  const currentPaths = new Set(playlist.value?.paths || []);
-  const availableSongs = store.songs.filter((s) => !currentPaths.has(s.path));
-
-  if (availableSongs.length === 0) {
-    suggestedSongs.value = [];
-    return;
-  }
-
-  const shuffled = [...availableSongs].sort(() => 0.5 - Math.random());
-  suggestedSongs.value = shuffled.slice(0, 5);
+  suggestedSongs.value = picks;
 };
 
 watch(
-  [() => store.songs, () => playlistId.value],
+  [songs, () => playlistId.value],
   () => {
     getSuggestions();
   },

@@ -1,11 +1,37 @@
 // Pull a small, vibrant 3-color palette out of an image (album art) for the
 // Apple-Music-style animated gradient backdrop. Shared by the fullscreen player
 // and the mini player so both derive identical colors and transition the same way.
+//
+// The palette is computed natively in Rust (`get_track_palette`) from the cached
+// cover thumbnail — no second decode in a webview canvas, and the result is
+// cached on disk keyed by mtime+size. `extractColorsFromImage` remains as a
+// canvas fallback for the rare case the native call fails (or when only a URL,
+// not a track path, is available).
+
+import { invoke } from '@tauri-apps/api/core';
 
 const DEFAULT_PALETTE = ['#ff2d55', '#5856d6', '#007aff'];
 
 export function defaultPalette() {
   return [...DEFAULT_PALETTE];
+}
+
+// Preferred path: derive the palette natively from a track's file path. Falls
+// back to the canvas extractor (using `fallbackUrl`, if given) when the native
+// command errors, and to the default palette when the track has no cover art.
+export async function extractColorsForPath(path, fallbackUrl = null) {
+  if (!path) {
+    return fallbackUrl ? extractColorsFromImage(fallbackUrl) : defaultPalette();
+  }
+  try {
+    const colors = await invoke('get_track_palette', { path });
+    if (Array.isArray(colors) && colors.length === 3) return colors;
+    // null = no cover art on this track.
+    return defaultPalette();
+  } catch (e) {
+    console.error('Native palette failed, falling back to canvas', e);
+    return fallbackUrl ? extractColorsFromImage(fallbackUrl) : defaultPalette();
+  }
 }
 
 export function extractColorsFromImage(url) {

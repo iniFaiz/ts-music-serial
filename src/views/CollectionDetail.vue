@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { store } from '../store';
 import { getCollection } from '../collections';
 import { getMorphCollectionKey } from '../viewTransition';
+import { useQuery } from '../useLibraryData';
 import SongList from '../components/SongList.vue';
 import SmartCover from '../components/SmartCover.vue';
 
@@ -18,7 +19,11 @@ const router = useRouter();
 const morphable = ref(getMorphCollectionKey() === route.params.key);
 
 const collection = computed(() => getCollection(route.params.key));
-const songs = computed(() => (collection.value ? collection.value.songs(store) : []));
+// Fetch the collection's live tracks from the DB; refetch on library/stats change.
+const { data: songs } = useQuery(
+  () => (collection.value ? collection.value.fetch(store) : Promise.resolve([])),
+  { deps: [() => route.params.key], watchStats: true, initial: [] }
+);
 
 const playAll = () => {
   if (songs.value.length > 0) {
@@ -36,10 +41,10 @@ const shuffleAll = () => {
 };
 
 // Turn this live insight into a real, editable Smart Playlist.
-const saveAsSmart = () => {
+const saveAsSmart = async () => {
   const c = collection.value;
   if (!c) return;
-  const sp = store.createSmartPlaylist({
+  const sp = await store.createSmartPlaylist({
     name: c.title,
     description: c.subtitle,
     color: c.color,
@@ -48,7 +53,7 @@ const saveAsSmart = () => {
     sortOrder: c.sortOrder,
     limit: 0,
   });
-  router.push('/smart/' + sp.id);
+  if (sp) router.push('/smart/' + sp.id);
 };
 </script>
 

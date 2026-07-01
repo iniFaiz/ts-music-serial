@@ -178,7 +178,7 @@ watch(
       if (store.transitionMode !== 'off' && !store.wasapiExclusive) {
         const np = store.nextUpPath();
         if (np && np !== song.path) {
-          const nextSong = store.queue.find(s => s.path === np) || store.songs.find(s => s.path === np);
+          const nextSong = store.queue.find(s => s.path === np);
           const hint = nextSong ? (nextSong.duration_secs || 0) : 0;
           invoke('player_prepare_next', { path: np, durationHint: hint }).catch(() => {});
         }
@@ -199,7 +199,7 @@ watch(
   () => (store.transitionMode !== 'off' && !store.wasapiExclusive) ? store.nextUpPath() : null,
   (np) => {
     if (np && store.currentSong && np !== store.currentSong.path) {
-      const nextSong = store.queue.find(s => s.path === np) || store.songs.find(s => s.path === np);
+      const nextSong = store.queue.find(s => s.path === np);
       const hint = nextSong ? (nextSong.duration_secs || 0) : 0;
       invoke('player_prepare_next', { path: np, durationHint: hint }).catch(() => {});
     }
@@ -503,12 +503,19 @@ onMounted(async () => {
 
   // Listen for backend automatic track-changed transitions (gapless/crossfade)
   try {
-    unlistenTrackChanged = await listen('track-changed', (e) => {
+    unlistenTrackChanged = await listen('track-changed', async (e) => {
       if (e.payload && e.payload.path) {
+        const path = e.payload.path;
+        const preselected =
+          store.preselectedNextSong && store.preselectedNextSong.path === path
+            ? store.preselectedNextSong
+            : null;
         store.preselectedNextSong = null;
-        let nextSong = store.queue.find(s => s.path === e.payload.path);
+        let nextSong = store.queue.find((s) => s.path === path) || preselected;
         if (!nextSong) {
-          nextSong = store.songs.find(s => s.path === e.payload.path);
+          // Auto-advanced into a track that isn't in the queue (autoplay random):
+          // hydrate it from the DB and append it.
+          nextSong = await store.getTrackByPath(path);
           if (nextSong && store.autoplayMode) {
             store.queue.push({ ...nextSong });
           }

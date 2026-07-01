@@ -1,29 +1,28 @@
 <script setup>
-import { computed } from 'vue';
 import { store } from '../store';
+import { invoke } from '@tauri-apps/api/core';
 import { useRouter } from 'vue-router';
 import CoverImage from '../components/CoverImage.vue';
 import { navigateWithTransition } from '../viewTransition';
+import { useQuery } from '../useLibraryData';
 
 defineOptions({ name: 'AlbumsView' });
 
 const router = useRouter();
 
-const albums = computed(() => {
-  const map = new Map();
-  store.songs.forEach((song) => {
-    if (!map.has(song.album)) {
-      map.set(song.album, {
-        name: song.album,
-        artist: song.artist,
-        count: 0,
-        coverPath: song.path,
-      });
-    }
-    map.get(song.album).count++;
-  });
-  return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
-});
+// Albums grouped in SQLite (GROUP BY), mapped to the card shape the template uses.
+const { data: albums } = useQuery(
+  async () => {
+    const rows = await invoke('db_albums', { search: null });
+    return rows.map((r) => ({
+      name: r.album,
+      artist: r.artist,
+      count: r.track_count,
+      coverPath: r.cover_path,
+    }));
+  },
+  { initial: [] }
+);
 
 function openAlbum(albumName, event) {
   store.selectedAlbum = albumName;
@@ -36,10 +35,9 @@ function openAlbum(albumName, event) {
   );
 }
 
-function playAlbum(albumName) {
+async function playAlbum(albumName) {
   store.selectedAlbum = albumName;
-  const songs = store.songs.filter((s) => s.album === albumName);
-  songs.sort((a, b) => (a.track_number || 0) - (b.track_number || 0));
+  const songs = await invoke('db_album_tracks', { album: albumName });
   if (songs.length > 0) {
     store.recordRecent('album', albumName);
     store.playSong(songs[0], songs);

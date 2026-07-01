@@ -1,38 +1,27 @@
 <script setup>
-import { computed } from 'vue';
-import { store } from '../store';
+import { invoke } from '@tauri-apps/api/core';
 import { useRouter } from 'vue-router';
 import CoverImage from '../components/CoverImage.vue';
 import { navigateWithTransition } from '../viewTransition';
+import { useQuery } from '../useLibraryData';
 
 defineOptions({ name: 'ArtistsView' });
 
 const router = useRouter();
 
-const artists = computed(() => {
-  const map = new Map();
-  store.songs.forEach((song) => {
-    if (!map.has(song.artist)) {
-      map.set(song.artist, {
-        name: song.artist,
-        count: 0,
-        albums: new Set(),
-        coverPath: song.path,
-        hasCover: song.has_cover,
-      });
-    } else {
-      const entry = map.get(song.artist);
-      if (!entry.hasCover && song.has_cover) {
-        entry.coverPath = song.path;
-        entry.hasCover = true;
-      }
-    }
-    const entry = map.get(song.artist);
-    entry.count++;
-    entry.albums.add(song.album);
-  });
-  return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
-});
+// Artists grouped in SQLite (GROUP BY), mapped to the card shape the template uses.
+const { data: artists } = useQuery(
+  async () => {
+    const rows = await invoke('db_artists', { search: null });
+    return rows.map((r) => ({
+      name: r.artist,
+      count: r.track_count,
+      albums: r.album_count,
+      coverPath: r.cover_path,
+    }));
+  },
+  { initial: [] }
+);
 
 function openArtist(artistName, event) {
   const coverEl = event.currentTarget.querySelector('.cover-image');
