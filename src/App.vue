@@ -13,7 +13,7 @@ import TitleBar from './components/TitleBar.vue';
 import FullScreenPlayer from './components/FullScreenPlayer.vue';
 import MiniPlayer from './components/MiniPlayer.vue';
 import LyricsPanel from './components/LyricsPanel.vue';
-import { navigateWithTransition, goBackWithTransition, goForwardWithTransition } from './viewTransition';
+import { navigateWithTransition, smartBack, goForwardWithTransition } from './viewTransition';
 
 const router = useRouter();
 
@@ -261,7 +261,7 @@ const handleMouseUp = (e) => {
     e.preventDefault();
     const canGoBack = !!(window.history.state && window.history.state.back);
     if (canGoBack) {
-      goBackWithTransition(router);
+      smartBack(router);
     }
   } else if (e.button === 4) {
     e.preventDefault();

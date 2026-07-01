@@ -2158,6 +2158,9 @@ async fn get_lyrics(
                         if loaded_lyrics.source.to_lowercase() == "netease" {
                             loaded_lyrics.lines.retain(|line| !lyrics::is_netease_metadata(line));
                         }
+                        // Idempotent: peels parenthetical background vocals into a
+                        // secondary tier (covers caches written before this existed).
+                        lyrics::apply_background(&mut loaded_lyrics.lines);
                         return Some(loaded_lyrics);
                     }
                 }
@@ -2204,6 +2207,12 @@ async fn get_lyrics(
             )
             .await;
         }
+    }
+
+    // Peel parenthetical background vocals into the secondary tier before caching,
+    // so the stored JSON already carries the split (and re-reads stay no-ops).
+    if let Some(l) = result.as_mut() {
+        lyrics::apply_background(&mut l.lines);
     }
 
     if let Some(cf) = &cache_file {

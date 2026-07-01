@@ -221,6 +221,21 @@
           class="w-full bg-[#2a2a2a] text-sm text-white rounded-md px-3 py-2 focus:outline-none focus:ring-1 focus:ring-[var(--accent-color)] placeholder-gray-600"
         />
       </div>
+
+      <div v-if="store.lyricsSource !== 'none'" class="border-t border-white/5 mt-3 pt-3">
+        <SliderInt
+          label="Lyric timing offset"
+          :modelValue="store.lyricsOffsetMs"
+          :min="-3000"
+          :max="3000"
+          :step="50"
+          suffix=" ms"
+          @update:modelValue="(v) => store.setLyricsOffset(v)"
+        />
+        <p class="text-xs text-gray-500 mt-1">
+          Nudge every lyric earlier (positive) or later (negative) if the timing is consistently off. 0 = no change.
+        </p>
+      </div>
     </Section>
 
     <!-- Discord Rich Presence -->

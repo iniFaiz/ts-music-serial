@@ -2,7 +2,7 @@
 import { ref, watch, onMounted, onUnmounted } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { goBackWithTransition } from '../viewTransition';
+import { smartBack } from '../viewTransition';
 import TsLogo from './TsLogo.vue';
 
 const router = useRouter();
@@ -43,7 +43,7 @@ onUnmounted(() => {
 });
 
 const goBack = () => {
-  if (canGoBack.value) goBackWithTransition(router);
+  if (canGoBack.value) smartBack(router);
 };
 
 const minimize = () => appWindow.minimize().catch(() => {});

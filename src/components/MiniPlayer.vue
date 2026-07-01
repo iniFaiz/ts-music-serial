@@ -233,7 +233,7 @@ const lines = computed(() => {
   return result;
 });
 
-const currentMs = computed(() => (store.currentTime || 0) * 1000 + 50);
+const currentMs = computed(() => (store.currentTime || 0) * 1000 + 50 + store.lyricsOffsetMs);
 const songDurationMs = computed(() => (store.duration || 0) * 1000);
 const activeIdx = computed(() =>
   synced.value ? activeLineIndex(lines.value, currentMs.value, songDurationMs.value) : -1

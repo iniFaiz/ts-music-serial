@@ -120,17 +120,28 @@ export function activeLineIndex(lines, timeMs, songDurationMs = 0) {
       }
     }
 
-    if (count > 0) {
-      const avgDuration = totalDur / count;
-      const estimatedEnd = lastLine.time_ms + avgDuration;
-      // Also respect song duration if available — use whichever is smaller
-      const cap = songDurationMs > 0
-        ? Math.min(estimatedEnd, songDurationMs)
-        : estimatedEnd;
-      if (timeMs > cap) return -1;
-    } else if (songDurationMs > 0 && timeMs > songDurationMs) {
-      return -1;
+    // Decide when the final line stops being "active". The old average-duration
+    // estimate cut it off early — the line went dim while the vocal was still
+    // being sung. Prefer real timing:
+    //   • word-synced: the last (main or background) word's end + a short tail so
+    //     the fully-lit line lingers briefly, like Apple Music.
+    //   • otherwise: hold until the track ends rather than guessing short.
+    const lastWordEnd = (arr) =>
+      arr && arr.length ? arr[arr.length - 1].time_ms + arr[arr.length - 1].duration_ms : 0;
+    const wordEnd = Math.max(lastWordEnd(lastLine.words), lastWordEnd(lastLine.bg));
+
+    let lineEnd;
+    if (wordEnd > 0) {
+      lineEnd = wordEnd + 1500;
+    } else if (songDurationMs > 0) {
+      lineEnd = songDurationMs;
+    } else if (count > 0) {
+      lineEnd = lastLine.time_ms + totalDur / count;
+    } else {
+      lineEnd = Infinity;
     }
+    if (songDurationMs > 0) lineEnd = Math.min(lineEnd, songDurationMs + 500);
+    if (timeMs > lineEnd) return -1;
   }
 
   return ans;

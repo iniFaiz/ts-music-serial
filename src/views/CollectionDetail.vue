@@ -1,13 +1,21 @@
 <script setup>
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { store } from '../store';
 import { getCollection } from '../collections';
+import { getMorphCollectionKey } from '../viewTransition';
 import SongList from '../components/SongList.vue';
 import SmartCover from '../components/SmartCover.vue';
 
 const route = useRoute();
 const router = useRouter();
+
+// Only carry the shared-element cover name when this page was opened from a cover
+// card (Top Picks / recent card). Header "see all" links clear the morph key, so
+// those opens/closes just cross-fade instead of morphing into an unrelated card.
+// The page is recreated per navigation (not kept alive), so reading this once at
+// setup is correct.
+const morphable = ref(getMorphCollectionKey() === route.params.key);
 
 const collection = computed(() => getCollection(route.params.key));
 const songs = computed(() => (collection.value ? collection.value.songs(store) : []));
@@ -54,7 +62,7 @@ const saveAsSmart = () => {
         :icon="collection.icon"
         :show-title="false"
         className="h-52 w-52 rounded-md shadow-2xl shrink-0"
-        style="view-transition-name: shared-cover"
+        :style="morphable ? 'view-transition-name: shared-cover' : undefined"
       />
 
       <div class="flex flex-col gap-1 pb-2 overflow-hidden flex-1">

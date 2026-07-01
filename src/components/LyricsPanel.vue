@@ -36,7 +36,7 @@ watch(() => store.lyricsSource, () => {
 });
 
 // +50ms lookahead: compensates for the ~50ms average lag from the 100ms poll interval
-const currentTimeMs = computed(() => Math.floor(store.currentTime * 1000) + 50);
+const currentTimeMs = computed(() => Math.floor(store.currentTime * 1000) + 50 + store.lyricsOffsetMs);
 
 const panelLines = computed(() => {
   const rawLines = (lyrics.value && lyrics.value.lines) || [];

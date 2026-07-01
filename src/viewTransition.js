@@ -1,5 +1,36 @@
 import { nextTick } from 'vue';
 
+// Which collection (if any) should morph its cover on open. Top Picks cards and
+// "Recently Played" recent-cards share the same collection keys as the section
+// headers, so we can't decide morph-vs-fade from the key alone — we record the
+// intent at click time. Card clicks set the key; section "see all" headers set
+// null so those pages just cross-fade (there's no single card to morph from/to).
+let morphCollectionKey = null;
+export function setMorphCollectionKey(key) {
+  morphCollectionKey = key;
+}
+export function getMorphCollectionKey() {
+  return morphCollectionKey;
+}
+
+// A plain cross-fade route change (no shared-element morph). Used by section
+// headers and when leaving a header-opened collection page.
+export async function navigateFade(navigate) {
+  if (typeof document === 'undefined' || !document.startViewTransition) {
+    await navigate();
+    return;
+  }
+  try {
+    const transition = document.startViewTransition(async () => {
+      await navigate();
+      await nextTick();
+    });
+    await transition.finished;
+  } catch {
+    await navigate();
+  }
+}
+
 // Runs a route change inside a View Transition so a tagged cover element morphs
 // into the matching cover on the destination page (shared-element transition).
 // Falls back to a plain navigation when the browser lacks the API.
@@ -230,6 +261,45 @@ export async function goBackWithTransition(router, name = 'shared-cover') {
       delete tagged.dataset._prevVt;
     }
     document.documentElement.classList.remove(transitionClass);
+  }
+}
+
+// Back navigation that morphs the detail cover into its list card when the page
+// was opened from one, but cross-fades for header-opened collection pages (which
+// have no matching card — morphing there animates the cover into an unrelated
+// Top Picks card, which looks wrong). Everything else keeps the morph.
+export async function smartBack(router) {
+  const cur = router.currentRoute.value;
+  const headerCollection =
+    cur && cur.name === 'CollectionDetail' && morphCollectionKey !== cur.params.key;
+
+  if (!headerCollection) {
+    await goBackWithTransition(router);
+    return;
+  }
+
+  if (typeof document === 'undefined' || !document.startViewTransition) {
+    router.back();
+    return;
+  }
+
+  try {
+    const transition = document.startViewTransition(async () => {
+      // Wait for the route to actually settle before snapshotting (with a
+      // timeout so a no-op back can't hang the transition).
+      await new Promise((resolve) => {
+        const off = router.afterEach(() => {
+          off();
+          resolve();
+        });
+        router.back();
+        setTimeout(resolve, 500);
+      });
+      await nextTick();
+    });
+    await transition.finished;
+  } catch {
+    router.back();
   }
 }
 

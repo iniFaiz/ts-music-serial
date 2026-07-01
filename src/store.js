@@ -127,6 +127,10 @@ export const store = reactive({
   // Show the romanization (romaji) sub-line under lyrics when one is available.
   // Shared by the fullscreen player and the lyrics sidebar toggles.
   showRomaji: false,
+  // Global lyric timing offset in ms. Positive = show lines earlier (shift the
+  // playhead the lyrics see forward); negative = later. For sources that are
+  // systematically off. Applied to every lyric view's current-time.
+  lyricsOffsetMs: 0,
 
   // Fullscreen Now-Playing overlay (Apple Music style cover + synced lyrics).
   fullscreenOpen: false,
@@ -223,6 +227,7 @@ export const store = reactive({
           musixmatchToken: this.musixmatchToken,
           lyricsSource: this.lyricsSource,
           showRomaji: this.showRomaji,
+          lyricsOffsetMs: this.lyricsOffsetMs,
           miniAlwaysOnTop: this.miniAlwaysOnTop,
         },
         playback: {
@@ -336,6 +341,7 @@ export const store = reactive({
       if (typeof s.musixmatchToken === 'string') this.musixmatchToken = s.musixmatchToken;
       if (typeof s.lyricsSource === 'string') this.lyricsSource = s.lyricsSource;
       if (typeof s.showRomaji === 'boolean') this.showRomaji = s.showRomaji;
+      if (typeof s.lyricsOffsetMs === 'number') this.lyricsOffsetMs = s.lyricsOffsetMs;
       if (typeof s.miniAlwaysOnTop === 'boolean') this.miniAlwaysOnTop = s.miniAlwaysOnTop;
 
       // Re-select the saved output device (the audio thread starts on default).
@@ -815,6 +821,13 @@ export const store = reactive({
   },
   toggleRomaji() {
     this.showRomaji = !this.showRomaji;
+    this.persistState();
+  },
+  setLyricsOffset(ms) {
+    // Clamp to ±3s and round to 50ms steps.
+    let v = Math.round((Number(ms) || 0) / 50) * 50;
+    v = Math.max(-3000, Math.min(3000, v));
+    this.lyricsOffsetMs = v;
     this.persistState();
   },
 

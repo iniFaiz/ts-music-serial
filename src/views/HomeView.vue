@@ -9,7 +9,7 @@ import SongScroller from '../components/SongScroller.vue';
 import CoverImage from '../components/CoverImage.vue';
 import PlaylistCover from '../components/PlaylistCover.vue';
 import Shelf from '../components/Shelf.vue';
-import { navigateWithTransition } from '../viewTransition';
+import { navigateWithTransition, setMorphCollectionKey } from '../viewTransition';
 
 defineOptions({ name: 'HomeView' });
 
@@ -18,6 +18,12 @@ const router = useRouter();
 // Navigate to a detail page, morphing this card's cover into the destination
 // art (shared-element transition, like the Albums/Artists tabs).
 const openWithMorph = (to, event, klass = 'to-album-transition') => {
+  // Remember morph intent for collection pages (so their cover morphs from this
+  // card, unlike the header "see all" links which cross-fade).
+  const path = typeof to === 'string' ? to : (to && to.path) || '';
+  const m = typeof path === 'string' ? path.match(/^\/collection\/(.+)$/) : null;
+  setMorphCollectionKey(m ? decodeURIComponent(m[1]) : null);
+
   const art = event.currentTarget.querySelector('.cover-image');
   const navigate = () => router.push(to);
   if (art) navigateWithTransition(navigate, art, 'shared-cover', klass);
@@ -238,7 +244,7 @@ const goToArtist = (artist, event) => {
 
     <template v-else>
       <!-- Recently Played (mixed songs + playlists/stations/albums) -->
-      <Shelf v-if="recentItems.length" title="Recently Played">
+      <Shelf v-if="recentItems.length" title="Recently Played" to="/collection/recently-played">
         <div
           v-for="item in recentItems"
           :key="item.kind + '-' + (item.id || item.key || item.name || (item.song && item.song.path))"

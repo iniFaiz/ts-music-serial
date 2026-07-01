@@ -46,6 +46,19 @@ function wordStyle(w) {
       >{{ w.text }}</span></span>
     <span v-else class="lc-plain">{{ line.text }}</span>
 
+    <!-- Background/harmony vocals: a smaller, dimmer secondary tier (Apple-Music
+         style). Word-timed wipe on the active/past line, plain text otherwise. -->
+    <span
+      v-if="(active || isPast) && line.bg && line.bg.length"
+      class="lc-bg lc-karaoke"
+    ><span
+        v-for="(w, wi) in line.bg"
+        :key="wi"
+        :class="wordClass(w)"
+        :style="wordStyle(w)"
+      >{{ w.text }}</span></span>
+    <span v-else-if="line.bg_text" class="lc-bg lc-bg-plain">{{ line.bg_text }}</span>
+
     <span
       v-if="line.romaji"
       class="lc-romaji-wrap"
@@ -92,6 +105,22 @@ function wordStyle(w) {
 }
 .lc-word.lc-sung {
   background-position-x: 0%;
+}
+
+/* Background/harmony vocal tier — smaller and dimmer than the main line, on its
+   own row beneath it. The karaoke variant reuses .lc-word (same gradient wipe);
+   the wrapper opacity keeps the whole tier subordinate to the lead vocal. */
+.lc-bg {
+  display: block;
+  font-size: 0.68em;
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: 0;
+  margin-top: 0.1em;
+  opacity: 0.72;
+}
+.lc-bg-plain {
+  color: rgba(255, 255, 255, 0.55);
 }
 
 /* Romanization sub-line. The wrapper is a 1-row grid whose track animates

@@ -29,6 +29,13 @@ pub struct LyricLine {
     // Romanization (e.g. romaji) of this line, when available.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub romaji: Option<String>,
+    // Background/harmony vocals split off from the main line (parenthetical
+    // heuristic — Apple-Music-style smaller secondary tier). Word-timed when the
+    // line is word-synced; `bg_text` is the plain fallback for line-level lyrics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bg: Option<Vec<LyricWord>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bg_text: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -42,6 +49,123 @@ pub struct Lyrics {
     // True when at least one line carries a romanization.
     #[serde(default)]
     pub has_romaji: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Background-vocal split (Apple-Music-style secondary tier)
+//
+// No provider we use (NetEase/Musixmatch/LRCLIB) marks background vocals
+// structurally, but the common convention is to write backing vocals / adlibs /
+// harmonies inside parentheses: `hold on (hold on) tight`. We heuristically peel
+// the parenthetical parts into a smaller "background" tier rendered under the
+// main line. Word-level timing is preserved for karaoke when available.
+//
+// Idempotent: once split, the main text no longer contains parentheses, so a
+// second pass (e.g. on a cache re-read) is a no-op.
+// ---------------------------------------------------------------------------
+
+// Parentheses used to mark backing vocals — ASCII and the CJK full-width forms
+// （ ） that Japanese/Chinese lyrics use.
+fn is_paren_open(c: char) -> bool {
+    c == '(' || c == '\u{FF08}'
+}
+fn is_paren_close(c: char) -> bool {
+    c == ')' || c == '\u{FF09}'
+}
+
+// Assign whole word tokens to main vs background by tracking parenthesis depth,
+// stripping the literal parens from the displayed text.
+fn split_words_by_paren(words: &[LyricWord]) -> (Vec<LyricWord>, Vec<LyricWord>) {
+    let mut depth: i32 = 0;
+    let mut main = Vec::new();
+    let mut bg = Vec::new();
+    for w in words {
+        let opens = w.text.chars().filter(|c| is_paren_open(*c)).count() as i32;
+        let closes = w.text.chars().filter(|c| is_paren_close(*c)).count() as i32;
+        // A token is background if we're already inside parens or it opens one.
+        let in_bg = depth > 0 || opens > 0;
+        depth += opens - closes;
+        if depth < 0 {
+            depth = 0;
+        }
+        let clean: String = w
+            .text
+            .chars()
+            .filter(|c| !is_paren_open(*c) && !is_paren_close(*c))
+            .collect();
+        if clean.trim().is_empty() {
+            continue; // paren-only token — nothing visible to keep
+        }
+        let cw = LyricWord {
+            time_ms: w.time_ms,
+            duration_ms: w.duration_ms,
+            text: clean,
+        };
+        if in_bg {
+            bg.push(cw);
+        } else {
+            main.push(cw);
+        }
+    }
+    (main, bg)
+}
+
+// Split a plain (non-word) line's text into (main, background) by parentheses.
+fn split_text_by_paren(text: &str) -> Option<(String, String)> {
+    let mut main = String::new();
+    let mut bg = String::new();
+    let mut depth: i32 = 0;
+    for c in text.chars() {
+        if is_paren_open(c) {
+            depth += 1;
+        } else if is_paren_close(c) {
+            if depth > 0 {
+                depth -= 1;
+            }
+        } else if depth > 0 {
+            bg.push(c);
+        } else {
+            main.push(c);
+        }
+    }
+    let main = main.split_whitespace().collect::<Vec<_>>().join(" ");
+    let bg = bg.split_whitespace().collect::<Vec<_>>().join(" ");
+    if main.is_empty() || bg.is_empty() {
+        None
+    } else {
+        Some((main, bg))
+    }
+}
+
+// Peel parenthetical background vocals out of each line into `bg`/`bg_text`.
+// Only applied when it yields a non-empty main AND a non-empty background, so a
+// fully-parenthetical line (e.g. "(instrumental)") stays intact as the main.
+pub fn apply_background(lines: &mut [LyricLine]) {
+    for line in lines.iter_mut() {
+        if !line.text.chars().any(is_paren_open) || !line.text.chars().any(is_paren_close) {
+            continue;
+        }
+        if let Some(words) = line.words.clone() {
+            let (main_w, bg_w) = split_words_by_paren(&words);
+            if main_w.is_empty() || bg_w.is_empty() {
+                continue;
+            }
+            let main_text: String = main_w.iter().map(|w| w.text.as_str()).collect();
+            let bg_text: String = bg_w.iter().map(|w| w.text.as_str()).collect();
+            let main_text = main_text.split_whitespace().collect::<Vec<_>>().join(" ");
+            let bg_text = bg_text.split_whitespace().collect::<Vec<_>>().join(" ");
+            if main_text.is_empty() || bg_text.is_empty() {
+                continue;
+            }
+            line.text = main_text;
+            line.words = Some(main_w);
+            line.bg = Some(bg_w);
+            line.bg_text = Some(bg_text);
+        } else if let Some((main, bg)) = split_text_by_paren(&line.text) {
+            line.text = main;
+            line.bg_text = Some(bg);
+        }
+    }
 }
 
 // Parse a single LRC time tag body ("mm:ss.xx" / "mm:ss") into milliseconds.
@@ -94,6 +218,8 @@ pub fn parse_lrc(text: &str) -> Vec<LyricLine> {
                 text: content.clone(),
                 words: None,
                 romaji: None,
+                bg: None,
+                bg_text: None,
             });
         }
     }
@@ -109,6 +235,8 @@ pub fn make_plain(text: &str) -> Vec<LyricLine> {
             text: l.trim_end().to_string(),
             words: None,
             romaji: None,
+            bg: None,
+            bg_text: None,
         })
         .collect()
 }
@@ -385,6 +513,8 @@ fn parse_yrc(text: &str) -> Vec<LyricLine> {
             text: text_join,
             words: Some(words),
             romaji: None,
+            bg: None,
+            bg_text: None,
         });
     }
     out.sort_by_key(|l| l.time_ms.unwrap_or(0));
@@ -838,6 +968,8 @@ fn parse_musixmatch_richsync(body: &str) -> Vec<LyricLine> {
             text: line_text.trim().to_string(),
             words: if words.is_empty() { None } else { Some(words) },
             romaji: None,
+            bg: None,
+            bg_text: None,
         });
     }
     out.sort_by_key(|l| l.time_ms.unwrap_or(0));

@@ -1,12 +1,25 @@
 <script setup>
 import { ref, onMounted, onUnmounted, nextTick } from 'vue';
+import { useRouter } from 'vue-router';
+import { navigateFade, setMorphCollectionKey } from '../viewTransition';
 
-defineProps({
+const props = defineProps({
   title: { type: String, required: true },
   subtitle: { type: String, default: '' },
-  // Optional router-link target for the heading + chevron ("see all").
+  // Optional navigation target for the heading + chevron ("see all").
   to: { type: [String, Object], default: null },
 });
+
+const router = useRouter();
+
+// "See all" headers just cross-fade to the target — no cover morph (there's no
+// single card to morph from). setMorphCollectionKey(null) makes the destination
+// collection page render without a shared-element cover.
+const onTitleClick = () => {
+  if (!props.to) return;
+  setMorphCollectionKey(null);
+  navigateFade(() => router.push(props.to));
+};
 
 const scroller = ref(null);
 const canLeft = ref(false);
@@ -43,8 +56,9 @@ onUnmounted(() => {
   <section class="mb-9 group/shelf">
     <div class="flex items-end justify-between mb-4 px-8">
       <component
-        :is="to ? 'router-link' : 'div'"
-        :to="to || undefined"
+        :is="to ? 'button' : 'div'"
+        type="button"
+        @click="onTitleClick"
         class="group/head inline-flex items-center gap-1.5 text-left"
         :class="to ? 'cursor-pointer' : ''"
       >
