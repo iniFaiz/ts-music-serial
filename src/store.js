@@ -34,6 +34,9 @@ let persistStateTimer = null;
 let savedWindowMaximized = false;
 // Active sleep-timer timeout handle (module scope so it's never serialized).
 let sleepTimerHandle = null;
+// Debounce for statsVersion bumps — coalesces rapid plays/skips so Home insight
+// shelves refetch at most once per window instead of on every accounting event.
+let statsVersionTimer = null;
 
 // Directory portion of a file path (handles both / and \ separators).
 function dirName(path) {
@@ -199,10 +202,15 @@ export const store = reactive({
   bumpLibrary() {
     this.libraryVersion++;
   },
-  // Bump only the stats version (Home insights) so play/skip accounting doesn't
-  // force every track list in the app to reload.
+  // Bump the stats version (Home insights) so play/skip accounting doesn't force
+  // every track list in the app to reload. Debounced: a burst of plays/skips
+  // coalesces into a single refetch ~1.5s later.
   bumpStats() {
-    this.statsVersion++;
+    if (statsVersionTimer) clearTimeout(statsVersionTimer);
+    statsVersionTimer = setTimeout(() => {
+      statsVersionTimer = null;
+      this.statsVersion++;
+    }, 1500);
   },
 
   // Reload the small caches the UI reads synchronously: favorite paths (for
@@ -1442,10 +1450,12 @@ export const store = reactive({
 
   // Record accounting now lives in the SQLite `stats` table. These fire-and-
   // forget into the DB and bump `statsVersion` so Home insights refresh.
+  // Records "last played" for the Recently Played row. Fires on every track load,
+  // so it does NOT bump statsVersion (that would refetch all of Home on each track
+  // change); Home refreshes on its own navigation / on a counted play instead.
   recordPlayStart(path) {
     if (!path) return;
     invoke('db_record_play_start', { path }).catch(() => {});
-    this.bumpStats();
   },
 
   // Count a completed/substantial listen toward the play count.

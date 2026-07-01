@@ -11,9 +11,37 @@ const props = defineProps({
   // When this list belongs to a playlist, rows offer "Remove from playlist".
   playlistId: { type: String, default: '' },
   isFavorites: { type: Boolean, default: false },
+  // Server-driven sort + pagination (SongsView): render `songs` as-is and emit
+  // `sort-change` on header clicks instead of sorting the (partial) array locally.
+  serverSort: { type: Boolean, default: false },
+  // When the parent is still fetching, suppress the "No songs found" empty state
+  // so it never flashes before the first page (or new search results) arrive.
+  loading: { type: Boolean, default: false },
+  // Bumped by the parent only when a *fresh* result set replaces the list
+  // (search / sort) — not on scroll-append — to trigger the result crossfade.
+  swapSignal: { type: Number, default: 0 },
 });
+const emit = defineEmits(['sort-change']);
 
 const router = useRouter();
+
+// A brief window after the `songs` prop changes (a new search / sort result set)
+// during which row enter/leave transitions are enabled, so results crossfade in.
+// Scroll windowing also adds/removes rows, but leaves this flag false → those
+// stay instant (no animation while scrolling). Server-sort lists only.
+const animateSwap = ref(false);
+let swapTimer = null;
+watch(
+  () => props.swapSignal,
+  () => {
+    if (!props.serverSort) return;
+    animateSwap.value = true;
+    if (swapTimer) clearTimeout(swapTimer);
+    swapTimer = setTimeout(() => {
+      animateSwap.value = false;
+    }, 500);
+  }
+);
 
 const sortKey = ref(null);
 const sortOrder = ref('asc');
@@ -33,9 +61,17 @@ const toggleSort = (key) => {
     sortKey.value = key;
     sortOrder.value = 'asc';
   }
+  // Server-sorted lists refetch instead of sorting the local (partial) array.
+  if (props.serverSort) {
+    emit('sort-change', { key: sortKey.value, order: sortOrder.value });
+  }
 };
 
 const sortedSongs = computed(() => {
+  // Server-sorted: the array already arrives in the requested order (and is only
+  // a loaded window of the full list), so never re-sort it locally.
+  if (props.serverSort) return props.songs;
+
   let items = [...props.songs];
 
   if (!sortKey.value) {
@@ -719,6 +755,7 @@ onUnmounted(() => {
           'opacity-30': canReorder && index === plDragIndex,
           'pl-drop-target-above': canReorder && plOverIndex === index && plDragIndex !== index && plDragIndex > index,
           'pl-drop-target-below': canReorder && plOverIndex === index && plDragIndex !== index && plDragIndex < index,
+          'song-row-swap-in': serverSort && animateSwap,
         }"
       >
         <div class="text-xs text-gray-500 text-center flex justify-center items-center h-full">
@@ -865,7 +902,7 @@ onUnmounted(() => {
       </div>
     </component>
 
-    <div v-if="songs.length === 0" class="p-20 text-center text-gray-600">
+    <div v-if="songs.length === 0 && !loading" class="p-20 text-center text-gray-600">
       <div class="text-4xl mb-4 opacity-20">♫</div>
       <p>No songs found.</p>
     </div>
@@ -1344,5 +1381,23 @@ onUnmounted(() => {
 /* Playlist song list reorder FLIP animation */
 .song-list-move {
   transition: transform 0.3s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+/* Search / sort result animation (server-sort lists): rows ease up + fade in when
+   a new result set renders. Gated by `animateSwap` (only right after the songs
+   change, never while scrolling) so it doesn't fire on scroll virtualization, and
+   applied as a plain class so it never interferes with the windowing wrapper. */
+.song-row-swap-in {
+  animation: songRowSwapIn 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes songRowSwapIn {
+  from {
+    opacity: 0.35;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 </style>

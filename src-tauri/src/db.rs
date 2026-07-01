@@ -16,6 +16,7 @@
 // writes anyway and our reads are short. The connection is opened once at startup
 // and managed as Tauri state.
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use parking_lot::Mutex;
@@ -26,7 +27,33 @@ use tauri::{AppHandle, Manager, State};
 
 use crate::MusicTrack;
 
-pub struct Db(pub Mutex<Connection>);
+// Memoized smart-playlist counts, guarded alongside the connection. Keyed by
+// playlist id → (library fingerprint, rules JSON, count). The fingerprint is a
+// cheap signature of the tracks/stats/favorites tables (see library_fingerprint);
+// when it and the rules both match, db_playlists reuses the count instead of
+// re-scanning the whole library with smart_eval on every refresh.
+#[derive(Default)]
+pub struct DbCache {
+    smart_counts: Mutex<HashMap<String, (i64, String, i64)>>,
+}
+
+pub struct Db(pub Mutex<Connection>, pub DbCache);
+
+// Cheap signature that changes whenever the tracks / stats / favorites that a
+// smart playlist can match change (track added/removed, played, skipped, or
+// (un)favorited). Weighted so distinct states rarely collide.
+fn library_fingerprint(conn: &Connection) -> i64 {
+    conn.query_row(
+        "SELECT (SELECT COUNT(*) FROM tracks)
+              + (SELECT COALESCE(MAX(last_played), 0) FROM stats)
+              + (SELECT COALESCE(SUM(play_count), 0) FROM stats) * 7
+              + (SELECT COALESCE(SUM(skip_count), 0) FROM stats) * 13
+              + (SELECT COUNT(*) FROM favorites) * 1000003",
+        [],
+        |r| r.get(0),
+    )
+    .unwrap_or(0)
+}
 
 // Column list shared by every "give me tracks" query, in the order row_to_track
 // expects. `_T` is the alias-qualified variant for queries that JOIN `stats`
@@ -63,7 +90,7 @@ pub fn init(app: &AppHandle) -> Result<Db, String> {
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let conn = Connection::open(dir.join("library.db")).map_err(|e| e.to_string())?;
     conn.execute_batch(SCHEMA).map_err(|e| e.to_string())?;
-    Ok(Db(Mutex::new(conn)))
+    Ok(Db(Mutex::new(conn), DbCache::default()))
 }
 
 const SCHEMA: &str = r#"
@@ -91,6 +118,8 @@ CREATE TABLE IF NOT EXISTS tracks (
 CREATE INDEX IF NOT EXISTS idx_tracks_album  ON tracks(album);
 CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks(artist);
 CREATE INDEX IF NOT EXISTS idx_tracks_added  ON tracks(date_added);
+-- Default library sort is by title; index it so the ORDER BY is index-served.
+CREATE INDEX IF NOT EXISTS idx_tracks_title  ON tracks(title COLLATE NOCASE);
 
 -- Diacritic-insensitive full-text index over the searchable text columns, kept
 -- in sync with `tracks` by triggers (external-content FTS5 keyed on tracks.id).
@@ -898,6 +927,50 @@ pub fn db_top_genres(db: State<Db>, limit: i64) -> Result<Vec<GenreRow>, String>
     Ok(out)
 }
 
+#[derive(Serialize)]
+pub struct InsightCounts {
+    recently_played: i64,
+    most_played: i64,
+    on_repeat: i64,
+    recently_added: i64,
+    rediscover: i64,
+}
+
+// Cheap COUNTs for the Home "Top Picks" cards, which only need to know which
+// collections are non-empty — avoids fetching hundreds of full tracks each on
+// every stats change.
+#[tauri::command]
+pub fn db_insight_counts(db: State<Db>) -> Result<InsightCounts, String> {
+    let conn = db.0.lock();
+    let cutoff45 = now_ms() - 45 * 86_400_000;
+    let cutoff60 = now_ms() - 60 * 86_400_000;
+    let one = |sql: &str, args: &[&dyn rusqlite::ToSql]| -> Result<i64, String> {
+        conn.query_row(sql, args, |r| r.get(0)).map_err(|e| e.to_string())
+    };
+    Ok(InsightCounts {
+        recently_played: one(
+            "SELECT COUNT(*) FROM stats s JOIN tracks t ON t.path = s.path WHERE s.last_played > 0",
+            params![],
+        )?,
+        most_played: one(
+            "SELECT COUNT(*) FROM stats s JOIN tracks t ON t.path = s.path WHERE s.play_count > 0",
+            params![],
+        )?,
+        on_repeat: one(
+            "SELECT COUNT(*) FROM stats s JOIN tracks t ON t.path = s.path
+             WHERE s.play_count >= 2 AND s.last_played >= ?1",
+            params![cutoff45],
+        )?,
+        recently_added: one("SELECT COUNT(*) FROM tracks", params![])?,
+        rediscover: one(
+            "SELECT COUNT(*) FROM favorites f JOIN tracks t ON t.path = f.path
+             LEFT JOIN stats s ON s.path = f.path
+             WHERE COALESCE(s.last_played, 0) = 0 OR s.last_played < ?1",
+            params![cutoff60],
+        )?,
+    })
+}
+
 // ---- Favorites --------------------------------------------------------------
 
 #[tauri::command]
@@ -1011,30 +1084,44 @@ fn read_playlists(conn: &Connection) -> Result<Vec<PlaylistRow>, String> {
             out.push(r.map_err(|e| e.to_string())?);
         }
     }
-    // Smart playlists have no playlist_items; their count is the number of tracks
-    // their rules currently match (evaluated natively).
-    for pl in out.iter_mut() {
-        if pl.is_smart {
-            if let Some(rules) = &pl.rules {
-                let n = smart_eval(
-                    conn,
-                    rules,
-                    pl.sort_by.as_deref().unwrap_or("none"),
-                    pl.sort_order.as_deref().unwrap_or("asc"),
-                    pl.limit_n.unwrap_or(0),
-                )?
-                .len();
-                pl.track_count = n as i64;
-            }
-        }
-    }
     Ok(out)
 }
 
 #[tauri::command]
 pub fn db_playlists(db: State<Db>) -> Result<Vec<PlaylistRow>, String> {
     let conn = db.0.lock();
-    read_playlists(&conn)
+    let mut rows = read_playlists(&conn)?;
+
+    // Smart playlists have no playlist_items; their count is the number of tracks
+    // their rules currently match. That's a full-library scan per playlist, so
+    // memoize it against a cheap library fingerprint + the rules JSON — only
+    // recompute when the library or the rules actually changed.
+    let fp = library_fingerprint(&conn);
+    let mut cache = db.1.smart_counts.lock();
+    for pl in rows.iter_mut() {
+        if !pl.is_smart {
+            continue;
+        }
+        let Some(rules) = &pl.rules else { continue };
+        let rules_json = rules.to_string();
+        if let Some((cfp, crules, count)) = cache.get(&pl.id) {
+            if *cfp == fp && *crules == rules_json {
+                pl.track_count = *count;
+                continue;
+            }
+        }
+        let n = smart_eval(
+            &conn,
+            rules,
+            pl.sort_by.as_deref().unwrap_or("none"),
+            pl.sort_order.as_deref().unwrap_or("asc"),
+            pl.limit_n.unwrap_or(0),
+        )?
+        .len() as i64;
+        cache.insert(pl.id.clone(), (fp, rules_json, n));
+        pl.track_count = n;
+    }
+    Ok(rows)
 }
 
 // Normal playlist → its items in order; smart playlist → evaluated rules.

@@ -57,11 +57,20 @@ const { data: recentlyAdded } = useQuery(() => store.recentlyAdded(60), { initia
 // no count), so this refetches with the library/stats.
 const { data: topPicks } = useQuery(
   async () => {
-    const entries = TOP_PICKS_ORDER.map((k) => COLLECTIONS[k]).filter(Boolean);
-    const counted = await Promise.all(
-      entries.map(async (c) => ({ ...c, count: (await c.fetch(store)).length }))
-    );
-    return counted.filter((c) => c.count > 0);
+    // One cheap COUNT query decides which collections are non-empty, instead of
+    // fetching every collection's tracks just to check `.length`.
+    const counts = await invoke('db_insight_counts');
+    const byKey = {
+      'recently-played': counts.recently_played,
+      'on-repeat': counts.on_repeat,
+      'most-played': counts.most_played,
+      'recently-added': counts.recently_added,
+      rediscover: counts.rediscover,
+    };
+    return TOP_PICKS_ORDER.map((k) => COLLECTIONS[k])
+      .filter(Boolean)
+      .map((c) => ({ ...c, count: byKey[c.key] || 0 }))
+      .filter((c) => c.count > 0);
   },
   { watchStats: true, initial: [] }
 );

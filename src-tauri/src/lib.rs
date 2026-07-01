@@ -3004,6 +3004,7 @@ pub fn run() {
             db::db_rediscover,
             db::db_top_artists,
             db::db_top_genres,
+            db::db_insight_counts,
             db::db_favorite_paths,
             db::db_favorites,
             db::db_toggle_favorite,
