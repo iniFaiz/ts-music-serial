@@ -400,8 +400,10 @@ const goToArtist = (artist, event) => {
           </button>
         </template>
 
-        <!-- New smart playlist card -->
-        <button @click="store.openSmartModal('create')" class="shrink-0 w-48 group">
+        <!-- New smart playlist card. self-start so its square top-aligns with the
+             other cards' covers instead of centering against their taller
+             (cover + label) height. -->
+        <button @click="store.openSmartModal('create')" class="shrink-0 w-48 group self-start">
           <div class="w-48 h-48 rounded-2xl border-2 border-dashed border-white/15 group-hover:border-[var(--accent-color)] flex flex-col items-center justify-center gap-2 text-gray-500 group-hover:text-[var(--accent-color)] transition-colors mb-2.5">
             <svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
