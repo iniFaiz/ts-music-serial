@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
+import { useRoute } from 'vue-router';
 import { store } from '../store';
 import { getCollection } from '../collections';
 import { getMorphCollectionKey } from '../viewTransition';
@@ -9,7 +9,6 @@ import SongList from '../components/SongList.vue';
 import SmartCover from '../components/SmartCover.vue';
 
 const route = useRoute();
-const router = useRouter();
 
 // Only carry the shared-element cover name when this page was opened from a cover
 // card (Top Picks / recent card). Header "see all" links clear the morph key, so
@@ -40,21 +39,7 @@ const shuffleAll = () => {
   store.playSong(songs.value[i], songs.value);
 };
 
-// Turn this live insight into a real, editable Smart Playlist.
-const saveAsSmart = async () => {
-  const c = collection.value;
-  if (!c) return;
-  const sp = await store.createSmartPlaylist({
-    name: c.title,
-    description: c.subtitle,
-    color: c.color,
-    rules: JSON.parse(JSON.stringify(c.rules)),
-    sortBy: c.sortBy,
-    sortOrder: c.sortOrder,
-    limit: 0,
-  });
-  if (sp) router.push('/smart/' + sp.id);
-};
+
 </script>
 
 <template>
@@ -97,16 +82,7 @@ const saveAsSmart = async () => {
             </svg>
             Shuffle
           </button>
-          <button
-            @click="saveAsSmart"
-            class="bg-transparent text-gray-300 border border-[#3a3a3a] px-5 py-2 rounded-[4px] text-sm font-semibold hover:text-white hover:border-white/40 transition flex items-center gap-2"
-            title="Create an editable Smart Playlist from these rules"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
-            </svg>
-            Save as Smart Playlist
-          </button>
+
         </div>
       </div>
     </div>

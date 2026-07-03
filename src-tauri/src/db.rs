@@ -285,6 +285,8 @@ pub struct AlbumRow {
     year: Option<i64>,
     track_count: i64,
     cover_path: Option<String>,
+    last_played: i64,
+    all_artists: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -294,6 +296,7 @@ pub struct ArtistRow {
     album_count: i64,
     plays: i64,
     cover_path: Option<String>,
+    last_played: i64,
 }
 
 #[derive(Serialize)]
@@ -818,11 +821,13 @@ pub fn db_albums(db: State<Db>, search: Option<String>) -> Result<Vec<AlbumRow>,
         .as_deref()
         .filter(|s| !s.trim().is_empty())
         .map(|s| format!("%{}%", s.trim()));
-    let sql = "SELECT album, MIN(artist) AS artist, MAX(year) AS year, COUNT(*) AS n,
-                 (SELECT path FROM tracks t2 WHERE t2.album = t.album AND t2.has_cover = 1 LIMIT 1) AS cover
-               FROM tracks t
-               WHERE (?1 IS NULL OR album LIKE ?1 OR artist LIKE ?1)
-               GROUP BY album ORDER BY album COLLATE NOCASE";
+    let sql = "SELECT t.album, MIN(t.artist) AS artist, MAX(t.year) AS year, COUNT(*) AS n,
+                 (SELECT path FROM tracks t2 WHERE t2.album = t.album AND t2.has_cover = 1 LIMIT 1) AS cover,
+                 COALESCE(MAX(s.last_played), 0) AS last_played,
+                 GROUP_CONCAT(DISTINCT t.artist) AS all_artists
+               FROM tracks t LEFT JOIN stats s ON s.path = t.path
+               WHERE (?1 IS NULL OR t.album LIKE ?1 OR t.artist LIKE ?1)
+               GROUP BY t.album ORDER BY t.album COLLATE NOCASE";
     let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map(params![like], |r| {
@@ -832,6 +837,8 @@ pub fn db_albums(db: State<Db>, search: Option<String>) -> Result<Vec<AlbumRow>,
                 year: r.get(2)?,
                 track_count: r.get(3)?,
                 cover_path: r.get(4)?,
+                last_played: r.get(5)?,
+                all_artists: r.get(6)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -860,7 +867,8 @@ pub fn db_artists(db: State<Db>, search: Option<String>) -> Result<Vec<ArtistRow
         .map(|s| format!("%{}%", s.trim()));
     let sql = "SELECT t.artist, COUNT(*) AS n, COUNT(DISTINCT t.album) AS albums,
                  COALESCE(SUM(s.play_count), 0) AS plays,
-                 (SELECT path FROM tracks t2 WHERE t2.artist = t.artist AND t2.has_cover = 1 LIMIT 1) AS cover
+                 (SELECT path FROM tracks t2 WHERE t2.artist = t.artist AND t2.has_cover = 1 LIMIT 1) AS cover,
+                 COALESCE(MAX(s.last_played), 0) AS last_played
                FROM tracks t LEFT JOIN stats s ON s.path = t.path
                WHERE t.artist <> '' AND (?1 IS NULL OR t.artist LIKE ?1)
                GROUP BY t.artist ORDER BY t.artist COLLATE NOCASE";
@@ -873,6 +881,7 @@ pub fn db_artists(db: State<Db>, search: Option<String>) -> Result<Vec<ArtistRow
                 album_count: r.get(2)?,
                 plays: r.get(3)?,
                 cover_path: r.get(4)?,
+                last_played: r.get(5)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -1075,7 +1084,8 @@ pub fn db_top_artists(db: State<Db>, limit: i64) -> Result<Vec<ArtistRow>, Strin
     let conn = db.0.lock();
     let sql = "SELECT t.artist, COUNT(*) AS n, COUNT(DISTINCT t.album) AS albums,
                  COALESCE(SUM(s.play_count), 0) AS plays,
-                 (SELECT path FROM tracks t2 WHERE t2.artist = t.artist AND t2.has_cover = 1 LIMIT 1) AS cover
+                 (SELECT path FROM tracks t2 WHERE t2.artist = t.artist AND t2.has_cover = 1 LIMIT 1) AS cover,
+                 COALESCE(MAX(s.last_played), 0) AS last_played
                FROM tracks t LEFT JOIN stats s ON s.path = t.path
                WHERE t.artist <> '' AND t.artist <> 'Unknown Artist'
                GROUP BY t.artist ORDER BY plays DESC, n DESC LIMIT ?1";
@@ -1088,6 +1098,7 @@ pub fn db_top_artists(db: State<Db>, limit: i64) -> Result<Vec<ArtistRow>, Strin
                 album_count: r.get(2)?,
                 plays: r.get(3)?,
                 cover_path: r.get(4)?,
+                last_played: r.get(5)?,
             })
         })
         .map_err(|e| e.to_string())?;

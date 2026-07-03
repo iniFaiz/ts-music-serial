@@ -80,3 +80,7 @@ wasapi = "0.23"
 [profile.dev.package."*"]
 opt-level = 3
 
+[patch.crates-io]
+plist = { git = "https://github.com/ebarnard/rust-plist" }
+
+
