@@ -2,7 +2,9 @@
 import { computed, ref, watch, nextTick, onMounted, onUnmounted, TransitionGroup } from 'vue';
 import { useRouter } from 'vue-router';
 import { invoke } from '@tauri-apps/api/core';
+import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { store } from '../store';
+import { invalidateCover } from '../coverCache';
 import CoverImage from './CoverImage.vue';
 import { navigateWithTransition } from '../viewTransition';
 
@@ -392,10 +394,105 @@ const showFileInfo = async () => {
 };
 
 const closeInfoModal = () => {
+  if (editSaving.value) return; // don't lose an in-flight save
   infoModalOpen.value = false;
   infoSong.value = null;
   infoStat.value = { playCount: 0, lastPlayed: 0, skipCount: 0 };
   copyStatus.value = 'Copy Path';
+  infoEditing.value = false;
+  editError.value = '';
+};
+
+// ---- Tag editor (edit mode of the File Information modal) ----
+// Writes tags back into the audio file (Rust/lofty), re-indexes the DB row and
+// refreshes every UI copy of the track. Editing the playing track is safe —
+// playback decodes from an in-memory copy of the file.
+
+const infoEditing = ref(false);
+const editSaving = ref(false);
+const editError = ref('');
+const editForm = ref({ title: '', artist: '', album: '', genre: '', year: '', track_number: '' });
+const editCoverPath = ref(null); // newly picked image (absolute path)
+const editCoverPreview = ref(null); // data-URL thumbnail of the picked image
+const editRemoveCover = ref(false);
+
+const startEditInfo = () => {
+  const s = infoSong.value;
+  if (!s) return;
+  editForm.value = {
+    title: s.title || '',
+    // Don't seed the library's display fallbacks into the file's actual tags.
+    artist: s.artist === 'Unknown Artist' ? '' : s.artist || '',
+    album: s.album === 'Unknown Album' ? '' : s.album || '',
+    genre: s.genre || '',
+    year: s.year ? String(s.year) : '',
+    track_number: s.track_number ? String(s.track_number) : '',
+  };
+  editCoverPath.value = null;
+  editCoverPreview.value = null;
+  editRemoveCover.value = false;
+  editError.value = '';
+  infoEditing.value = true;
+};
+
+const cancelEditInfo = () => {
+  if (editSaving.value) return;
+  infoEditing.value = false;
+  editError.value = '';
+};
+
+const pickEditCover = async () => {
+  try {
+    const sel = await openDialog({
+      multiple: false,
+      filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif'] }],
+    });
+    if (!sel) return;
+    editCoverPath.value = sel;
+    editRemoveCover.value = false;
+    editCoverPreview.value = await invoke('preview_image', { path: sel }).catch(() => null);
+  } catch {
+    /* dialog dismissed */
+  }
+};
+
+const removeEditCover = () => {
+  editRemoveCover.value = true;
+  editCoverPath.value = null;
+  editCoverPreview.value = null;
+};
+
+const saveEditInfo = async () => {
+  const s = infoSong.value;
+  if (!s || editSaving.value) return;
+  editSaving.value = true;
+  editError.value = '';
+  const yr = parseInt(editForm.value.year, 10);
+  const tn = parseInt(editForm.value.track_number, 10);
+  try {
+    const updated = await invoke('write_track_tags', {
+      path: s.path,
+      edits: {
+        title: editForm.value.title,
+        artist: editForm.value.artist,
+        album: editForm.value.album,
+        genre: editForm.value.genre,
+        year: Number.isFinite(yr) && yr > 0 ? yr : null,
+        trackNumber: Number.isFinite(tn) && tn > 0 ? tn : null,
+      },
+      coverPath: editCoverPath.value,
+      removeCover: editRemoveCover.value,
+    });
+    if (editCoverPath.value || editRemoveCover.value) invalidateCover(updated.path);
+    store.applyTrackUpdate(updated);
+    infoSong.value = { ...s, ...updated };
+    infoEditing.value = false;
+    store.statusMessage = `Saved tags: ${updated.title}`;
+  } catch (e) {
+    editError.value = String(e);
+  } finally {
+    editSaving.value = false;
+  }
 };
 
 const copyToClipboard = async (text) => {
@@ -1064,22 +1161,76 @@ onUnmounted(() => {
 
           <!-- Left column: Cover Art -->
           <div class="flex flex-col items-center gap-4 shrink-0">
+            <img
+              v-if="infoEditing && editCoverPreview"
+              :src="editCoverPreview"
+              class="w-48 h-48 md:w-56 md:h-56 rounded-xl shadow-2xl object-cover bg-[#282828]"
+              alt=""
+            />
+            <div
+              v-else-if="infoEditing && editRemoveCover"
+              class="w-48 h-48 md:w-56 md:h-56 rounded-xl bg-[#282828] border border-white/5 flex items-center justify-center text-gray-600 text-xs"
+            >
+              No cover
+            </div>
             <CoverImage
-              v-if="infoSong"
+              v-else-if="infoSong"
               :path="infoSong.path"
               className="w-48 h-48 md:w-56 md:h-56 rounded-xl shadow-2xl object-cover bg-[#282828]"
             />
-            <div class="text-xs text-gray-500 font-mono tracking-wider uppercase">
+            <div
+              v-if="!infoEditing"
+              class="text-xs text-gray-500 font-mono tracking-wider uppercase"
+            >
               {{ infoSong ? infoSong.path.split('.').pop().toUpperCase() : '' }} Audio File
+            </div>
+            <div v-else class="flex items-center gap-2">
+              <button
+                @click="pickEditCover"
+                class="bg-[#2c2c2e] hover:bg-[#3a3a3c] text-white px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
+              >
+                Change Cover
+              </button>
+              <button
+                @click="removeEditCover"
+                :disabled="editRemoveCover"
+                class="bg-[#2c2c2e] hover:bg-[#3a3a3c] text-gray-300 px-3 py-1.5 rounded-md text-xs font-medium transition-colors disabled:opacity-40"
+              >
+                Remove
+              </button>
             </div>
           </div>
 
           <!-- Right column: Metadata Grid -->
           <div class="flex-1 flex flex-col justify-between overflow-hidden">
             <div>
-              <h2 class="text-xl font-bold text-white mb-4 pr-6 truncate">File Information</h2>
+              <div class="flex items-center justify-between mb-4 pr-6 gap-3">
+                <h2 class="text-xl font-bold text-white truncate">
+                  {{ infoEditing ? 'Edit Tags' : 'File Information' }}
+                </h2>
+                <button
+                  v-if="!infoEditing"
+                  @click="startEditInfo"
+                  class="shrink-0 flex items-center gap-1.5 bg-[#2c2c2e] hover:bg-[#3a3a3c] text-white px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="12"
+                    height="12"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"></path>
+                  </svg>
+                  Edit Tags
+                </button>
+              </div>
 
-              <div class="space-y-3.5 text-sm">
+              <div v-if="!infoEditing" class="space-y-3.5 text-sm">
                 <div class="grid grid-cols-[100px_1fr] gap-2 items-baseline">
                   <span class="text-gray-500">Title:</span>
                   <span class="text-white font-medium truncate">{{ infoSong?.title }}</span>
@@ -1135,23 +1286,87 @@ onUnmounted(() => {
                 </div>
 
               </div>
+
+              <!-- Edit form -->
+              <div v-else class="space-y-3 text-sm">
+                <label class="grid grid-cols-[100px_1fr] gap-2 items-center">
+                  <span class="text-gray-500">Title</span>
+                  <input v-model="editForm.title" type="text" spellcheck="false" class="tag-input" />
+                </label>
+                <label class="grid grid-cols-[100px_1fr] gap-2 items-center">
+                  <span class="text-gray-500">Artist</span>
+                  <input v-model="editForm.artist" type="text" spellcheck="false" class="tag-input" />
+                </label>
+                <label class="grid grid-cols-[100px_1fr] gap-2 items-center">
+                  <span class="text-gray-500">Album</span>
+                  <input v-model="editForm.album" type="text" spellcheck="false" class="tag-input" />
+                </label>
+                <label class="grid grid-cols-[100px_1fr] gap-2 items-center">
+                  <span class="text-gray-500">Genre</span>
+                  <input v-model="editForm.genre" type="text" spellcheck="false" class="tag-input" />
+                </label>
+                <div class="grid grid-cols-[100px_1fr] gap-2 items-center">
+                  <span class="text-gray-500">Year · Track</span>
+                  <div class="flex gap-2">
+                    <input
+                      v-model="editForm.year"
+                      type="text"
+                      inputmode="numeric"
+                      placeholder="Year"
+                      class="tag-input w-24"
+                    />
+                    <input
+                      v-model="editForm.track_number"
+                      type="text"
+                      inputmode="numeric"
+                      placeholder="No."
+                      class="tag-input w-20"
+                    />
+                  </div>
+                </div>
+                <p class="text-[11px] text-gray-600 leading-relaxed pt-1">
+                  Changes are written into the audio file itself; clearing a field
+                  removes that tag. The library updates automatically.
+                </p>
+              </div>
             </div>
 
-            <!-- Path/Copy Section -->
+            <!-- Path/Copy (view) or Cancel/Save (edit) -->
             <div class="mt-6 pt-4 border-t border-[#2c2c2e]">
-              <div class="text-[11px] text-gray-500 uppercase tracking-wider mb-2">File Path</div>
-              <div
-                class="bg-[#121214] border border-[#2c2c2e] p-2.5 rounded-lg flex items-center justify-between gap-3 text-xs"
-              >
-                <div class="font-mono text-gray-400 select-all truncate flex-1">
-                  {{ infoSong?.path }}
-                </div>
-                <button
-                  @click="copyToClipboard(infoSong?.path)"
-                  class="shrink-0 bg-[#2c2c2e] hover:bg-[#3a3a3c] text-white px-3 py-1.5 rounded-md font-medium transition-colors"
+              <template v-if="!infoEditing">
+                <div class="text-[11px] text-gray-500 uppercase tracking-wider mb-2">File Path</div>
+                <div
+                  class="bg-[#121214] border border-[#2c2c2e] p-2.5 rounded-lg flex items-center justify-between gap-3 text-xs"
                 >
-                  {{ copyStatus }}
-                </button>
+                  <div class="font-mono text-gray-400 select-all truncate flex-1">
+                    {{ infoSong?.path }}
+                  </div>
+                  <button
+                    @click="copyToClipboard(infoSong?.path)"
+                    class="shrink-0 bg-[#2c2c2e] hover:bg-[#3a3a3c] text-white px-3 py-1.5 rounded-md font-medium transition-colors"
+                  >
+                    {{ copyStatus }}
+                  </button>
+                </div>
+              </template>
+              <div v-else>
+                <p v-if="editError" class="text-xs text-red-400 mb-3 break-words">{{ editError }}</p>
+                <div class="flex items-center justify-end gap-2">
+                  <button
+                    @click="cancelEditInfo"
+                    :disabled="editSaving"
+                    class="bg-[#2c2c2e] hover:bg-[#3a3a3c] text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    @click="saveEditInfo"
+                    :disabled="editSaving"
+                    class="bg-[var(--accent-color)] text-black px-4 py-2 rounded-lg text-sm font-semibold transition-all hover:brightness-110 disabled:opacity-50"
+                  >
+                    {{ editSaving ? 'Saving…' : 'Save to File' }}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -1377,6 +1592,27 @@ onUnmounted(() => {
     opacity: 1;
     transform: translate(-50%, 0);
   }
+}
+
+/* Tag editor inputs (File Information modal edit mode). Accent focus ring via
+   color-mix — Tailwind v3 drops opacity modifiers on var() colors. */
+.tag-input {
+  width: 100%;
+  background: #121214;
+  border: 1px solid #2c2c2e;
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  color: #fff;
+  font-size: 0.875rem;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.tag-input:focus {
+  border-color: color-mix(in srgb, var(--accent-color) 60%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-color) 18%, transparent);
+}
+.tag-input::placeholder {
+  color: #4b5563;
 }
 
 /* Playlist song list reorder FLIP animation */

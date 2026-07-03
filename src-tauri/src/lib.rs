@@ -29,6 +29,7 @@ mod db;
 mod discord;
 mod lyrics;
 mod playlist_io;
+mod tray;
 #[cfg(target_os = "windows")]
 mod thumbbar;
 #[cfg(target_os = "windows")]
@@ -94,6 +95,48 @@ pub(crate) fn allow_root(app: &AppHandle, path: &str) {
 // (untrusted) webview from coercing the backend into reading arbitrary files.
 fn is_allowed_audio(app: &AppHandle, path: &Path) -> bool {
     is_audio_file(path) && app.asset_protocol_scope().is_allowed(path)
+}
+
+// Content fingerprint used to re-identify a track after it is moved or renamed
+// (so its stats/favorites/playlist memberships can be migrated, see
+// db_prune_missing): file size + MD5 over three sampled windows — head 64 KiB,
+// 32 KiB from the middle, tail 32 KiB. At most ~128 KiB of IO per file, yet two
+// different files only collide if they agree on size AND all three regions.
+// (MD5 is fine here — this is dedup/identity, not a security boundary.)
+pub(crate) fn compute_fingerprint(path: &Path) -> Option<String> {
+    use md5::{Digest, Md5};
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut f = fs::File::open(path).ok()?;
+    let len = f.metadata().ok()?.len();
+    let mut hasher = Md5::new();
+    hasher.update(len.to_le_bytes());
+
+    fn read_window(f: &mut fs::File, buf: &mut [u8], pos: u64, want: usize) -> Option<usize> {
+        f.seek(SeekFrom::Start(pos)).ok()?;
+        let mut taken = 0usize;
+        while taken < want {
+            let n = f.read(&mut buf[taken..want]).ok()?;
+            if n == 0 {
+                break;
+            }
+            taken += n;
+        }
+        Some(taken)
+    }
+
+    let mut buf = vec![0u8; 64 * 1024];
+    let head = read_window(&mut f, &mut buf, 0, 64 * 1024)?;
+    hasher.update(&buf[..head]);
+    // Middle + tail only add signal beyond what the head already covered.
+    if len > 64 * 1024 {
+        let mid = read_window(&mut f, &mut buf, len / 2, 32 * 1024)?;
+        hasher.update(&buf[..mid]);
+        let tail_start = len.saturating_sub(32 * 1024).max(64 * 1024);
+        let tail = read_window(&mut f, &mut buf, tail_start, 32 * 1024)?;
+        hasher.update(&buf[..tail]);
+    }
+    Some(format!("{len}:{:x}", hasher.finalize()))
 }
 
 // Extract metadata for a single file.
@@ -273,6 +316,220 @@ fn filter_existing(app: AppHandle, paths: Vec<String>) -> Vec<String> {
             is_allowed_audio(&app, pb) && pb.exists()
         })
         .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Tag editor: write metadata (and cover art) back into the audio file with
+// lofty, then re-index the row in SQLite. Playback never holds the file open
+// (build_decoder reads the whole file into memory), so editing the currently
+// playing track is safe.
+
+// Full form state from the edit modal. Empty string / None = remove that tag.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TagEdits {
+    title: String,
+    artist: String,
+    album: String,
+    genre: String,
+    year: Option<u32>,
+    track_number: Option<u32>,
+}
+
+// Load new cover-art bytes: must decode as a real image (this is also what
+// keeps the command from being abused as an arbitrary-file-embed primitive),
+// and formats without broad tag support (webp/bmp/…) are re-encoded to JPEG.
+fn load_cover_art(path: &Path) -> Result<(Vec<u8>, MimeType), String> {
+    const MAX_COVER_BYTES: u64 = 20 * 1024 * 1024;
+    let meta = fs::metadata(path).map_err(|e| e.to_string())?;
+    if meta.len() > MAX_COVER_BYTES {
+        return Err("Cover image is too large (max 20 MB)".to_string());
+    }
+    let data = fs::read(path).map_err(|e| e.to_string())?;
+    let format = image::guess_format(&data).map_err(|_| "Not a valid image file".to_string())?;
+    // Validate that the bytes really decode before embedding them.
+    let img = image::load_from_memory(&data).map_err(|_| "Not a valid image file".to_string())?;
+    match format {
+        image::ImageFormat::Jpeg => Ok((data, MimeType::Jpeg)),
+        image::ImageFormat::Png => Ok((data, MimeType::Png)),
+        _ => {
+            let mut buf = Vec::new();
+            image::DynamicImage::ImageRgb8(img.to_rgb8())
+                .write_to(&mut Cursor::new(&mut buf), image::ImageFormat::Jpeg)
+                .map_err(|e| format!("Failed to convert cover: {e}"))?;
+            Ok((buf, MimeType::Jpeg))
+        }
+    }
+}
+
+#[tauri::command]
+async fn write_track_tags(
+    app: AppHandle,
+    db: State<'_, db::Db>,
+    path: String,
+    edits: TagEdits,
+    cover_path: Option<String>,
+    remove_cover: bool,
+) -> Result<MusicTrack, String> {
+    use lofty::config::WriteOptions;
+    use lofty::picture::{Picture, PictureType};
+    use lofty::tag::Tag;
+
+    let path_buf = PathBuf::from(&path);
+    if !is_allowed_audio(&app, &path_buf) {
+        return Err("Path is not within an allowed music folder".to_string());
+    }
+
+    let (track, fingerprint) = tauri::async_runtime::spawn_blocking(
+        move || -> Result<(MusicTrack, Option<String>), String> {
+            let new_cover = match cover_path.as_deref() {
+                Some(p) => Some(load_cover_art(Path::new(p))?),
+                None => None,
+            };
+
+            let mut tagged_file = Probe::open(&path_buf)
+                .map_err(|e| e.to_string())?
+                .read()
+                .map_err(|e| e.to_string())?;
+            if tagged_file.primary_tag_mut().is_none() {
+                let tag_type = tagged_file.primary_tag_type();
+                tagged_file.insert_tag(Tag::new(tag_type));
+            }
+            let tag = tagged_file
+                .primary_tag_mut()
+                .ok_or("File format does not support tags")?;
+
+            let title = edits.title.trim();
+            if title.is_empty() {
+                tag.remove_title();
+            } else {
+                tag.set_title(title.to_string());
+            }
+            let artist = edits.artist.trim();
+            if artist.is_empty() {
+                tag.remove_artist();
+            } else {
+                tag.set_artist(artist.to_string());
+            }
+            let album = edits.album.trim();
+            if album.is_empty() {
+                tag.remove_album();
+            } else {
+                tag.set_album(album.to_string());
+            }
+            let genre = edits.genre.trim();
+            if genre.is_empty() {
+                tag.remove_genre();
+            } else {
+                tag.set_genre(genre.to_string());
+            }
+            match edits.year {
+                Some(y) => tag.set_year(y),
+                None => tag.remove_year(),
+            }
+            match edits.track_number {
+                Some(n) => tag.set_track(n),
+                None => tag.remove_track(),
+            }
+
+            if remove_cover || new_cover.is_some() {
+                while !tag.pictures().is_empty() {
+                    tag.remove_picture(0);
+                }
+            }
+            if let Some((data, mime)) = new_cover {
+                tag.push_picture(Picture::new_unchecked(
+                    PictureType::CoverFront,
+                    Some(mime),
+                    None,
+                    data,
+                ));
+            }
+
+            tagged_file
+                .save_to_path(&path_buf, WriteOptions::default())
+                .map_err(|e| format!("Failed to write tags: {e}"))?;
+
+            let track =
+                parse_metadata(&path_buf).ok_or("Failed to re-read file after writing tags")?;
+            // Content changed (and so did size/mtime) — refresh the fingerprint
+            // so moved-file detection keeps recognizing this file.
+            let fp = compute_fingerprint(&path_buf);
+            Ok((track, fp))
+        },
+    )
+    .await
+    .map_err(|e| format!("Tag write task failed: {e}"))??;
+
+    db::reindex_track(&db, &track, fingerprint.as_deref())?;
+    Ok(track)
+}
+
+// Small thumbnail preview (base64 data URL) of an image the user picked as new
+// cover art, so the edit modal can show it before saving. Same validation as
+// load_cover_art: the bytes must decode as an image.
+#[tauri::command]
+async fn preview_image(path: String) -> Result<String, String> {
+    let thumb = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<u8>, String> {
+        let (data, _) = load_cover_art(Path::new(&path))?;
+        make_thumbnail(&data).ok_or_else(|| "Failed to decode image".to_string())
+    })
+    .await
+    .map_err(|e| format!("Preview task failed: {e}"))??;
+    Ok(format!(
+        "data:image/jpeg;base64,{}",
+        general_purpose::STANDARD.encode(thumb)
+    ))
+}
+
+// ---------------------------------------------------------------------------
+// "Open with ts-music": files passed on the command line (file association)
+// are stashed here until the frontend is ready to consume them. The
+// single-instance hook appends the argv of any second launch and pings the
+// webview with `open-files-pending`.
+
+struct PendingOpenFiles(Mutex<Vec<String>>);
+
+fn collect_audio_args<I: IntoIterator<Item = String>>(args: I) -> Vec<String> {
+    args.into_iter()
+        .filter(|a| !a.starts_with('-'))
+        .map(PathBuf::from)
+        .filter(|p| p.is_file() && is_audio_file(p))
+        .map(|p| p.to_string_lossy().to_string())
+        .collect()
+}
+
+#[tauri::command]
+fn take_pending_open_files(app: AppHandle, state: State<PendingOpenFiles>) -> Vec<String> {
+    let files: Vec<String> = state.0.lock().drain(..).collect();
+    for f in &files {
+        // Grant streaming/cover access to each file individually — opening a
+        // song from Explorer must not widen the scope to its whole folder.
+        let _ = app.asset_protocol_scope().allow_file(Path::new(f));
+    }
+    files
+}
+
+// Parse metadata for audio files that live outside the library (opened via
+// file association). Nothing is imported into the DB; the frontend builds a
+// transient queue from the returned tracks.
+#[tauri::command]
+async fn probe_files(app: AppHandle, paths: Vec<String>) -> Result<Vec<MusicTrack>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut tracks = Vec::new();
+        for p in paths {
+            let pb = PathBuf::from(&p);
+            if pb.is_file() && is_audio_file(&pb) {
+                let _ = app.asset_protocol_scope().allow_file(&pb);
+                if let Some(t) = parse_metadata(&pb) {
+                    tracks.push(t);
+                }
+            }
+        }
+        Ok(tracks)
+    })
+    .await
+    .map_err(|e| format!("Probe task failed: {e}"))?
 }
 
 // Directory where downscaled cover thumbnails are cached on disk.
@@ -2883,12 +3140,45 @@ pub fn run() {
 
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default()
+        // Must be the FIRST plugin: a second launch (e.g. double-clicking an
+        // associated audio file in Explorer) focuses this instance and forwards
+        // its argv here instead of opening a second window that would fight
+        // over the SQLite database.
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            tray::show_main_window(app);
+            let files = collect_audio_args(argv.into_iter().skip(1));
+            if !files.is_empty() {
+                if let Some(st) = app.try_state::<PendingOpenFiles>() {
+                    st.0.lock().extend(files);
+                }
+                let _ = app.emit("open-files-pending", ());
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .manage(audio)
         .manage(discord::DiscordState::new())
+        .manage(tray::TrayState::new())
+        // Audio files passed to the very first launch (file association).
+        .manage(PendingOpenFiles(Mutex::new(collect_audio_args(
+            std::env::args().skip(1),
+        ))))
         .manage(FileWatcher {
             watcher: Mutex::new(None),
             evt_tx: fs_tx,
+        })
+        // Close-to-tray: while the setting is enabled, closing the main window
+        // hides it instead of quitting; Quit lives in the tray menu.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" {
+                    if let Some(st) = window.app_handle().try_state::<tray::TrayState>() {
+                        if st.close_to_tray() {
+                            api.prevent_close();
+                            let _ = window.hide();
+                        }
+                    }
+                }
+            }
         });
 
     #[cfg(target_os = "windows")]
@@ -2906,6 +3196,17 @@ pub fn run() {
             // can reach it via State<Db>.
             let database = db::init(_app.handle())?;
             _app.manage(database);
+
+            // Backfill content fingerprints for rows that predate the column,
+            // in the background. Delayed a bit so it never competes with the
+            // startup burst of queries.
+            {
+                let handle = _app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_secs(6));
+                    db::backfill_fingerprints(&handle);
+                });
+            }
 
             // Allow the cover-thumbnail cache dir through the asset protocol so
             // the webview can load cached covers by path (convertFileSrc) instead
@@ -2964,6 +3265,11 @@ pub fn run() {
             smtc_set_playback,
             player_show_in_folder,
             player_delete_file,
+            write_track_tags,
+            preview_image,
+            probe_files,
+            take_pending_open_files,
+            tray::set_close_to_tray,
             player_set_transition,
             player_set_normalization_settings,
             set_wasapi_exclusive,

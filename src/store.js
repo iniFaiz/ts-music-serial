@@ -121,6 +121,9 @@ export const store = reactive({
   // Discord Rich Presence: shows the current track as your Discord status.
   // The Application ID is hardcoded in the backend — the user only toggles this.
   discordEnabled: false,
+  // Close-to-tray: closing the window hides the app to the system tray instead
+  // of quitting (a tray icon appears while enabled). Off by default.
+  closeToTray: false,
   // Runtime cache of resolved album-art URLs for Discord, keyed by artist|album
   // (or artist|title). Not persisted; just avoids re-querying on play/pause.
   discordCoverCache: {},
@@ -286,6 +289,7 @@ export const store = reactive({
           crossfadeSecs: this.crossfadeSecs,
           wasapiExclusive: this.wasapiExclusive,
           discordEnabled: this.discordEnabled,
+          closeToTray: this.closeToTray,
           eqEnabled: this.eqEnabled,
           eqPreampDb: this.eqPreampDb,
           eqBands: [...this.eqBands],
@@ -351,6 +355,9 @@ export const store = reactive({
       this.libraryReady = true;
       this.bumpLibrary();
       await this.restoreState();
+      // If the app was launched by double-clicking an audio file, play it now —
+      // after restoreState so it overrides the restored (paused) session.
+      await this.consumePendingOpenFiles();
     } catch (e) {
       console.error('Failed to load library', e);
     }
@@ -422,6 +429,7 @@ export const store = reactive({
       if (typeof s.crossfadeSecs === 'number') this.crossfadeSecs = s.crossfadeSecs;
       if (typeof s.wasapiExclusive === 'boolean') this.wasapiExclusive = s.wasapiExclusive;
       if (typeof s.discordEnabled === 'boolean') this.discordEnabled = s.discordEnabled;
+      if (typeof s.closeToTray === 'boolean') this.closeToTray = s.closeToTray;
       if (typeof s.eqEnabled === 'boolean') this.eqEnabled = s.eqEnabled;
       if (typeof s.eqPreampDb === 'number') this.eqPreampDb = s.eqPreampDb;
       if (Array.isArray(s.eqBands) && s.eqBands.length === EQ_BAND_COUNT)
@@ -451,6 +459,11 @@ export const store = reactive({
     await invoke('set_wasapi_exclusive', { enabled: this.wasapiExclusive }).catch(() => {});
     if (this.discordEnabled) {
       invoke('discord_set_enabled', { enabled: true }).catch(() => {});
+    }
+    // Mirror the persisted close-to-tray setting into the backend (creates the
+    // tray icon when enabled; the backend default is off).
+    if (this.closeToTray) {
+      invoke('set_close_to_tray', { enabled: true }).catch(() => {});
     }
     this.syncEqualizer();
 
@@ -811,6 +824,69 @@ export const store = reactive({
       this.pendingAutoplay = this.isPlaying;
       this.currentSong = { ...this.currentSong };
     }
+  },
+
+  // ---- System tray ---------------------------------------------------------
+
+  // Toggle close-to-tray. The backend creates/removes the tray icon; while
+  // enabled, closing the window hides it instead of quitting.
+  setCloseToTray(v) {
+    this.closeToTray = !!v;
+    this.persistState();
+    invoke('set_close_to_tray', { enabled: this.closeToTray }).catch(() => {});
+  },
+
+  // ---- "Open with ts-music" (file association) -----------------------------
+
+  // Pull any audio files passed on the command line (first launch or forwarded
+  // from a second instance) and play them.
+  async consumePendingOpenFiles() {
+    let files = [];
+    try {
+      files = await invoke('take_pending_open_files');
+    } catch {
+      return;
+    }
+    await this.openExternalFiles(files);
+  },
+
+  // Play a list of file paths that may or may not be in the library. Library
+  // tracks come from the DB (so stats/favorites attach); the rest are probed
+  // for metadata without being imported. The opened files become the queue.
+  async openExternalFiles(paths) {
+    const list = (Array.isArray(paths) ? paths : [paths]).filter(Boolean);
+    if (list.length === 0) return;
+    try {
+      const inLib = await invoke('db_tracks_by_paths', { paths: list });
+      const known = new Map(inLib.map((t) => [t.path, t]));
+      const missing = list.filter((p) => !known.has(p));
+      if (missing.length) {
+        const probed = await invoke('probe_files', { paths: missing });
+        for (const t of probed) known.set(t.path, t);
+      }
+      const songs = list.map((p) => known.get(p)).filter(Boolean);
+      if (!songs.length) return;
+      this.playSong(songs[0], songs);
+      this.statusMessage =
+        songs.length === 1 ? `Playing ${songs[0].title}` : `Playing ${songs.length} files`;
+    } catch (e) {
+      console.error('Failed to open files', e);
+      this.statusMessage = `Error opening file: ${e}`;
+    }
+  },
+
+  // ---- Tag editor -----------------------------------------------------------
+
+  // Reflect freshly-written tags everywhere a copy of the track object lives
+  // (queue entries and the current song are clones, not references).
+  applyTrackUpdate(track) {
+    for (const s of this.queue) {
+      if (s.path === track.path) Object.assign(s, track);
+    }
+    if (this.currentSong && this.currentSong.path === track.path) {
+      Object.assign(this.currentSong, track);
+    }
+    this.bumpLibrary();
   },
 
   // ---- Discord Rich Presence ---------------------------------------------

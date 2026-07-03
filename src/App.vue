@@ -185,6 +185,7 @@ let unlistenDrop = null;
 // ---- Filesystem watcher → debounced library refresh ----
 let unlistenLibraryChanged = null;
 let unlistenExclusiveErr = null;
+let unlistenOpenFiles = null;
 let refreshTimer = null;
 
 const scrollContainer = ref(null);
@@ -335,6 +336,15 @@ onMounted(async () => {
     // watcher best-effort
   }
 
+  // A second app launch (double-clicked audio file) forwarded its files here.
+  try {
+    unlistenOpenFiles = await listen('open-files-pending', () => {
+      store.consumePendingOpenFiles();
+    });
+  } catch {
+    // best-effort
+  }
+
   // Surface WASAPI-exclusive fallback so the user knows it dropped to shared mode.
   try {
     unlistenExclusiveErr = await listen('wasapi-exclusive-error', (e) => {
@@ -360,6 +370,7 @@ onUnmounted(() => {
   if (unlistenDrop) unlistenDrop();
   if (unlistenLibraryChanged) unlistenLibraryChanged();
   if (unlistenExclusiveErr) unlistenExclusiveErr();
+  if (unlistenOpenFiles) unlistenOpenFiles();
   if (refreshTimer) clearTimeout(refreshTimer);
   // Cleanup sidebar playlist drag
   document.removeEventListener('mousemove', onSidebarPlMouseMove);

@@ -1,3 +1,4 @@
+import { ref } from 'vue';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 
 // Shared, module-level cover cache.
@@ -82,4 +83,18 @@ export async function loadCover(path) {
 export function clearCoverCache() {
   cache.clear();
   inflight.clear();
+}
+
+// Bumped whenever a cover is invalidated; CoverImage watches it so already-
+// mounted instances re-resolve (their `path` prop doesn't change on tag edits,
+// so the normal path watcher wouldn't refire).
+export const coverVersion = ref(0);
+
+// Drop one track's cached cover (after the tag editor rewrote the file). The
+// next resolve re-runs get_track_cover_path, whose on-disk key includes
+// mtime+size — so the thumbnail regenerates from the new embedded art.
+export function invalidateCover(path) {
+  cache.delete(path);
+  inflight.delete(path);
+  coverVersion.value++;
 }

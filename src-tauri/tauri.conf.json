@@ -43,6 +43,15 @@
     ],
     "publisher": "TS Music",
     "shortDescription": "A music player built with Tauri",
+    "fileAssociations": [
+      {
+        "ext": ["mp3", "flac", "wav", "m4a", "ogg", "aac"],
+        "name": "ts-music audio",
+        "description": "Audio file",
+        "role": "Viewer",
+        "mimeType": "audio/mpeg"
+      }
+    ],
     "windows": {
       "nsis": {
         "installMode": "both",

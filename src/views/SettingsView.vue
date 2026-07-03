@@ -295,6 +295,24 @@
       </p>
     </Section>
 
+    <!-- System Tray -->
+    <Section
+      title="System Tray"
+      description="Keep music playing when the window is closed."
+    >
+      <ToggleInt
+        :modelValue="store.closeToTray"
+        @update:modelValue="(v) => store.setCloseToTray(v)"
+        label="Close to tray"
+      />
+      <p class="text-xs text-gray-500 mt-2 leading-relaxed">
+        While enabled, a tray icon appears and closing the window hides ts-music
+        to the system tray instead of quitting — playback keeps running. Click
+        the tray icon to bring the window back, or use its menu to control
+        playback and quit.
+      </p>
+    </Section>
+
     <!-- Keyboard Shortcuts -->
     <Section
       title="Keyboard Shortcuts"

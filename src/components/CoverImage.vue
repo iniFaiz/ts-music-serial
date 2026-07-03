@@ -1,6 +1,6 @@
 <script setup>
 import { ref, watch } from 'vue';
-import { loadCover, getCachedCover, hasCachedCover } from '../coverCache';
+import { loadCover, getCachedCover, hasCachedCover, coverVersion } from '../coverCache';
 
 const props = defineProps({
   path: { type: String, required: true },
@@ -31,6 +31,9 @@ async function resolveCover(path) {
 }
 
 watch(() => props.path, resolveCover, { immediate: true });
+// Re-resolve after a cover invalidation (tag editor changed the embedded art)
+// — the path prop stays the same, so the watcher above wouldn't refire.
+watch(coverVersion, () => resolveCover(props.path));
 </script>
 
 <template>

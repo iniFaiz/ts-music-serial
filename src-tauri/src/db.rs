@@ -16,10 +16,11 @@
 // writes anyway and our reads are short. The connection is opened once at startup
 // and managed as Tauri state.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use parking_lot::Mutex;
+use rayon::prelude::*;
 use rusqlite::{params, params_from_iter, Connection, Row};
 use serde::Serialize;
 use serde_json::Value;
@@ -90,7 +91,29 @@ pub fn init(app: &AppHandle) -> Result<Db, String> {
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let conn = Connection::open(dir.join("library.db")).map_err(|e| e.to_string())?;
     conn.execute_batch(SCHEMA).map_err(|e| e.to_string())?;
+    migrate(&conn)?;
     Ok(Db(Mutex::new(conn), DbCache::default()))
+}
+
+// Additive schema migrations for databases created before a column existed.
+// (CREATE TABLE IF NOT EXISTS never alters an existing table.)
+fn migrate(conn: &Connection) -> Result<(), String> {
+    let has_fingerprint: bool = conn
+        .prepare("SELECT 1 FROM pragma_table_info('tracks') WHERE name = 'fingerprint'")
+        .and_then(|mut s| s.exists([]))
+        .map_err(|e| e.to_string())?;
+    if !has_fingerprint {
+        // Content fingerprint (size + sampled hash, see crate::compute_fingerprint)
+        // used to re-identify a track after its file is moved/renamed so its
+        // stats/favorites/playlist memberships survive. '' = hashing failed
+        // (unreadable file) — tried, don't retry; NULL = not yet computed.
+        conn.execute_batch(
+            "ALTER TABLE tracks ADD COLUMN fingerprint TEXT;
+             CREATE INDEX IF NOT EXISTS idx_tracks_fp ON tracks(fingerprint);",
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 const SCHEMA: &str = r#"
@@ -331,6 +354,34 @@ fn now_ms() -> i64 {
 // rows are refreshed but not counted, matching the old "new tracks" status text).
 #[tauri::command]
 pub fn db_upsert_tracks(db: State<Db>, tracks: Vec<MusicTrack>) -> Result<usize, String> {
+    // Compute content fingerprints for tracks that don't have one yet (new files,
+    // plus pre-fingerprint rows getting backfilled on rescan). Hashing reads
+    // ~128 KiB per file, so it happens in parallel and OUTSIDE the connection
+    // lock — the UI keeps querying while a big import is being hashed.
+    let need_fp: Vec<String> = {
+        let conn = db.0.lock();
+        let have_fp: HashSet<String> = conn
+            .prepare("SELECT path FROM tracks WHERE fingerprint IS NOT NULL")
+            .map_err(|e| e.to_string())?
+            .query_map([], |r| r.get::<_, String>(0))
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+        tracks
+            .iter()
+            .filter(|t| !have_fp.contains(&t.path))
+            .map(|t| t.path.clone())
+            .collect()
+    };
+    let fps: HashMap<String, String> = need_fp
+        .into_par_iter()
+        .map(|p| {
+            // '' = tried but unreadable, so the backfill doesn't retry forever.
+            let fp = crate::compute_fingerprint(Path::new(&p)).unwrap_or_default();
+            (p, fp)
+        })
+        .collect();
+
     let mut conn = db.0.lock();
     let tx = conn.transaction().map_err(|e| e.to_string())?;
     let mut new_count = 0usize;
@@ -340,15 +391,16 @@ pub fn db_upsert_tracks(db: State<Db>, tracks: Vec<MusicTrack>) -> Result<usize,
             .map_err(|e| e.to_string())?;
         let mut upsert = tx
             .prepare(
-                "INSERT INTO tracks (path, title, artist, album, genre, duration_secs, date_added, year, track_number, has_cover, sample_rate, bit_depth, track_gain_db, track_peak)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
+                "INSERT INTO tracks (path, title, artist, album, genre, duration_secs, date_added, year, track_number, has_cover, sample_rate, bit_depth, track_gain_db, track_peak, fingerprint)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
                  ON CONFLICT(path) DO UPDATE SET
                    title=excluded.title, artist=excluded.artist, album=excluded.album,
                    genre=excluded.genre, duration_secs=excluded.duration_secs,
                    date_added=excluded.date_added, year=excluded.year,
                    track_number=excluded.track_number, has_cover=excluded.has_cover,
                    sample_rate=excluded.sample_rate, bit_depth=excluded.bit_depth,
-                   track_gain_db=excluded.track_gain_db, track_peak=excluded.track_peak",
+                   track_gain_db=excluded.track_gain_db, track_peak=excluded.track_peak,
+                   fingerprint=COALESCE(excluded.fingerprint, fingerprint)",
             )
             .map_err(|e| e.to_string())?;
         for t in &tracks {
@@ -371,6 +423,7 @@ pub fn db_upsert_tracks(db: State<Db>, tracks: Vec<MusicTrack>) -> Result<usize,
                     t.bit_depth.map(|v| v as i64),
                     t.track_gain_db.map(|v| v as f64),
                     t.track_peak.map(|v| v as f64),
+                    fps.get(&t.path),
                 ])
                 .map_err(|e| e.to_string())?;
             if is_new {
@@ -400,29 +453,173 @@ pub fn db_remove_paths(db: State<Db>, paths: Vec<String>) -> Result<(), String> 
     Ok(())
 }
 
-// Delete every track whose file no longer exists on disk. Returns the removed
-// paths so the frontend can drop them from the queue / current playback.
+// Remove every track whose file no longer exists on disk. Before deleting,
+// try to re-identify each missing file among the surviving rows by content
+// fingerprint — a moved/renamed file shows up as "old path gone + new path
+// just scanned" — and migrate its play stats, favorite flag, playlist
+// memberships and original date_added onto the new row instead of losing them.
+// Returns the removed (old) paths so the frontend can drop them from the queue.
 #[tauri::command]
 pub fn db_prune_missing(db: State<Db>) -> Result<Vec<String>, String> {
-    let conn = db.0.lock();
-    let all: Vec<String> = {
+    let mut conn = db.0.lock();
+    let all: Vec<(String, Option<String>)> = {
         let mut stmt = conn
-            .prepare("SELECT path FROM tracks")
+            .prepare("SELECT path, fingerprint FROM tracks")
             .map_err(|e| e.to_string())?;
         let rows = stmt
-            .query_map([], |r| r.get::<_, String>(0))
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)))
             .map_err(|e| e.to_string())?;
         rows.filter_map(|r| r.ok()).collect()
     };
-    let gone: Vec<String> = all
+    let (gone, alive): (Vec<_>, Vec<_>) = all
         .into_iter()
-        .filter(|p| !Path::new(p).exists())
-        .collect();
-    for p in &gone {
-        conn.execute("DELETE FROM tracks WHERE path = ?1", params![p])
-            .map_err(|e| e.to_string())?;
+        .partition(|(p, _)| !Path::new(p).exists());
+    if gone.is_empty() {
+        return Ok(Vec::new());
     }
-    Ok(gone)
+
+    // Surviving rows grouped by fingerprint. Vec because duplicate files share a
+    // fingerprint — pop() hands each missing copy a distinct surviving copy.
+    let mut by_fp: HashMap<String, Vec<String>> = HashMap::new();
+    for (p, fp) in alive {
+        if let Some(f) = fp.filter(|f| !f.is_empty()) {
+            by_fp.entry(f).or_default().push(p);
+        }
+    }
+
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    for (old_path, fp) in &gone {
+        let target = fp
+            .as_ref()
+            .filter(|f| !f.is_empty())
+            .and_then(|f| by_fp.get_mut(f))
+            .and_then(|v| v.pop());
+        if let Some(new_path) = target {
+            // Merge play stats into the new path (fresh rows normally have none,
+            // but a pre-existing row is summed rather than clobbered).
+            tx.execute(
+                "INSERT INTO stats (path, play_count, last_played, skip_count)
+                 SELECT ?1, play_count, last_played, skip_count FROM stats WHERE path = ?2
+                 ON CONFLICT(path) DO UPDATE SET
+                   play_count  = stats.play_count + excluded.play_count,
+                   last_played = MAX(stats.last_played, excluded.last_played),
+                   skip_count  = stats.skip_count + excluded.skip_count",
+                params![new_path, old_path],
+            )
+            .map_err(|e| e.to_string())?;
+            tx.execute(
+                "UPDATE OR IGNORE favorites SET path = ?1 WHERE path = ?2",
+                params![new_path, old_path],
+            )
+            .map_err(|e| e.to_string())?;
+            tx.execute(
+                "UPDATE OR IGNORE playlist_items SET path = ?1 WHERE path = ?2",
+                params![new_path, old_path],
+            )
+            .map_err(|e| e.to_string())?;
+            // Keep the original library-add date so a moved file doesn't reappear
+            // under "Recently Added".
+            tx.execute(
+                "UPDATE tracks SET date_added = MIN(
+                   date_added,
+                   COALESCE((SELECT date_added FROM tracks WHERE path = ?2), date_added)
+                 ) WHERE path = ?1",
+                params![new_path, old_path],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        // Drop the stale row; cascade like db_remove_paths so nothing dangles.
+        // (Migrated rows already moved their stats/favorites/playlist items away;
+        // any leftovers here belong to genuinely deleted files.)
+        for sql in [
+            "DELETE FROM tracks WHERE path = ?1",
+            "DELETE FROM stats WHERE path = ?1",
+            "DELETE FROM favorites WHERE path = ?1",
+            "DELETE FROM playlist_items WHERE path = ?1",
+        ] {
+            tx.execute(sql, params![old_path]).map_err(|e| e.to_string())?;
+        }
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(gone.into_iter().map(|(p, _)| p).collect())
+}
+
+// Overwrite one track row with freshly re-parsed metadata (used after the
+// in-app tag editor writes a file). date_added is intentionally left alone —
+// editing tags must not resurface the track under "Recently Added". The FTS
+// index follows via the tracks_au trigger. A path not in the library (e.g. a
+// file opened via Explorer but never imported) simply updates 0 rows.
+pub(crate) fn reindex_track(db: &Db, t: &MusicTrack, fingerprint: Option<&str>) -> Result<(), String> {
+    let conn = db.0.lock();
+    conn.execute(
+        "UPDATE tracks SET
+           title=?2, artist=?3, album=?4, genre=?5, duration_secs=?6, year=?7,
+           track_number=?8, has_cover=?9, sample_rate=?10, bit_depth=?11,
+           track_gain_db=?12, track_peak=?13,
+           fingerprint=COALESCE(?14, fingerprint)
+         WHERE path=?1",
+        params![
+            t.path,
+            t.title,
+            t.artist,
+            t.album,
+            t.genre,
+            t.duration_secs as i64,
+            t.year.map(|v| v as i64),
+            t.track_number.map(|v| v as i64),
+            t.has_cover as i64,
+            t.sample_rate.map(|v| v as i64),
+            t.bit_depth.map(|v| v as i64),
+            t.track_gain_db.map(|v| v as f64),
+            t.track_peak.map(|v| v as f64),
+            fingerprint,
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// One-time background backfill for libraries that predate the fingerprint
+// column. Batches keep each lock hold short and the hashing itself runs with
+// the lock released, so the UI never stalls behind it.
+pub(crate) fn backfill_fingerprints(app: &AppHandle) {
+    loop {
+        let batch: Vec<String> = {
+            let db = app.state::<Db>();
+            let conn = db.0.lock();
+            let Ok(mut stmt) =
+                conn.prepare("SELECT path FROM tracks WHERE fingerprint IS NULL LIMIT 48")
+            else {
+                return;
+            };
+            let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(0)) else {
+                return;
+            };
+            rows.filter_map(|r| r.ok()).collect()
+        };
+        if batch.is_empty() {
+            return;
+        }
+        let fps: Vec<(String, String)> = batch
+            .into_par_iter()
+            .map(|p| {
+                // '' = unreadable; recorded so this row isn't re-selected forever.
+                let fp = crate::compute_fingerprint(Path::new(&p)).unwrap_or_default();
+                (p, fp)
+            })
+            .collect();
+        {
+            let db = app.state::<Db>();
+            let conn = db.0.lock();
+            for (p, fp) in fps {
+                let _ = conn.execute(
+                    "UPDATE tracks SET fingerprint = ?2 WHERE path = ?1 AND fingerprint IS NULL",
+                    params![p, fp],
+                );
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    }
 }
 
 // Delete every track whose path lives under `root` (case-insensitive, slash-
