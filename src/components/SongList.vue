@@ -787,7 +787,7 @@ onUnmounted(() => {
   <div ref="songListContainer" class="w-full text-left text-sm 2xl:text-sm px-6 pb-12">
     <!-- Header -->
     <div
-      class="grid gap-4 text-[var(--text-secondary)] text-xs font-medium uppercase tracking-wide border-b border-[var(--border-color)] py-2 mb-2 sticky top-0 bg-[var(--app-bg)]/95 backdrop-blur-xl z-10 select-none grid-cols-[20px_3fr_2fr_2fr_120px] 2xl:grid-cols-[30px_4fr_3fr_3fr_120px]"
+      class="grid gap-4 text-[var(--text-secondary)] text-xs font-medium uppercase tracking-wide border-b border-[var(--border-color)] py-2 mb-2 sticky top-0 bg-[var(--app-bg)] z-10 select-none grid-cols-[20px_3fr_2fr_2fr_120px] 2xl:grid-cols-[30px_4fr_3fr_3fr_120px]"
     >
       <div class="text-center flex justify-center items-center h-full">
         <input
