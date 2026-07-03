@@ -807,7 +807,7 @@ const navigatePlaylist = (pl, event) => {
             :title="compact ? 'Add Folder' : null"
           >
             <div
-              class="flex items-center justify-center w-5 h-5 rounded bg-[var(--accent-color)]/10 group-hover:bg-[var(--accent-color)]/20 transition-colors"
+              class="flex items-center justify-center w-5 h-5 rounded [background:color-mix(in_srgb,var(--accent-color)_10%,transparent)] group-hover:[background:color-mix(in_srgb,var(--accent-color)_20%,transparent)] transition-colors"
             >
               <svg
                 v-if="store.loading"

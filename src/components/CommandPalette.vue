@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, watch, nextTick } from 'vue';
+import { ref, computed, watch, nextTick, onUnmounted } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { useRouter } from 'vue-router';
 import { store } from '../store';
@@ -17,6 +17,7 @@ const albums = ref([]);
 const artists = ref([]);
 const activeIndex = ref(0);
 const inputEl = ref(null);
+const listEl = ref(null);
 let debounce = null;
 
 const playlists = computed(() => {
@@ -52,6 +53,9 @@ async function runSearch() {
     albums.value = (al || []).slice(0, 4);
     artists.value = (ar || []).slice(0, 4);
     activeIndex.value = 0;
+    nextTick(() => {
+      if (listEl.value) listEl.value.scrollTop = 0;
+    });
   } catch (e) {
     console.error('Command palette search failed', e);
   }
@@ -71,15 +75,35 @@ watch(
       albums.value = [];
       artists.value = [];
       activeIndex.value = 0;
+      // Capture-phase window listener: arrows/Enter keep working even if focus
+      // leaves the input, and App.vue's global volume/seek shortcuts (also on
+      // window) never see these keys while the palette is open.
+      window.addEventListener('keydown', onKeydown, true);
       nextTick(() => inputEl.value && inputEl.value.focus());
+    } else {
+      window.removeEventListener('keydown', onKeydown, true);
     }
   }
 );
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', onKeydown, true);
+});
+
+// Keep the active row visible when arrowing past the edge of the scroll area.
+function scrollActiveIntoView() {
+  nextTick(() => {
+    if (!listEl.value) return;
+    const el = listEl.value.querySelector(`[data-cmdk-idx="${activeIndex.value}"]`);
+    if (el) el.scrollIntoView({ block: 'nearest' });
+  });
+}
 
 function move(delta) {
   const n = items.value.length;
   if (n === 0) return;
   activeIndex.value = (activeIndex.value + delta + n) % n;
+  scrollActiveIntoView();
 }
 
 function activate(item) {
@@ -101,15 +125,19 @@ function activate(item) {
 function onKeydown(e) {
   if (e.key === 'ArrowDown') {
     e.preventDefault();
+    e.stopPropagation();
     move(1);
   } else if (e.key === 'ArrowUp') {
     e.preventDefault();
+    e.stopPropagation();
     move(-1);
   } else if (e.key === 'Enter') {
     e.preventDefault();
+    e.stopPropagation();
     activate(items.value[activeIndex.value]);
   } else if (e.key === 'Escape') {
     e.preventDefault();
+    e.stopPropagation();
     store.closeCommandPalette();
   }
 }
@@ -151,7 +179,6 @@ function isGroupStart(i) {
             <input
               ref="inputEl"
               v-model="query"
-              @keydown="onKeydown"
               type="text"
               placeholder="Search songs, albums, artists, playlists…"
               class="flex-1 bg-transparent text-white text-[15px] focus:outline-none placeholder-gray-600"
@@ -160,18 +187,19 @@ function isGroupStart(i) {
           </div>
 
           <!-- Results -->
-          <div class="max-h-[52vh] overflow-y-auto py-2">
+          <div ref="listEl" class="max-h-[52vh] overflow-y-auto py-2 px-2">
             <template v-if="items.length">
               <template v-for="(item, i) in items" :key="item.type + '-' + i">
                 <div
                   v-if="isGroupStart(i)"
-                  class="px-4 pt-2 pb-1 text-[11px] font-semibold uppercase tracking-wider text-gray-500"
+                  class="px-2.5 pt-2 pb-1 text-[11px] font-semibold uppercase tracking-wider text-gray-500"
                 >
                   {{ groupLabel[item.type] }}
                 </div>
                 <button
-                  class="w-full flex items-center gap-3 px-4 py-2 text-left transition-colors"
-                  :class="i === activeIndex ? 'bg-[var(--accent-color)]/15' : 'hover:bg-white/5'"
+                  :data-cmdk-idx="i"
+                  class="w-full flex items-center gap-3 px-2.5 py-2 text-left rounded-lg transition-colors duration-75"
+                  :class="i === activeIndex ? 'cmdk-active' : 'hover:bg-white/5'"
                   @click="activate(item)"
                   @mousemove="activeIndex = i"
                 >
@@ -237,7 +265,14 @@ function isGroupStart(i) {
                     </div>
                   </div>
                   <span
-                    v-if="item.type === 'song'"
+                    v-if="i === activeIndex"
+                    class="shrink-0 flex items-center gap-1.5 text-[11px] font-medium text-[var(--accent-color)]"
+                  >
+                    {{ item.type === 'song' ? 'Play' : 'Open' }}
+                    <kbd class="cmdk-kbd">↵</kbd>
+                  </span>
+                  <span
+                    v-else-if="item.type === 'song'"
                     class="text-[11px] text-gray-600 shrink-0"
                     >Play</span
                   >
@@ -258,6 +293,26 @@ function isGroupStart(i) {
 </template>
 
 <style scoped>
+/* Active-row highlight. Tailwind v3 silently drops opacity modifiers on var()
+   arbitrary colors (`bg-[var(--accent-color)]/15` emits no rule), so the tint
+   lives here as color-mix with a plain rgba fallback. */
+.cmdk-active {
+  background: rgba(255, 255, 255, 0.09);
+  background: color-mix(in srgb, var(--accent-color) 16%, transparent);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-color) 30%, transparent);
+}
+
+.cmdk-kbd {
+  font-size: 10px;
+  line-height: 1;
+  padding: 3px 5px;
+  border-radius: 4px;
+  border: 1px solid;
+  border-color: color-mix(in srgb, var(--accent-color) 45%, transparent);
+  background: color-mix(in srgb, var(--accent-color) 12%, transparent);
+}
+
 .cmdk-enter-active,
 .cmdk-leave-active {
   transition: opacity 0.18s ease;

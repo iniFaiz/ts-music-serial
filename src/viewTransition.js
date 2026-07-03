@@ -131,8 +131,9 @@ export async function navigateWithTransition(
   }
 }
 
-// Find a list cover by its data-cover-key (set on album/artist grid items). Used
-// on back-navigation to morph the detail cover into the matching list cover.
+// Find a list cover by its data-cover-key (set on album/artist grid items),
+// data-artist-key, or data-album-key (set on song rows/cards). Used on
+// back-navigation to morph the detail cover into the matching list cover.
 // Iterates instead of using an attribute selector so odd characters in names
 // (quotes, brackets) can't break the query.
 function getRouteKey(route) {
@@ -159,21 +160,113 @@ function artistKeysMatch(artistKeyStr, targetArtist) {
   return parts.includes(lowerTarget) || artistKeyStr.trim().toLowerCase() === lowerTarget;
 }
 
-function findCoverByKey(key) {
+// What kind of key the route we're morphing to/from carries, so song rows —
+// which expose both an artist key and an album key — only match against the
+// right one (an album named after its artist must not cross-match).
+function getRouteKind(route) {
+  if (!route) return 'cover';
+  if (route.name === 'AlbumDetail') return 'album';
+  if (route.name === 'ArtistDetail') return 'artist';
+  return 'cover';
+}
+
+function datasetMatchesKey(ds, key, kind) {
+  if (key == null || !ds) return false;
+  const k = String(key);
+  if (ds.coverKey === k) return true;
+  if (kind === 'album') return ds.albumKey === k;
+  if (kind === 'artist') return artistKeysMatch(ds.artistKey, k);
+  return false;
+}
+
+function findCoverByKey(key, kind = 'cover') {
   if (key == null) return null;
-  // Match either a cover key (albums/playlists/collections) or an artist key
-  // (song cards/rows) — the latter lets artist back/forward navigation morph
-  // even when opened from a page whose items only carry data-artist-key.
-  const nodes = document.querySelectorAll('[data-cover-key], [data-artist-key]');
+  const nodes = document.querySelectorAll(
+    '[data-cover-key], [data-artist-key], [data-album-key]'
+  );
   for (const n of nodes) {
-    if (
-      n.dataset.coverKey === String(key) ||
-      artistKeysMatch(n.dataset.artistKey, String(key))
-    ) {
+    if (datasetMatchesKey(n.dataset, key, kind)) {
       return n.querySelector('.cover-image') || n;
     }
   }
   return null;
+}
+
+// Song rows are painted with `content-visibility: auto`. During a back
+// navigation the (keep-alive) list has only just been reattached while the View
+// Transition API has rendering paused, so the browser can still consider the
+// row "skipped" when it snapshots the new state — which silently drops the
+// row's view-transition-name and downgrades the morph to a plain fade. Force
+// the tagged element's row renderable for the duration of the transition.
+function forceRowRenderable(el) {
+  const row = el ? el.closest('.song-row') : null;
+  if (!row) return () => {};
+  const prev = row.style.getPropertyValue('content-visibility') || '';
+  row.style.setProperty('content-visibility', 'visible');
+  return () => {
+    if (prev) {
+      row.style.setProperty('content-visibility', prev);
+    } else {
+      row.style.removeProperty('content-visibility');
+    }
+  };
+}
+
+// Locate the element the detail cover should morph back into: the exact cover
+// the user clicked if it's still around (keep-alive pages), else any element
+// carrying a matching key. Pages that aren't kept alive (playlists, collections,
+// favorites) are recreated on back and load their song rows asynchronously, so
+// the target may not exist yet when the route settles — poll briefly for it.
+// Timers and microtasks still run while the View Transition API has rendering
+// paused, so this just holds the old snapshot a few extra frames. Once key-
+// carrying elements exist but none match (list rendered, item genuinely absent
+// or virtualized out of the window), give up quickly so a no-morph back doesn't
+// feel sluggish.
+async function waitForMorphTarget(key, kind) {
+  const deadline = performance.now() + 400;
+  let triesAfterRendered = 2;
+  for (;;) {
+    let el = document.querySelector('[data-last-clicked="true"]');
+    if (el) {
+      const parent =
+        el.closest('[data-cover-key], [data-artist-key], [data-album-key]') || el;
+      if (!datasetMatchesKey(parent.dataset, key, kind)) {
+        el = null; // Mismatch, fall back to the generic finder
+      }
+    }
+    if (!el) el = findCoverByKey(key, kind);
+    if (el) return el;
+
+    const rendered = document.querySelector(
+      '[data-cover-key], [data-artist-key], [data-album-key]'
+    );
+    if ((rendered && triesAfterRendered-- <= 0) || performance.now() > deadline) {
+      return null;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    await nextTick();
+  }
+}
+
+// Temporarily strip `name` from every element that carries it inline, except
+// `keep`. Playlist/collection pages put shared-cover on their own header cover;
+// two elements with the same view-transition-name in one capture make the
+// browser skip the whole transition (an abrupt cut), so the tagged element must
+// be the only owner. Returns a restore function.
+function claimSharedName(keep, name) {
+  const stripped = [];
+  const nodes = document.querySelectorAll('[style*="view-transition-name"]');
+  for (const n of nodes) {
+    if (n === keep) continue;
+    const vt = (n.style.getPropertyValue('view-transition-name') || '').trim();
+    if (vt === name) {
+      stripped.push(n);
+      n.style.removeProperty('view-transition-name');
+    }
+  }
+  return () => {
+    for (const n of stripped) n.style.setProperty('view-transition-name', name);
+  };
 }
 
 // Back-navigation counterpart of navigateWithTransition. The detail cover already
@@ -183,6 +276,7 @@ function findCoverByKey(key) {
 export async function goBackWithTransition(router, name = 'shared-cover') {
   const from = router.currentRoute.value;
   const key = getRouteKey(from);
+  const kind = getRouteKind(from);
 
   if (typeof document === 'undefined' || !document.startViewTransition) {
     router.back();
@@ -209,6 +303,8 @@ export async function goBackWithTransition(router, name = 'shared-cover') {
 
   document.documentElement.classList.add(transitionClass);
   let tagged = null;
+  let restoreRow = () => {};
+  let releaseName = () => {};
   const transition = document.startViewTransition(async () => {
     // Wait until the route change actually settles (keep-alive restores the list
     // DOM) before snapshotting, with a timeout so a no-op back can't hang.
@@ -222,30 +318,13 @@ export async function goBackWithTransition(router, name = 'shared-cover') {
     });
     await nextTick();
 
-    // 1. Try to find the exact last clicked cover element
-    let el = document.querySelector('[data-last-clicked="true"]');
-    if (el) {
-      const parent = el.closest('[data-cover-key], [data-artist-key]') || el;
-      const coverKey = parent.dataset.coverKey ? String(parent.dataset.coverKey) : '';
-      const artistKey = parent.dataset.artistKey ? String(parent.dataset.artistKey) : '';
-      const matches =
-        coverKey === String(key) ||
-        artistKey === String(key) ||
-        artistKeysMatch(artistKey, String(key));
-      if (!matches) {
-        el = null; // Mismatch, clear to fall back to generic finder
-      }
-    }
-
-    // 2. If no exact match, search using findCoverByKey
-    if (!el) {
-      el = findCoverByKey(key);
-    }
-
+    const el = await waitForMorphTarget(key, kind);
     if (el) {
       tagged = el;
       tagged.dataset._prevVt = el.style.getPropertyValue('view-transition-name') || '';
       el.style.setProperty('view-transition-name', name);
+      releaseName = claimSharedName(el, name);
+      restoreRow = forceRowRenderable(el);
     }
   });
 
@@ -260,6 +339,8 @@ export async function goBackWithTransition(router, name = 'shared-cover') {
       }
       delete tagged.dataset._prevVt;
     }
+    releaseName();
+    restoreRow();
     document.documentElement.classList.remove(transitionClass);
   }
 }
@@ -315,6 +396,7 @@ export async function goForwardWithTransition(router, name = 'shared-cover') {
 
   let transitionClass = 'to-album-transition';
   let key = null;
+  let kind = 'cover';
   try {
     const resolved = router.resolve(forwardPath);
     if (resolved) {
@@ -322,17 +404,22 @@ export async function goForwardWithTransition(router, name = 'shared-cover') {
         transitionClass = 'to-artist-transition';
       }
       key = getRouteKey(resolved);
+      kind = getRouteKind(resolved);
     }
   } catch {
     // ignore
   }
 
   document.documentElement.classList.add(transitionClass);
-  let tagged = findCoverByKey(key);
+  let tagged = findCoverByKey(key, kind);
   let prevVt = '';
+  let restoreRow = () => {};
+  let releaseName = () => {};
   if (tagged) {
     prevVt = tagged.style.getPropertyValue('view-transition-name') || '';
     tagged.style.setProperty('view-transition-name', name);
+    releaseName = claimSharedName(tagged, name);
+    restoreRow = forceRowRenderable(tagged);
   }
 
   const transition = document.startViewTransition(async () => {
@@ -357,6 +444,8 @@ export async function goForwardWithTransition(router, name = 'shared-cover') {
         tagged.style.removeProperty('view-transition-name');
       }
     }
+    releaseName();
+    restoreRow();
     document.documentElement.classList.remove(transitionClass);
   }
 }

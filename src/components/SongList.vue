@@ -745,6 +745,7 @@ onUnmounted(() => {
         :key="song.path"
         :data-song-path="song.path"
         :data-artist-key="song.artist"
+        :data-album-key="song.album"
         :data-pl-drag-idx="canReorder ? index : undefined"
         @click="plDragDidReorder ? null : (selectMode ? toggleSelectSong(song) : playSong(song))"
         @contextmenu.prevent="openMenu(song, $event)"

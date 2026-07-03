@@ -201,7 +201,7 @@ const cancel = () => store.closeSmartModal();
         <!-- Header -->
         <div class="flex items-center justify-between px-6 py-4 border-b border-[#2c2c2e] shrink-0">
           <div class="flex items-center gap-2.5">
-            <div class="w-8 h-8 rounded-lg bg-[var(--accent-color)]/15 flex items-center justify-center text-[var(--accent-color)]">
+            <div class="w-8 h-8 rounded-lg [background:color-mix(in_srgb,var(--accent-color)_15%,transparent)] flex items-center justify-center text-[var(--accent-color)]">
               <svg xmlns="http://www.w3.org/2000/svg" width="17" height="17" viewBox="0 0 24 24" fill="currentColor" stroke="none">
                 <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
               </svg>
