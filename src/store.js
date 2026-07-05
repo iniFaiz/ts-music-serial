@@ -480,7 +480,8 @@ export const store = reactive({
     // Rehydrate the saved queue from the DB (order preserved by db_tracks_by_paths).
     if (Array.isArray(pb.queuePaths) && pb.queuePaths.length) {
       try {
-        this.queue = await invoke('db_tracks_by_paths', { paths: pb.queuePaths });
+        const tracks = await invoke('db_tracks_by_paths', { paths: pb.queuePaths });
+        this.queue = tracks.map((s) => ({ ...s, queueId: Math.random().toString(36).substring(2, 9) }));
       } catch {
         this.queue = [];
       }
@@ -495,7 +496,12 @@ export const store = reactive({
         this.pendingAutoplay = false;
         this.currentTime = pb.positionSecs || 0;
         this.isPlaying = false;
-        this.currentSong = song;
+        const qIdx = this.queue.findIndex((s) => s.path === song.path);
+        if (qIdx !== -1) {
+          this.currentSong = { ...this.queue[qIdx] };
+        } else {
+          this.currentSong = { ...song, queueId: Math.random().toString(36).substring(2, 9) };
+        }
       }
     }
   },
@@ -1165,18 +1171,57 @@ export const store = reactive({
   playSong(song, newQueue = null) {
     this.preselectedNextSong = null;
     if (newQueue && newQueue.length > 0) {
-      this.queue = [...newQueue];
+      this.queue = newQueue.map((s) => ({
+        ...s,
+        queueId: s.queueId || Math.random().toString(36).substring(2, 9)
+      }));
+      let idx = -1;
+      if (song) {
+        idx = newQueue.indexOf(song);
+        if (idx === -1) {
+          idx = this.queue.findIndex((s) => s.path === song.path);
+        }
+      }
+      if (idx === -1) idx = 0;
+      this.currentSong = { ...this.queue[idx] };
     } else if (this.queue.length === 0) {
-      // No explicit queue: start one with just this track (views normally pass
-      // the visible list; autoplay/next then extends it from the DB).
-      this.queue = song ? [{ ...song }] : [];
+      // No explicit queue: start one with just this track
+      if (song) {
+        const entry = { ...song, queueId: song.queueId || Math.random().toString(36).substring(2, 9) };
+        this.queue = [entry];
+        this.currentSong = { ...entry };
+      } else {
+        this.queue = [];
+        this.currentSong = null;
+      }
+    } else {
+      // Keep existing queue, but play this song. Try to find/match it.
+      let idx = -1;
+      if (song) {
+        if (song.queueId) {
+          idx = this.queue.findIndex((s) => s.queueId === song.queueId);
+        }
+        if (idx === -1) {
+          idx = this.queue.findIndex((s) => s.path === song.path);
+        }
+      }
+      if (idx !== -1) {
+        if (!this.queue[idx].queueId) {
+          this.queue[idx].queueId = Math.random().toString(36).substring(2, 9);
+        }
+        this.currentSong = { ...this.queue[idx] };
+      } else if (song) {
+        const entry = { ...song, queueId: song.queueId || Math.random().toString(36).substring(2, 9) };
+        this.currentSong = { ...entry };
+      } else {
+        this.currentSong = null;
+      }
     }
     // Preserve pendingSeek if already set (e.g. by onSeekCommit on a finished track)
     if (this.pendingSeek === null) {
       this.pendingSeek = null;
     }
     this.pendingAutoplay = true;
-    this.currentSong = song ? { ...song } : null;
     this.isPlaying = true;
     this.playbackFinished = false;
     this.persistState();
@@ -1186,15 +1231,27 @@ export const store = reactive({
 
   currentQueueIndex() {
     if (!this.currentSong) return -1;
+    if (this.currentSong.queueId) {
+      const idx = this.queue.findIndex((s) => s.queueId === this.currentSong.queueId);
+      if (idx !== -1) return idx;
+    }
     return this.queue.findIndex((s) => s.path === this.currentSong.path);
   },
 
   // Insert right after the current track so it plays next. Clone so the same
   // song queued twice stays a distinct entry (stable, unique key for the UI).
   playNext(song) {
-    const entry = { ...song };
+    const entry = { ...song, queueId: song.queueId || Math.random().toString(36).substring(2, 9) };
     if (this.queue.length === 0) {
-      this.queue = this.currentSong ? [this.currentSong, entry] : [entry];
+      if (this.currentSong) {
+        if (!this.currentSong.queueId) {
+          this.currentSong.queueId = Math.random().toString(36).substring(2, 9);
+        }
+        const curr = { ...this.currentSong };
+        this.queue = [curr, entry];
+      } else {
+        this.queue = [entry];
+      }
     } else {
       const idx = this.currentQueueIndex();
       this.queue.splice(idx + 1, 0, entry);
@@ -1204,9 +1261,17 @@ export const store = reactive({
   },
 
   playNextSongs(songs) {
-    const list = songs.map((s) => ({ ...s }));
+    const list = songs.map((s) => ({ ...s, queueId: s.queueId || Math.random().toString(36).substring(2, 9) }));
     if (this.queue.length === 0) {
-      this.queue = this.currentSong ? [this.currentSong, ...list] : [...list];
+      if (this.currentSong) {
+        if (!this.currentSong.queueId) {
+          this.currentSong.queueId = Math.random().toString(36).substring(2, 9);
+        }
+        const curr = { ...this.currentSong };
+        this.queue = [curr, ...list];
+      } else {
+        this.queue = [...list];
+      }
     } else {
       const idx = this.currentQueueIndex();
       this.queue.splice(idx + 1, 0, ...list);
@@ -1216,9 +1281,15 @@ export const store = reactive({
   },
 
   addToQueue(songs) {
-    const list = (Array.isArray(songs) ? songs : [songs]).map((s) => ({ ...s }));
+    const list = (Array.isArray(songs) ? songs : [songs]).map((s) => ({
+      ...s,
+      queueId: s.queueId || Math.random().toString(36).substring(2, 9)
+    }));
     if (this.queue.length === 0 && this.currentSong) {
-      this.queue = [this.currentSong];
+      if (!this.currentSong.queueId) {
+        this.currentSong.queueId = Math.random().toString(36).substring(2, 9);
+      }
+      this.queue = [{ ...this.currentSong }];
     }
     this.queue.push(...list);
     this.preselectedNextSong = null;
@@ -1249,6 +1320,9 @@ export const store = reactive({
       this.pendingSeek = null;
     }
     this.pendingAutoplay = true;
+    if (!this.queue[index].queueId) {
+      this.queue[index].queueId = Math.random().toString(36).substring(2, 9);
+    }
     this.currentSong = { ...this.queue[index] };
     this.isPlaying = true;
     this.playbackFinished = false;
@@ -1256,7 +1330,14 @@ export const store = reactive({
   },
 
   clearQueue() {
-    this.queue = this.currentSong ? [this.currentSong] : [];
+    if (this.currentSong) {
+      if (!this.currentSong.queueId) {
+        this.currentSong.queueId = Math.random().toString(36).substring(2, 9);
+      }
+      this.queue = [{ ...this.currentSong }];
+    } else {
+      this.queue = [];
+    }
     this.preselectedNextSong = null;
     this.persistState();
   },
@@ -1821,13 +1902,22 @@ export const store = reactive({
     }
 
     let nextIndex;
-    const currentIndex = this.queue.findIndex((s) => s.path === this.currentSong.path);
+    const currentIndex = this.currentQueueIndex();
 
     if (this.preselectedNextSong) {
-      const idx = this.queue.findIndex((s) => s.path === this.preselectedNextSong.path);
+      let idx = -1;
+      if (this.preselectedNextSong.queueId) {
+        idx = this.queue.findIndex((s) => s.queueId === this.preselectedNextSong.queueId);
+      }
+      if (idx === -1) {
+        idx = this.queue.findIndex((s) => s.path === this.preselectedNextSong.path);
+      }
       if (idx >= 0) {
         nextIndex = idx;
       } else if (this.autoplayMode) {
+        if (!this.preselectedNextSong.queueId) {
+          this.preselectedNextSong.queueId = Math.random().toString(36).substring(2, 9);
+        }
         this.queue.push(this.preselectedNextSong);
         nextIndex = this.queue.length - 1;
       }
@@ -1861,7 +1951,8 @@ export const store = reactive({
           this.isPlaying = false;
           return;
         }
-        this.queue.push({ ...song });
+        const entry = { ...song, queueId: Math.random().toString(36).substring(2, 9) };
+        this.queue.push(entry);
         nextIndex = this.queue.length - 1;
       } else {
         if (userTriggered) {
@@ -1896,7 +1987,7 @@ export const store = reactive({
     }
 
     let prevIndex;
-    const currentIndex = this.queue.findIndex((s) => s.path === this.currentSong.path);
+    const currentIndex = this.currentQueueIndex();
 
     if (this.shuffleMode) {
       prevIndex = Math.floor(Math.random() * this.queue.length);
@@ -2124,7 +2215,7 @@ export const store = reactive({
     }
 
     if (this.shuffleMode) {
-      const currentIndex = this.queue.findIndex((s) => s.path === this.currentSong.path);
+      const currentIndex = this.currentQueueIndex();
       let nextIndex;
       if (this.queue.length > 1) {
         let tries = 0;
@@ -2138,7 +2229,7 @@ export const store = reactive({
       return this.preselectedNextSong.path;
     }
 
-    const i = this.queue.findIndex((s) => s.path === this.currentSong.path);
+    const i = this.currentQueueIndex();
     if (i < 0) return null;
     let n = i + 1;
     if (n >= this.queue.length) {
@@ -2152,7 +2243,7 @@ export const store = reactive({
           this._prefetchingRandom = true;
           this.pickRandomSong()
             .then((song) => {
-              if (song) this.preselectedNextSong = { ...song };
+              if (song) this.preselectedNextSong = { ...song, queueId: Math.random().toString(36).substring(2, 9) };
             })
             .finally(() => {
               this._prefetchingRandom = false;

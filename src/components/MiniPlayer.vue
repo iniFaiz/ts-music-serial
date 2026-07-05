@@ -369,7 +369,11 @@ const queueListEl = ref(null);
 const dragIndex = ref(-1);
 const overIndex = ref(-1);
 
-const isCurrent = (s) => store.currentSong && store.currentSong.path === s.path;
+const isCurrent = (s) =>
+  store.currentSong &&
+  (store.currentSong.queueId && s.queueId
+    ? store.currentSong.queueId === s.queueId
+    : store.currentSong.path === s.path);
 
 const keyMap = new WeakMap();
 let keySeq = 0;

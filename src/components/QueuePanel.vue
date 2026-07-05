@@ -85,7 +85,11 @@ onUnmounted(() => {
   document.body.style.cursor = '';
 });
 
-const isCurrent = (song) => store.currentSong && store.currentSong.path === song.path;
+const isCurrent = (song) =>
+  store.currentSong &&
+  (store.currentSong.queueId && song.queueId
+    ? store.currentSong.queueId === song.queueId
+    : store.currentSong.path === song.path);
 
 const navigateToArtist = (artistName) => {
   if (!artistName || artistName === 'Unknown Artist') return;
