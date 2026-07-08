@@ -424,10 +424,60 @@
         </div>
         <button
           @click="confirmReset"
-          class="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-md transition-colors text-sm font-medium shrink-0"
+          :disabled="store.resettingLibrary"
+          class="px-4 py-2 rounded-md transition-colors text-sm font-medium shrink-0 flex items-center gap-2"
+          :class="store.resettingLibrary
+            ? 'bg-red-600/60 text-white/80 cursor-not-allowed'
+            : 'bg-red-600 hover:bg-red-700 text-white'"
         >
-          Reset Library
+          <svg
+            v-if="store.resettingLibrary"
+            class="w-4 h-4 animate-spin"
+            xmlns="http://www.w3.org/2000/svg"
+            fill="none"
+            viewBox="0 0 24 24"
+          >
+            <circle
+              class="opacity-25"
+              cx="12"
+              cy="12"
+              r="10"
+              stroke="currentColor"
+              stroke-width="4"
+            ></circle>
+            <path
+              class="opacity-75"
+              fill="currentColor"
+              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+            ></path>
+          </svg>
+          {{ store.resettingLibrary ? 'Resetting...' : 'Reset Library' }}
         </button>
+      </div>
+      <div v-if="store.resettingLibrary" class="mt-2">
+        <span class="text-xs text-gray-400 flex items-center gap-2">
+          <svg
+            class="w-3 h-3 animate-spin text-[var(--accent-color)]"
+            xmlns="http://www.w3.org/2000/svg"
+            fill="none"
+            viewBox="0 0 24 24"
+          >
+            <circle
+              class="opacity-25"
+              cx="12"
+              cy="12"
+              r="10"
+              stroke="currentColor"
+              stroke-width="4"
+            ></circle>
+            <path
+              class="opacity-75"
+              fill="currentColor"
+              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+            ></path>
+          </svg>
+          {{ store.statusMessage }}
+        </span>
       </div>
     </Section>
   </div>
@@ -437,7 +487,6 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { store } from '../store';
 import { invoke } from '@tauri-apps/api/core';
-import { confirm } from '@tauri-apps/plugin-dialog';
 import Section from '../components/settings/Section.vue';
 import ToggleInt from '../components/settings/ToggleInt.vue';
 import SelectInt from '../components/settings/SelectInt.vue';
@@ -544,20 +593,28 @@ function onDeviceChange(value) {
   store.setOutputDevice(value || null);
 }
 
-async function confirmRemoveRoot(root) {
-  const yes = await confirm(`Remove "${root}" and its tracks from the library?`, {
+function confirmRemoveRoot(root) {
+  store.showConfirm({
     title: 'Remove Folder',
-    kind: 'warning',
+    message: `Remove "${root}" and its tracks from the library?`,
+    confirmText: 'Remove',
+    cancelText: 'Cancel',
+    onConfirm: () => {
+      store.removeRoot(root);
+    },
   });
-  if (yes) store.removeRoot(root);
 }
 
-const confirmReset = async () => {
-  const yes = await confirm(
-    'Are you sure you want to delete all library data? This cannot be undone.',
-    { title: 'Reset Library', kind: 'warning' }
-  );
-  if (yes) store.resetLibrary();
+const confirmReset = () => {
+  store.showConfirm({
+    title: 'Reset Library',
+    message: 'Are you sure you want to delete all library data? This cannot be undone.',
+    confirmText: 'Reset Library',
+    cancelText: 'Cancel',
+    onConfirm: () => {
+      store.resetLibrary();
+    },
+  });
 };
 
 onMounted(() => {

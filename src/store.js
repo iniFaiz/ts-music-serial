@@ -71,6 +71,7 @@ export const store = reactive({
   libraryReady: false,
   roots: [],
   loading: false,
+  resettingLibrary: false,
   statusMessage: 'Ready to scan',
   selectedPath: '',
   searchQuery: '',
@@ -507,6 +508,8 @@ export const store = reactive({
   },
 
   async resetLibrary() {
+    this.resettingLibrary = true;
+    this.statusMessage = 'Resetting library...';
     try {
       await invoke('db_reset');
     } catch (e) {
@@ -523,7 +526,7 @@ export const store = reactive({
     this.queue = [];
     this.isPlaying = false;
     this.scanComplete = false;
-    this.statusMessage = 'Library reset';
+    this.statusMessage = 'Clearing caches...';
     this.bumpLibrary();
     try {
       await invoke('player_stop');
@@ -538,6 +541,8 @@ export const store = reactive({
     } catch (e) {
       console.error('Failed to clear legacy caches', e);
     }
+    this.statusMessage = 'Library reset';
+    this.resettingLibrary = false;
   },
 
   async selectAndScan() {
@@ -1434,6 +1439,34 @@ export const store = reactive({
     this.playlistModal.pendingSongPath = null;
     this.playlistModal.mode = 'create';
     this.playlistModal.playlistId = null;
+  },
+
+  // Custom confirmation modal (global overlay).
+  confirmModal: {
+    open: false,
+    title: '',
+    message: '',
+    confirmText: 'Confirm',
+    cancelText: 'Cancel',
+    onConfirm: null,
+  },
+
+  showConfirm(options) {
+    this.confirmModal.title = options.title || 'Confirm';
+    this.confirmModal.message = options.message || '';
+    this.confirmModal.confirmText = options.confirmText || 'Confirm';
+    this.confirmModal.cancelText = options.cancelText || 'Cancel';
+    this.confirmModal.onConfirm = options.onConfirm || null;
+    this.confirmModal.open = true;
+  },
+
+  closeConfirm() {
+    this.confirmModal.open = false;
+    this.confirmModal.title = '';
+    this.confirmModal.message = '';
+    this.confirmModal.confirmText = 'Confirm';
+    this.confirmModal.cancelText = 'Cancel';
+    this.confirmModal.onConfirm = null;
   },
 
   async deletePlaylist(id) {

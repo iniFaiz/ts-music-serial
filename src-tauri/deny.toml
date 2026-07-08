@@ -21,6 +21,9 @@ wildcards = "warn"
 # Only crates.io and the standard registry — reject unknown registries / git deps.
 unknown-registry = "deny"
 unknown-git = "deny"
+allow-git = [
+    "https://github.com/ebarnard/rust-plist",
+]
 
 [licenses]
 version = 2

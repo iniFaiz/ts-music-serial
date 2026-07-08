@@ -8,6 +8,7 @@ import PlayerControls from './components/PlayerControls.vue';
 import QueuePanel from './components/QueuePanel.vue';
 import PlaylistCreateModal from './components/PlaylistCreateModal.vue';
 import SmartPlaylistModal from './components/SmartPlaylistModal.vue';
+import ConfirmationModal from './components/ConfirmationModal.vue';
 import CommandPalette from './components/CommandPalette.vue';
 import PlaylistCover from './components/PlaylistCover.vue';
 import TitleBar from './components/TitleBar.vue';
@@ -899,6 +900,9 @@ const navigatePlaylist = (pl, event) => {
 
     <!-- Smart-playlist rule editor (global overlay) -->
     <SmartPlaylistModal />
+
+    <!-- Custom confirmation modal (global overlay) -->
+    <ConfirmationModal />
 
     <!-- Command palette (global overlay, Ctrl+K) -->
     <CommandPalette />

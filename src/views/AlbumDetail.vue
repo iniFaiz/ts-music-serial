@@ -79,13 +79,19 @@ const playLastAlbum = () => {
   }
 };
 
-const deleteAlbumFromLibrary = async () => {
-  if (confirm(`Are you sure you want to remove the album "${albumName}" from library?`)) {
-    for (const song of albumSongs.value) {
-      await store.removeSongFromLibrary(song.path);
-    }
-    router.push('/albums');
-  }
+const deleteAlbumFromLibrary = () => {
+  store.showConfirm({
+    title: 'Remove Album',
+    message: `Are you sure you want to remove the album "${albumName}" from library?`,
+    confirmText: 'Remove',
+    cancelText: 'Cancel',
+    onConfirm: async () => {
+      for (const song of albumSongs.value) {
+        await store.removeSongFromLibrary(song.path);
+      }
+      router.push('/albums');
+    },
+  });
 };
 
 const goToArtist = () => {
