@@ -62,7 +62,9 @@ onUnmounted(() => {
         class="group/head inline-flex items-center gap-1.5 text-left"
         :class="to ? 'cursor-pointer' : ''"
       >
-        <h2 class="text-xl font-bold tracking-tight text-white group-hover/head:text-[var(--accent-color)] transition-colors">
+        <h2
+          class="text-xl font-bold tracking-tight text-white group-hover/head:text-[var(--accent-color)] transition-colors"
+        >
           {{ title }}
         </h2>
         <svg
@@ -83,14 +85,26 @@ onUnmounted(() => {
       </component>
 
       <!-- Arrow controls (fade in on shelf hover) -->
-      <div class="flex items-center gap-2 opacity-0 group-hover/shelf:opacity-100 transition-opacity duration-200">
+      <div
+        class="flex items-center gap-2 opacity-0 group-hover/shelf:opacity-100 transition-opacity duration-200"
+      >
         <button
           @click="scrollBy(-1)"
           :disabled="!canLeft"
           class="h-7 w-7 rounded-full bg-[#2a2a2a] hover:bg-[#3a3a3a] text-white flex items-center justify-center transition disabled:opacity-30 disabled:cursor-default"
           title="Scroll left"
         >
-          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.5"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
             <polyline points="15 18 9 12 15 6" />
           </svg>
         </button>
@@ -100,7 +114,17 @@ onUnmounted(() => {
           class="h-7 w-7 rounded-full bg-[#2a2a2a] hover:bg-[#3a3a3a] text-white flex items-center justify-center transition disabled:opacity-30 disabled:cursor-default"
           title="Scroll right"
         >
-          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.5"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
             <polyline points="9 18 15 12 9 6" />
           </svg>
         </button>
@@ -108,7 +132,11 @@ onUnmounted(() => {
     </div>
     <p v-if="subtitle" class="text-sm text-gray-500 -mt-3 mb-4 px-8">{{ subtitle }}</p>
 
-    <div ref="scroller" @scroll="updateArrows" class="flex gap-5 overflow-x-auto px-8 pb-2 shelf-row">
+    <div
+      ref="scroller"
+      @scroll="updateArrows"
+      class="flex gap-5 overflow-x-auto px-8 pb-2 shelf-row"
+    >
       <slot />
     </div>
   </section>

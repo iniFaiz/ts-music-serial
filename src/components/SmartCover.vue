@@ -22,7 +22,10 @@ const props = defineProps({
 });
 
 const colors = computed(() => {
-  const parts = (props.color || '').split(',').map((c) => c.trim()).filter(Boolean);
+  const parts = (props.color || '')
+    .split(',')
+    .map((c) => c.trim())
+    .filter(Boolean);
   if (parts.length >= 2) return parts;
   // Deterministic hue from the title so untinted cards stay stable.
   const s = props.title || '';
@@ -43,11 +46,23 @@ const gradient = computed(
   >
     <!-- Custom cover image + legibility scrim -->
     <template v-if="cover">
-      <img :src="cover" class="absolute inset-0 w-full h-full object-cover" alt="" draggable="false" />
+      <img
+        :src="cover"
+        class="absolute inset-0 w-full h-full object-cover"
+        alt=""
+        draggable="false"
+      />
       <div
         v-if="topLabel || (showTitle && title) || subtitle"
         class="absolute inset-0"
-        style="background: linear-gradient(to top, rgba(0,0,0,0.65), rgba(0,0,0,0.05) 55%, rgba(0,0,0,0.25))"
+        style="
+          background: linear-gradient(
+            to top,
+            rgba(0, 0, 0, 0.65),
+            rgba(0, 0, 0, 0.05) 55%,
+            rgba(0, 0, 0, 0.25)
+          );
+        "
       ></div>
     </template>
 
@@ -55,7 +70,13 @@ const gradient = computed(
     <div
       v-if="!cover"
       class="absolute inset-0 opacity-40"
-      style="background: radial-gradient(120% 80% at 100% 0%, rgba(255,255,255,0.35), transparent 60%)"
+      style="
+        background: radial-gradient(
+          120% 80% at 100% 0%,
+          rgba(255, 255, 255, 0.35),
+          transparent 60%
+        );
+      "
     ></div>
     <svg
       v-if="icon && !cover"
@@ -100,27 +121,45 @@ const gradient = computed(
       </template>
       <template v-else-if="icon === 'radio'">
         <circle cx="12" cy="12" r="2" />
-        <path d="M4.9 19.1a10 10 0 0 1 0-14.2M7.8 16.2a6 6 0 0 1 0-8.4M16.2 7.8a6 6 0 0 1 0 8.4M19.1 4.9a10 10 0 0 1 0 14.2" />
+        <path
+          d="M4.9 19.1a10 10 0 0 1 0-14.2M7.8 16.2a6 6 0 0 1 0-8.4M16.2 7.8a6 6 0 0 1 0 8.4M19.1 4.9a10 10 0 0 1 0 14.2"
+        />
       </template>
       <template v-else-if="icon === 'bolt'">
-        <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" fill="currentColor" stroke="none" />
+        <polygon
+          points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"
+          fill="currentColor"
+          stroke="none"
+        />
       </template>
       <template v-else>
         <!-- sparkles (default) -->
-        <path d="M12 3l1.8 4.7L18.5 9l-4.7 1.8L12 15l-1.8-4.2L5.5 9l4.7-1.3L12 3z" fill="currentColor" stroke="none" />
-        <path d="M19 14l.9 2.3L22 17l-2.1.7L19 20l-.9-2.3L16 17l2.1-.7L19 14z" fill="currentColor" stroke="none" />
+        <path
+          d="M12 3l1.8 4.7L18.5 9l-4.7 1.8L12 15l-1.8-4.2L5.5 9l4.7-1.3L12 3z"
+          fill="currentColor"
+          stroke="none"
+        />
+        <path
+          d="M19 14l.9 2.3L22 17l-2.1.7L19 20l-.9-2.3L16 17l2.1-.7L19 14z"
+          fill="currentColor"
+          stroke="none"
+        />
       </template>
     </svg>
 
     <!-- Eyebrow -->
     <div v-if="topLabel" class="relative px-4 pt-3.5">
-      <span class="text-[10px] font-bold uppercase tracking-[0.14em] text-white/80">{{ topLabel }}</span>
+      <span class="text-[10px] font-bold uppercase tracking-[0.14em] text-white/80">{{
+        topLabel
+      }}</span>
     </div>
     <div v-else class="relative"></div>
 
     <!-- Big title -->
     <div v-if="showTitle" class="relative px-4 flex-1 flex items-center">
-      <span class="text-white font-extrabold leading-[1.02] tracking-tight drop-shadow text-2xl xl:text-3xl break-words">
+      <span
+        class="text-white font-extrabold leading-[1.02] tracking-tight drop-shadow text-2xl xl:text-3xl break-words"
+      >
         {{ title }}
       </span>
     </div>

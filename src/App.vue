@@ -431,7 +431,12 @@ const onSidebarPlMouseMove = (e) => {
 };
 
 const onSidebarPlMouseUp = () => {
-  if (sidebarPlDragActive.value && sidebarPlDragIndex.value !== -1 && sidebarPlOverIndex.value !== -1 && sidebarPlDragIndex.value !== sidebarPlOverIndex.value) {
+  if (
+    sidebarPlDragActive.value &&
+    sidebarPlDragIndex.value !== -1 &&
+    sidebarPlOverIndex.value !== -1 &&
+    sidebarPlDragIndex.value !== sidebarPlOverIndex.value
+  ) {
     store.movePlaylistOrder(sidebarPlDragIndex.value, sidebarPlOverIndex.value);
   }
   sidebarPlDragIndex.value = -1;
@@ -461,11 +466,13 @@ const navigatePlaylist = (pl, event) => {
     sidebarPlDragDidReorder = false;
     return;
   }
-  const coverEl = event.currentTarget.querySelector('.h-7') || event.currentTarget.querySelector('img') || event.currentTarget.firstElementChild;
+  const coverEl =
+    event.currentTarget.querySelector('.h-7') ||
+    event.currentTarget.querySelector('img') ||
+    event.currentTarget.firstElementChild;
   const path = store.isSmart(pl) ? '/smart/' + pl.id : '/playlists/' + pl.id;
   navigateWithTransition(() => router.push(path), coverEl, 'shared-cover', 'to-album-transition');
 };
-
 </script>
 
 <template>
@@ -480,7 +487,10 @@ const navigatePlaylist = (pl, event) => {
       <nav
         class="bg-[var(--sidebar-bg)] border-r border-[var(--border-color)] flex flex-col shrink-0 pt-4 pb-4 gap-5 transition-[width] duration-200 ease-out"
         :class="compact ? 'w-16 px-2' : 'w-64 px-4'"
-        @click="store.queuePanelOpen = false; store.lyricsPanelOpen = false"
+        @click="
+          store.queuePanelOpen = false;
+          store.lyricsPanelOpen = false;
+        "
       >
         <!-- Search -->
         <div v-if="!compact" class="relative">
@@ -757,49 +767,55 @@ const navigatePlaylist = (pl, event) => {
             </router-link>
 
             <TransitionGroup name="sidebar-pl" tag="div">
-            <router-link
-              v-for="(pl, plIdx) in store.playlists"
-              :key="pl.id"
-              :data-sidebar-pl-idx="plIdx"
-              :to="store.isSmart(pl) ? '/smart/' + pl.id : '/playlists/' + pl.id"
-              active-class="bg-[#282828] text-white"
-              class="flex items-center rounded-md text-sm text-[var(--text-secondary)] hover:text-white hover:bg-[#282828] transition-colors"
-              :class="[
-                compact ? 'justify-center py-1.5' : 'gap-3 px-2 py-1.5',
-                {
-                  'opacity-30': plIdx === sidebarPlDragIndex,
-                  'sidebar-pl-drop-above': sidebarPlOverIndex === plIdx && sidebarPlDragIndex !== plIdx && sidebarPlDragIndex > plIdx,
-                  'sidebar-pl-drop-below': sidebarPlOverIndex === plIdx && sidebarPlDragIndex !== plIdx && sidebarPlDragIndex < plIdx,
-                }
-              ]"
-              :title="compact ? pl.name : null"
-              draggable="false"
-              @dragstart.prevent
-              @mousedown="onSidebarPlMouseDown(plIdx, $event)"
-              @click.prevent="navigatePlaylist(pl, $event)"
-            >
-              <PlaylistCover
-                :name="pl.name"
-                :cover="pl.cover"
-                :size="28"
-                className="h-7 w-7 rounded shrink-0"
-              />
-              <span v-if="!compact" class="truncate flex-1 flex items-center gap-1.5 min-w-0">
-                <span class="truncate">{{ pl.name }}</span>
-                <svg
-                  v-if="store.isSmart(pl)"
-                  xmlns="http://www.w3.org/2000/svg"
-                  width="10"
-                  height="10"
-                  viewBox="0 0 24 24"
-                  fill="currentColor"
-                  stroke="none"
-                  class="text-[var(--accent-color)] shrink-0 opacity-80"
-                >
-                  <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
-                </svg>
-              </span>
-            </router-link>
+              <router-link
+                v-for="(pl, plIdx) in store.playlists"
+                :key="pl.id"
+                :data-sidebar-pl-idx="plIdx"
+                :to="store.isSmart(pl) ? '/smart/' + pl.id : '/playlists/' + pl.id"
+                active-class="bg-[#282828] text-white"
+                class="flex items-center rounded-md text-sm text-[var(--text-secondary)] hover:text-white hover:bg-[#282828] transition-colors"
+                :class="[
+                  compact ? 'justify-center py-1.5' : 'gap-3 px-2 py-1.5',
+                  {
+                    'opacity-30': plIdx === sidebarPlDragIndex,
+                    'sidebar-pl-drop-above':
+                      sidebarPlOverIndex === plIdx &&
+                      sidebarPlDragIndex !== plIdx &&
+                      sidebarPlDragIndex > plIdx,
+                    'sidebar-pl-drop-below':
+                      sidebarPlOverIndex === plIdx &&
+                      sidebarPlDragIndex !== plIdx &&
+                      sidebarPlDragIndex < plIdx,
+                  },
+                ]"
+                :title="compact ? pl.name : null"
+                draggable="false"
+                @dragstart.prevent
+                @mousedown="onSidebarPlMouseDown(plIdx, $event)"
+                @click.prevent="navigatePlaylist(pl, $event)"
+              >
+                <PlaylistCover
+                  :name="pl.name"
+                  :cover="pl.cover"
+                  :size="28"
+                  className="h-7 w-7 rounded shrink-0"
+                />
+                <span v-if="!compact" class="truncate flex-1 flex items-center gap-1.5 min-w-0">
+                  <span class="truncate">{{ pl.name }}</span>
+                  <svg
+                    v-if="store.isSmart(pl)"
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="10"
+                    height="10"
+                    viewBox="0 0 24 24"
+                    fill="currentColor"
+                    stroke="none"
+                    class="text-[var(--accent-color)] shrink-0 opacity-80"
+                  >
+                    <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+                  </svg>
+                </span>
+              </router-link>
             </TransitionGroup>
             <div
               v-if="store.playlists.length === 0 && !compact"
@@ -877,7 +893,10 @@ const navigatePlaylist = (pl, event) => {
           <div
             ref="scrollContainer"
             class="flex-1 overflow-auto scroll-smooth"
-            @click="store.queuePanelOpen = false; store.lyricsPanelOpen = false"
+            @click="
+              store.queuePanelOpen = false;
+              store.lyricsPanelOpen = false;
+            "
           >
             <router-view v-slot="{ Component }">
               <keep-alive :include="['HomeView', 'SongsView', 'AlbumsView', 'ArtistsView']">

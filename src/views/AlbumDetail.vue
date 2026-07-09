@@ -30,10 +30,9 @@ onUnmounted(() => {
 });
 
 // Album tracks, ordered by track number in SQL.
-const { data: albumSongs } = useQuery(
-  () => invoke('db_album_tracks', { album: albumName }),
-  { initial: [] }
-);
+const { data: albumSongs } = useQuery(() => invoke('db_album_tracks', { album: albumName }), {
+  initial: [],
+});
 
 const albumInfo = computed(() => {
   if (albumSongs.value.length === 0) return {};

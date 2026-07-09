@@ -113,9 +113,7 @@ const viewEnd = ref(60);
 let scrollParentEl = null;
 let scrollRafPending = false;
 
-const virtualize = computed(
-  () => !canReorder.value && sortedSongs.value.length > VIRT_THRESHOLD,
-);
+const virtualize = computed(() => !canReorder.value && sortedSongs.value.length > VIRT_THRESHOLD);
 
 // Rows to actually render, each carrying its real index in the full list so the
 // track number / current-song highlight stay correct. Destructured in the
@@ -204,10 +202,11 @@ const onScrollOrResize = () => {
 // Re-window when the list content or the windowing eligibility changes.
 watch(
   () => [sortedSongs.value.length, virtualize.value],
-  () => nextTick(() => {
-    measureRowPitch();
-    updateWindow();
-  }),
+  () =>
+    nextTick(() => {
+      measureRowPitch();
+      updateWindow();
+    })
 );
 
 const playSong = (song) => {
@@ -266,7 +265,12 @@ const onPlMouseMove = (e) => {
 };
 
 const onPlMouseUp = () => {
-  if (plDragActive.value && plDragIndex.value !== -1 && plOverIndex.value !== -1 && plDragIndex.value !== plOverIndex.value) {
+  if (
+    plDragActive.value &&
+    plDragIndex.value !== -1 &&
+    plOverIndex.value !== -1 &&
+    plDragIndex.value !== plOverIndex.value
+  ) {
     if (props.isFavorites) {
       store.moveInFavorites(plDragIndex.value, plOverIndex.value);
     } else {
@@ -844,15 +848,17 @@ onUnmounted(() => {
         :data-artist-key="song.artist"
         :data-album-key="song.album"
         :data-pl-drag-idx="canReorder ? index : undefined"
-        @click="plDragDidReorder ? null : (selectMode ? toggleSelectSong(song) : playSong(song))"
+        @click="plDragDidReorder ? null : selectMode ? toggleSelectSong(song) : playSong(song)"
         @contextmenu.prevent="openMenu(song, $event)"
         @mousedown="canReorder ? onPlRowMouseDown(index, $event) : null"
         class="song-row grid gap-4 py-2 px-2 rounded-md hover:bg-[#2a2a2a] group items-center transition-colors cursor-pointer grid-cols-[20px_3fr_2fr_2fr_120px] 2xl:grid-cols-[30px_4fr_3fr_3fr_120px] 2xl:py-1.5"
         :class="{
           'bg-[#2a2a2a]': isCurrentSong(song) || (selectMode && selectedSongs.includes(song.path)),
           'opacity-30': canReorder && index === plDragIndex,
-          'pl-drop-target-above': canReorder && plOverIndex === index && plDragIndex !== index && plDragIndex > index,
-          'pl-drop-target-below': canReorder && plOverIndex === index && plDragIndex !== index && plDragIndex < index,
+          'pl-drop-target-above':
+            canReorder && plOverIndex === index && plDragIndex !== index && plDragIndex > index,
+          'pl-drop-target-below':
+            canReorder && plOverIndex === index && plDragIndex !== index && plDragIndex < index,
           'song-row-swap-in': serverSort && animateSwap,
         }"
       >
@@ -1278,32 +1284,49 @@ onUnmounted(() => {
                   <span class="text-gray-500">Last Played:</span>
                   <span class="text-white font-medium">
                     {{
-                      infoStat.lastPlayed
-                        ? new Date(infoStat.lastPlayed).toLocaleString()
-                        : 'Never'
+                      infoStat.lastPlayed ? new Date(infoStat.lastPlayed).toLocaleString() : 'Never'
                     }}
                   </span>
                 </div>
-
               </div>
 
               <!-- Edit form -->
               <div v-else class="space-y-3 text-sm">
                 <label class="grid grid-cols-[100px_1fr] gap-2 items-center">
                   <span class="text-gray-500">Title</span>
-                  <input v-model="editForm.title" type="text" spellcheck="false" class="tag-input" />
+                  <input
+                    v-model="editForm.title"
+                    type="text"
+                    spellcheck="false"
+                    class="tag-input"
+                  />
                 </label>
                 <label class="grid grid-cols-[100px_1fr] gap-2 items-center">
                   <span class="text-gray-500">Artist</span>
-                  <input v-model="editForm.artist" type="text" spellcheck="false" class="tag-input" />
+                  <input
+                    v-model="editForm.artist"
+                    type="text"
+                    spellcheck="false"
+                    class="tag-input"
+                  />
                 </label>
                 <label class="grid grid-cols-[100px_1fr] gap-2 items-center">
                   <span class="text-gray-500">Album</span>
-                  <input v-model="editForm.album" type="text" spellcheck="false" class="tag-input" />
+                  <input
+                    v-model="editForm.album"
+                    type="text"
+                    spellcheck="false"
+                    class="tag-input"
+                  />
                 </label>
                 <label class="grid grid-cols-[100px_1fr] gap-2 items-center">
                   <span class="text-gray-500">Genre</span>
-                  <input v-model="editForm.genre" type="text" spellcheck="false" class="tag-input" />
+                  <input
+                    v-model="editForm.genre"
+                    type="text"
+                    spellcheck="false"
+                    class="tag-input"
+                  />
                 </label>
                 <div class="grid grid-cols-[100px_1fr] gap-2 items-center">
                   <span class="text-gray-500">Year · Track</span>
@@ -1325,8 +1348,8 @@ onUnmounted(() => {
                   </div>
                 </div>
                 <p class="text-[11px] text-gray-600 leading-relaxed pt-1">
-                  Changes are written into the audio file itself; clearing a field
-                  removes that tag. The library updates automatically.
+                  Changes are written into the audio file itself; clearing a field removes that tag.
+                  The library updates automatically.
                 </p>
               </div>
             </div>
@@ -1350,7 +1373,9 @@ onUnmounted(() => {
                 </div>
               </template>
               <div v-else>
-                <p v-if="editError" class="text-xs text-red-400 mb-3 break-words">{{ editError }}</p>
+                <p v-if="editError" class="text-xs text-red-400 mb-3 break-words">
+                  {{ editError }}
+                </p>
                 <div class="flex items-center justify-end gap-2">
                   <button
                     @click="cancelEditInfo"
@@ -1508,7 +1533,10 @@ onUnmounted(() => {
             >
               {{ pl.name }}
             </button>
-            <div class="border-t border-[#3a3a3a] my-1" v-if="store.normalPlaylists.length > 0"></div>
+            <div
+              class="border-t border-[#3a3a3a] my-1"
+              v-if="store.normalPlaylists.length > 0"
+            ></div>
             <button
               @click="newPlaylistWithSelected"
               class="w-full text-left px-4 py-2 text-[var(--accent-color)] hover:bg-[#3a3a3c] transition-colors"
@@ -1605,7 +1633,9 @@ onUnmounted(() => {
   color: #fff;
   font-size: 0.875rem;
   outline: none;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 .tag-input:focus {
   border-color: color-mix(in srgb, var(--accent-color) 60%, transparent);

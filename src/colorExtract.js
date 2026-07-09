@@ -79,7 +79,13 @@ export function extractColorsFromImage(url) {
             const r = imgData[i];
             const g = imgData[i + 1];
             const b = imgData[i + 2];
-            pxs.push({ r, g, b, saturation: Math.max(r, g, b) - Math.min(r, g, b), brightness: (r + g + b) / 3 });
+            pxs.push({
+              r,
+              g,
+              b,
+              saturation: Math.max(r, g, b) - Math.min(r, g, b),
+              brightness: (r + g + b) / 3,
+            });
           }
         }
 

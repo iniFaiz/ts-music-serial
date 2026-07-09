@@ -30,7 +30,9 @@ function openPlaylist(pl, event) {
     return;
   }
   const coverEl = event.currentTarget.querySelector('.cover-image');
-  const to = store.isSmart(pl) ? '/smart/' + pl.id : { name: 'PlaylistDetail', params: { id: pl.id } };
+  const to = store.isSmart(pl)
+    ? '/smart/' + pl.id
+    : { name: 'PlaylistDetail', params: { id: pl.id } };
   navigateWithTransition(() => router.push(to), coverEl, 'shared-cover', 'to-album-transition');
 }
 
@@ -59,7 +61,12 @@ const getCardIndex = (clientX, clientY) => {
   const cards = el.querySelectorAll('[data-pl-grid-idx]');
   for (const card of cards) {
     const rect = card.getBoundingClientRect();
-    if (clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom) {
+    if (
+      clientX >= rect.left &&
+      clientX <= rect.right &&
+      clientY >= rect.top &&
+      clientY <= rect.bottom
+    ) {
       return parseInt(card.dataset.plGridIdx, 10);
     }
   }
@@ -85,7 +92,12 @@ const onMouseMove = (e) => {
 };
 
 const onMouseUp = () => {
-  if (dragActive.value && dragIndex.value !== -1 && overIndex.value !== -1 && dragIndex.value !== overIndex.value) {
+  if (
+    dragActive.value &&
+    dragIndex.value !== -1 &&
+    overIndex.value !== -1 &&
+    dragIndex.value !== overIndex.value
+  ) {
     store.movePlaylistOrder(dragIndex.value, overIndex.value);
     dragDidReorder = true;
   }
@@ -221,7 +233,9 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <h3 class="text-[13px] font-medium text-white truncate pr-2 leading-snug flex items-center gap-1.5">
+        <h3
+          class="text-[13px] font-medium text-white truncate pr-2 leading-snug flex items-center gap-1.5"
+        >
           <span class="truncate">{{ pl.name }}</span>
           <svg
             v-if="store.isSmart(pl)"
@@ -243,9 +257,7 @@ onUnmounted(() => {
     <div v-if="playlists.length === 0" class="p-20 text-center text-gray-600">
       <div class="text-4xl mb-4 opacity-20">♪</div>
       <p>No playlists created yet.</p>
-      <p class="text-xs mt-2">
-        Click "New Playlist" or "New Smart Playlist" above to get started.
-      </p>
+      <p class="text-xs mt-2">Click "New Playlist" or "New Smart Playlist" above to get started.</p>
     </div>
   </div>
 </template>

@@ -115,7 +115,17 @@ function goToArtist(artistName, event = null) {
         <!-- Search Bar -->
         <div class="relative flex-1 sm:w-60 sm:flex-none">
           <span class="absolute text-gray-500 -translate-y-1/2 left-3 top-1/2">
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="3"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
               <circle cx="11" cy="11" r="8"></circle>
               <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
             </svg>
@@ -131,7 +141,17 @@ function goToArtist(artistName, event = null) {
             @click="searchQuery = ''"
             class="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
               <line x1="18" y1="6" x2="6" y2="18"></line>
               <line x1="6" y1="6" x2="18" y2="18"></line>
             </svg>
@@ -149,8 +169,20 @@ function goToArtist(artistName, event = null) {
             <option value="count">Tracks</option>
             <option value="lastPlayed">Last Played</option>
           </select>
-          <span class="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none">
-            <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+          <span
+            class="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="10"
+              height="10"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="3"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
               <polyline points="6 9 12 15 18 9"></polyline>
             </svg>
           </span>
@@ -214,7 +246,10 @@ function goToArtist(artistName, event = null) {
         <div
           class="w-full aspect-square mb-3 relative shadow-lg group-hover:scale-[1.02] transition-transform duration-200 ease-out"
         >
-          <CoverImage :path="album.coverPath" className="w-full h-full rounded-md bg-[#282828] cover-image" />
+          <CoverImage
+            :path="album.coverPath"
+            className="w-full h-full rounded-md bg-[#282828] cover-image"
+          />
           <!-- Hover -->
           <div
             class="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity rounded-md flex items-end p-3"
@@ -250,8 +285,17 @@ function goToArtist(artistName, event = null) {
     </TransitionGroup>
 
     <!-- Empty State -->
-    <div v-if="filteredAndSortedAlbums.length === 0" class="py-20 text-center text-gray-500 animate-fade-in flex flex-col items-center">
-      <svg class="h-16 w-16 text-gray-500 opacity-40 mb-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+    <div
+      v-if="filteredAndSortedAlbums.length === 0"
+      class="py-20 text-center text-gray-500 animate-fade-in flex flex-col items-center"
+    >
+      <svg
+        class="h-16 w-16 text-gray-500 opacity-40 mb-3"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.5"
+      >
         <circle cx="12" cy="12" r="10" />
         <circle cx="12" cy="12" r="3" />
         <path d="M12 2a10 10 0 0 1 10 10" stroke-dasharray="1 3" />
@@ -269,7 +313,9 @@ function goToArtist(artistName, event = null) {
 }
 .grid-enter-active,
 .grid-leave-active {
-  transition: opacity 0.3s cubic-bezier(0.25, 0.8, 0.25, 1), transform 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+  transition:
+    opacity 0.3s cubic-bezier(0.25, 0.8, 0.25, 1),
+    transform 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
 }
 .grid-enter-from,
 .grid-leave-to {

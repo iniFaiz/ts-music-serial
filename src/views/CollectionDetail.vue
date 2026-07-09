@@ -38,8 +38,6 @@ const shuffleAll = () => {
   const i = Math.floor(Math.random() * songs.value.length);
   store.playSong(songs.value[i], songs.value);
 };
-
-
 </script>
 
 <template>
@@ -56,10 +54,14 @@ const shuffleAll = () => {
       />
 
       <div class="flex flex-col gap-1 pb-2 overflow-hidden flex-1">
-        <h4 class="text-sm font-bold text-[var(--accent-color)] uppercase tracking-wider mb-1">Insight Mix</h4>
+        <h4 class="text-sm font-bold text-[var(--accent-color)] uppercase tracking-wider mb-1">
+          Insight Mix
+        </h4>
         <h1 class="text-4xl font-bold tracking-tight text-white">{{ collection.title }}</h1>
         <p class="text-sm text-[var(--text-secondary)] mt-2">{{ collection.subtitle }}</p>
-        <p class="text-xs text-[var(--text-secondary)] font-medium mt-2">{{ songs.length }} songs</p>
+        <p class="text-xs text-[var(--text-secondary)] font-medium mt-2">
+          {{ songs.length }} songs
+        </p>
 
         <div class="flex flex-wrap gap-3 mt-6 items-center">
           <button
@@ -67,7 +69,14 @@ const shuffleAll = () => {
             :disabled="songs.length === 0"
             class="bg-[var(--accent-color)] text-white px-8 py-2 rounded-[4px] text-sm font-semibold hover:bg-red-500 transition flex items-center gap-2 shadow-lg disabled:opacity-40"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="currentColor"
+              stroke="none"
+            >
               <polygon points="5 3 19 12 5 21 5 3" />
             </svg>
             Play
@@ -77,12 +86,21 @@ const shuffleAll = () => {
             :disabled="songs.length === 0"
             class="bg-[#3a3a3a] text-[var(--accent-color)] px-8 py-2 rounded-[4px] text-sm font-semibold hover:bg-[#444] transition flex items-center gap-2 shadow-lg disabled:opacity-40"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
               <path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5" />
             </svg>
             Shuffle
           </button>
-
         </div>
       </div>
     </div>

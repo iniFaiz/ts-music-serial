@@ -11,18 +11,12 @@ document.addEventListener('keydown', (e) => {
   const isCtrlShift = e.ctrlKey && e.shiftKey;
 
   // DevTools: F12, Ctrl+Shift+I, Ctrl+Shift+C, Ctrl+Shift+J
-  if (
-    e.key === 'F12' ||
-    (isCtrlShift && ['I', 'i', 'C', 'c', 'J', 'j'].includes(e.key))
-  ) {
+  if (e.key === 'F12' || (isCtrlShift && ['I', 'i', 'C', 'c', 'J', 'j'].includes(e.key))) {
     e.preventDefault();
   }
 
   // Reloads: F5, Ctrl+R, Ctrl+Shift+R
-  if (
-    e.key === 'F5' ||
-    (e.ctrlKey && (e.key === 'R' || e.key === 'r'))
-  ) {
+  if (e.key === 'F5' || (e.ctrlKey && (e.key === 'R' || e.key === 'r'))) {
     e.preventDefault();
   }
 });

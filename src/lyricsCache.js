@@ -2,9 +2,12 @@ import { watch } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { store } from './store';
 
-watch(() => store.lyricsSource, () => {
-  clearLyricsCache();
-});
+watch(
+  () => store.lyricsSource,
+  () => {
+    clearLyricsCache();
+  }
+);
 
 // Session cache of resolved lyrics, keyed by track path. Value is a Lyrics
 // object ({ synced, source, lines: [{ time_ms, text }] }) or null ("not found").
@@ -111,7 +114,10 @@ export function activeLineIndex(lines, timeMs, songDurationMs = 0) {
       // Duration of line i = start of next line - start of this line
       let nextStart = null;
       for (let j = i + 1; j < lines.length; j++) {
-        if (lines[j].time_ms != null) { nextStart = lines[j].time_ms; break; }
+        if (lines[j].time_ms != null) {
+          nextStart = lines[j].time_ms;
+          break;
+        }
       }
       if (nextStart != null) {
         totalDur += nextStart - lines[i].time_ms;

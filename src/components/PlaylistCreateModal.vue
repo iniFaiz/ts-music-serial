@@ -67,7 +67,12 @@ const cancel = () => store.closePlaylistModal();
 
 const save = async () => {
   if (store.playlistModal.mode === 'edit' && store.playlistModal.playlistId) {
-    await store.updatePlaylist(store.playlistModal.playlistId, title.value, description.value, cover.value);
+    await store.updatePlaylist(
+      store.playlistModal.playlistId,
+      title.value,
+      description.value,
+      cover.value
+    );
     store.closePlaylistModal();
   } else {
     const pending = store.playlistModal.pendingSongPath;
@@ -90,7 +95,9 @@ const save = async () => {
       <div
         class="modal-panel w-[520px] max-w-[92vw] bg-[#1c1c1e] rounded-2xl shadow-2xl border border-[#2c2c2e] p-6"
       >
-        <h2 class="text-xl font-bold text-white mb-5">{{ store.playlistModal.mode === 'edit' ? 'Edit playlist' : 'Create playlist' }}</h2>
+        <h2 class="text-xl font-bold text-white mb-5">
+          {{ store.playlistModal.mode === 'edit' ? 'Edit playlist' : 'Create playlist' }}
+        </h2>
 
         <div class="flex gap-5">
           <!-- Cover picker -->

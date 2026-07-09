@@ -4,12 +4,7 @@
 // gain values via the store, which forwards them with player_set_equalizer.
 import { computed } from 'vue';
 import { store } from '../store';
-import {
-  EQ_FREQ_LABELS,
-  EQ_PRESET_LIST,
-  EQ_MIN_DB,
-  EQ_MAX_DB,
-} from '../equalizer';
+import { EQ_FREQ_LABELS, EQ_PRESET_LIST, EQ_MIN_DB, EQ_MAX_DB } from '../equalizer';
 import ToggleInt from './settings/ToggleInt.vue';
 import SliderInt from './settings/SliderInt.vue';
 import SelectInt from './settings/SelectInt.vue';
@@ -109,10 +104,7 @@ function onBand(i, e) {
       </div>
 
       <div class="flex justify-end mt-2">
-        <button
-          @click="store.resetEq()"
-          class="text-xs font-medium text-gray-400 hover:text-white"
-        >
+        <button @click="store.resetEq()" class="text-xs font-medium text-gray-400 hover:text-white">
           Reset to flat
         </button>
       </div>

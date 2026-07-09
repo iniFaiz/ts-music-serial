@@ -1,6 +1,6 @@
 import { reactive } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
-import { open, save } from '@tauri-apps/plugin-dialog';
+import { open, save, ask } from '@tauri-apps/plugin-dialog';
 import { getCurrentWindow, LogicalSize } from '@tauri-apps/api/window';
 import { idbGet, idbDelete } from './libraryStore';
 import { newSmartPlaylist } from './smartPlaylists';
@@ -79,6 +79,8 @@ export const store = reactive({
   scanComplete: false,
   scanDuration: '0',
   scanCount: 0,
+  missingTracksReport: [],
+  showBackupReportModal: false,
 
   currentSong: null,
   preselectedNextSong: null,
@@ -451,11 +453,11 @@ export const store = reactive({
     // Sync restored/default transition and normalization settings with backend
     invoke('player_set_transition', {
       mode: this.transitionMode,
-      crossfadeSecs: this.crossfadeSecs
+      crossfadeSecs: this.crossfadeSecs,
     }).catch(() => {});
     invoke('player_set_normalization_settings', {
       enabled: this.normalizationEnabled,
-      preampDb: this.normalizationPreampDb
+      preampDb: this.normalizationPreampDb,
     }).catch(() => {});
     await invoke('set_wasapi_exclusive', { enabled: this.wasapiExclusive }).catch(() => {});
     if (this.discordEnabled) {
@@ -482,7 +484,10 @@ export const store = reactive({
     if (Array.isArray(pb.queuePaths) && pb.queuePaths.length) {
       try {
         const tracks = await invoke('db_tracks_by_paths', { paths: pb.queuePaths });
-        this.queue = tracks.map((s) => ({ ...s, queueId: Math.random().toString(36).substring(2, 9) }));
+        this.queue = tracks.map((s) => ({
+          ...s,
+          queueId: Math.random().toString(36).substring(2, 9),
+        }));
       } catch {
         this.queue = [];
       }
@@ -509,6 +514,7 @@ export const store = reactive({
 
   async resetLibrary() {
     this.resettingLibrary = true;
+    this.loading = true;
     this.statusMessage = 'Resetting library...';
     try {
       await invoke('db_reset');
@@ -543,6 +549,7 @@ export const store = reactive({
     }
     this.statusMessage = 'Library reset';
     this.resettingLibrary = false;
+    this.loading = false;
   },
 
   async selectAndScan() {
@@ -626,7 +633,10 @@ export const store = reactive({
         }
       }
       for (const d of new Set(result.map((s) => dirName(s.path)))) {
-        if (!this.roots.some((r) => isUnderRoot(d, r)) && !newRoots.some((r) => isUnderRoot(d, r))) {
+        if (
+          !this.roots.some((r) => isUnderRoot(d, r)) &&
+          !newRoots.some((r) => isUnderRoot(d, r))
+        ) {
           newRoots.push(d);
         }
       }
@@ -818,7 +828,7 @@ export const store = reactive({
     try {
       await invoke('set_wasapi_exclusive', { enabled: this.wasapiExclusive });
     } catch (err) {
-      console.warn("Failed to set WASAPI exclusive:", err);
+      console.warn('Failed to set WASAPI exclusive:', err);
       // If enabling failed, revert so the UI stays in sync with the backend.
       if (this.wasapiExclusive) {
         this.wasapiExclusive = false;
@@ -827,7 +837,7 @@ export const store = reactive({
     }
     // Give the audio thread a moment to fully open/close the stream
     // before reloading the track, avoiding a race with CreateSink.
-    await new Promise(r => setTimeout(r, 150));
+    await new Promise((r) => setTimeout(r, 150));
     // Reload the current track on the newly-selected engine, preserving
     // position/play state (same approach as switching output device).
     if (this.currentSong) {
@@ -1031,40 +1041,40 @@ export const store = reactive({
   async enterFullscreenWithTransition() {
     if (!this.currentSong || this.fullscreenOpen) return;
     this.fullscreenOverlayVisible = true;
-    
+
     // Wait for the fade-in transition (300ms)
-    await new Promise(r => setTimeout(r, 300));
-    
+    await new Promise((r) => setTimeout(r, 300));
+
     this.fullscreenOpen = true;
     try {
       await appWindow.setFullscreen(true);
     } catch (err) {
-      console.warn("Tauri fullscreen error:", err);
+      console.warn('Tauri fullscreen error:', err);
     }
-    
+
     // Wait slightly for OS window sizing transition to settle
-    await new Promise(r => setTimeout(r, 150));
-    
+    await new Promise((r) => setTimeout(r, 150));
+
     this.fullscreenOverlayVisible = false;
   },
 
   async exitFullscreenWithTransition() {
     if (!this.fullscreenOpen) return;
     this.fullscreenOverlayVisible = true;
-    
+
     // Wait for the fade-in transition (300ms)
-    await new Promise(r => setTimeout(r, 300));
-    
+    await new Promise((r) => setTimeout(r, 300));
+
     this.fullscreenOpen = false;
     try {
       await appWindow.setFullscreen(false);
     } catch (err) {
-      console.warn("Tauri fullscreen restore error:", err);
+      console.warn('Tauri fullscreen restore error:', err);
     }
-    
+
     // Wait slightly for OS window sizing transition to settle
-    await new Promise(r => setTimeout(r, 150));
-    
+    await new Promise((r) => setTimeout(r, 150));
+
     this.fullscreenOverlayVisible = false;
   },
 
@@ -1178,7 +1188,7 @@ export const store = reactive({
     if (newQueue && newQueue.length > 0) {
       this.queue = newQueue.map((s) => ({
         ...s,
-        queueId: s.queueId || Math.random().toString(36).substring(2, 9)
+        queueId: s.queueId || Math.random().toString(36).substring(2, 9),
       }));
       let idx = -1;
       if (song) {
@@ -1192,7 +1202,10 @@ export const store = reactive({
     } else if (this.queue.length === 0) {
       // No explicit queue: start one with just this track
       if (song) {
-        const entry = { ...song, queueId: song.queueId || Math.random().toString(36).substring(2, 9) };
+        const entry = {
+          ...song,
+          queueId: song.queueId || Math.random().toString(36).substring(2, 9),
+        };
         this.queue = [entry];
         this.currentSong = { ...entry };
       } else {
@@ -1216,7 +1229,10 @@ export const store = reactive({
         }
         this.currentSong = { ...this.queue[idx] };
       } else if (song) {
-        const entry = { ...song, queueId: song.queueId || Math.random().toString(36).substring(2, 9) };
+        const entry = {
+          ...song,
+          queueId: song.queueId || Math.random().toString(36).substring(2, 9),
+        };
         this.currentSong = { ...entry };
       } else {
         this.currentSong = null;
@@ -1266,7 +1282,10 @@ export const store = reactive({
   },
 
   playNextSongs(songs) {
-    const list = songs.map((s) => ({ ...s, queueId: s.queueId || Math.random().toString(36).substring(2, 9) }));
+    const list = songs.map((s) => ({
+      ...s,
+      queueId: s.queueId || Math.random().toString(36).substring(2, 9),
+    }));
     if (this.queue.length === 0) {
       if (this.currentSong) {
         if (!this.currentSong.queueId) {
@@ -1288,7 +1307,7 @@ export const store = reactive({
   addToQueue(songs) {
     const list = (Array.isArray(songs) ? songs : [songs]).map((s) => ({
       ...s,
-      queueId: s.queueId || Math.random().toString(36).substring(2, 9)
+      queueId: s.queueId || Math.random().toString(36).substring(2, 9),
     }));
     if (this.queue.length === 0 && this.currentSong) {
       if (!this.currentSong.queueId) {
@@ -2216,6 +2235,112 @@ export const store = reactive({
     }
   },
 
+  // ---- Full library backup export / import -------------------------------
+  async exportBackup() {
+    try {
+      const dest = await save({
+        defaultPath: 'ts-music-backup.db',
+        filters: [{ name: 'TS Music Backup', extensions: ['db', 'tsmback'] }],
+      });
+      if (!dest) return;
+      this.statusMessage = 'Exporting backup...';
+      await invoke('db_export_backup', { dest });
+      this.statusMessage = `Backup exported successfully to ${dest}`;
+    } catch (e) {
+      console.error('Failed to export backup', e);
+      this.statusMessage = `Export backup failed: ${e}`;
+    }
+  },
+
+  async importBackup() {
+    try {
+      const src = await open({
+        multiple: false,
+        filters: [{ name: 'TS Music Backup', extensions: ['db', 'tsmback'] }],
+      });
+      if (!src) return;
+
+      this.showConfirm({
+        title: 'Import Backup',
+        message:
+          'Importing this backup will overwrite your current library, settings, and playlists. Playback will stop. Proceed?',
+        confirmText: 'Import',
+        cancelText: 'Cancel',
+        onConfirm: async () => {
+          this.loading = true;
+          this.statusMessage = 'Importing backup...';
+
+          // Stop playback and reset player
+          this.isPlaying = false;
+          this.currentSong = null;
+          this.currentTime = 0;
+          this.duration = 0;
+          try {
+            await invoke('player_stop');
+          } catch {
+            /* ignore */
+          }
+
+          try {
+            const res = await invoke('db_import_backup', { src });
+
+            // Ask to relocate any missing roots
+            const missingRoots = res.roots.filter((r) => !r.exists);
+            for (const root of missingRoots) {
+              const relocate = await ask(
+                `The music folder "${root.path}" was not found on this PC. Would you like to select its new location to preserve your statistics and playlists?`,
+                {
+                  title: 'Relocate Music Folder',
+                  kind: 'warning',
+                  okLabel: 'Select Folder',
+                  cancelLabel: 'Skip',
+                }
+              );
+
+              if (relocate) {
+                const selected = await open({
+                  directory: true,
+                  multiple: false,
+                  recursive: true,
+                });
+                if (selected) {
+                  this.statusMessage = `Relocating paths for ${root.path}...`;
+                  await invoke('db_relocate_root', {
+                    oldRoot: root.path,
+                    newRoot: selected,
+                  });
+                }
+              }
+            }
+
+            // Prune remaining missing tracks and get details for the report
+            this.statusMessage = 'Pruning missing tracks...';
+            const missingTracks = await invoke('db_prune_and_get_missing');
+
+            // Reload the library state from the new database file
+            await this.loadLibrary();
+
+            if (missingTracks.length > 0) {
+              this.missingTracksReport = missingTracks;
+              this.showBackupReportModal = true;
+              this.statusMessage = `Backup imported. ${missingTracks.length} missing tracks were removed from library.`;
+            } else {
+              this.statusMessage = 'Backup imported successfully';
+            }
+          } catch (e) {
+            console.error('Failed to import backup', e);
+            this.statusMessage = `Import backup failed: ${e}`;
+          } finally {
+            this.loading = false;
+          }
+        },
+      });
+    } catch (err) {
+      console.error(err);
+      this.statusMessage = 'Error selecting backup file';
+    }
+  },
+
   // Pick a random track from the library for unlimited-queue autoplay. Avoids
   // immediately repeating the current song when the library has alternatives.
   // A random track from the whole library (for unlimited-queue autoplay), chosen
@@ -2276,7 +2401,11 @@ export const store = reactive({
           this._prefetchingRandom = true;
           this.pickRandomSong()
             .then((song) => {
-              if (song) this.preselectedNextSong = { ...song, queueId: Math.random().toString(36).substring(2, 9) };
+              if (song)
+                this.preselectedNextSong = {
+                  ...song,
+                  queueId: Math.random().toString(36).substring(2, 9),
+                };
             })
             .finally(() => {
               this._prefetchingRandom = false;

@@ -93,7 +93,17 @@ async function playArtist(artistName) {
         <!-- Search Bar -->
         <div class="relative flex-1 sm:w-60 sm:flex-none">
           <span class="absolute text-gray-500 -translate-y-1/2 left-3 top-1/2">
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="3"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
               <circle cx="11" cy="11" r="8"></circle>
               <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
             </svg>
@@ -109,7 +119,17 @@ async function playArtist(artistName) {
             @click="searchQuery = ''"
             class="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
               <line x1="18" y1="6" x2="6" y2="18"></line>
               <line x1="6" y1="6" x2="18" y2="18"></line>
             </svg>
@@ -127,8 +147,20 @@ async function playArtist(artistName) {
             <option value="count">Tracks</option>
             <option value="lastPlayed">Last Played</option>
           </select>
-          <span class="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none">
-            <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+          <span
+            class="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="10"
+              height="10"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="3"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
               <polyline points="6 9 12 15 18 9"></polyline>
             </svg>
           </span>
@@ -220,8 +252,17 @@ async function playArtist(artistName) {
     </TransitionGroup>
 
     <!-- Empty State -->
-    <div v-if="filteredAndSortedArtists.length === 0" class="py-20 text-center text-gray-500 animate-fade-in flex flex-col items-center">
-      <svg class="h-16 w-16 text-gray-500 opacity-40 mb-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+    <div
+      v-if="filteredAndSortedArtists.length === 0"
+      class="py-20 text-center text-gray-500 animate-fade-in flex flex-col items-center"
+    >
+      <svg
+        class="h-16 w-16 text-gray-500 opacity-40 mb-3"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.5"
+      >
         <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
         <path d="M19 10v1a7 7 0 0 1-14 0v-1" />
         <line x1="12" x2="12" y1="18" y2="22" />
@@ -239,7 +280,9 @@ async function playArtist(artistName) {
 }
 .grid-enter-active,
 .grid-leave-active {
-  transition: opacity 0.3s cubic-bezier(0.25, 0.8, 0.25, 1), transform 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+  transition:
+    opacity 0.3s cubic-bezier(0.25, 0.8, 0.25, 1),
+    transform 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
 }
 .grid-enter-from,
 .grid-leave-to {

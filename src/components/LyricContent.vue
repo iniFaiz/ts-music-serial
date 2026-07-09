@@ -38,35 +38,27 @@ function wordStyle(w) {
 
 <template>
   <span class="lc">
-    <span v-if="(active || isPast) && line.words && line.words.length" class="lc-karaoke"><span
-        v-for="(w, wi) in line.words"
-        :key="wi"
-        :class="wordClass(w)"
-        :style="wordStyle(w)"
-      >{{ w.text }}</span></span>
+    <span v-if="(active || isPast) && line.words && line.words.length" class="lc-karaoke"
+      ><span v-for="(w, wi) in line.words" :key="wi" :class="wordClass(w)" :style="wordStyle(w)">{{
+        w.text
+      }}</span></span
+    >
     <span v-else class="lc-plain">{{ line.text }}</span>
 
     <!-- Background/harmony vocals: a smaller, dimmer secondary tier (Apple-Music
          style). Word-timed wipe on the active/past line, plain text otherwise. -->
-    <span
-      v-if="(active || isPast) && line.bg && line.bg.length"
-      class="lc-bg lc-karaoke"
-    ><span
-        v-for="(w, wi) in line.bg"
-        :key="wi"
-        :class="wordClass(w)"
-        :style="wordStyle(w)"
-      >{{ w.text }}</span></span>
+    <span v-if="(active || isPast) && line.bg && line.bg.length" class="lc-bg lc-karaoke"
+      ><span v-for="(w, wi) in line.bg" :key="wi" :class="wordClass(w)" :style="wordStyle(w)">{{
+        w.text
+      }}</span></span
+    >
     <span v-else-if="line.bg_text" class="lc-bg lc-bg-plain">{{ line.bg_text }}</span>
 
-    <span
-      v-if="line.romaji"
-      class="lc-romaji-wrap"
-      :class="{ 'lc-romaji-show': showRomaji }"
-    ><span
-        class="lc-romaji"
-        :class="{ 'lc-romaji-active': active }"
-      >{{ line.romaji }}</span></span>
+    <span v-if="line.romaji" class="lc-romaji-wrap" :class="{ 'lc-romaji-show': showRomaji }"
+      ><span class="lc-romaji" :class="{ 'lc-romaji-active': active }">{{
+        line.romaji
+      }}</span></span
+    >
   </span>
 </template>
 

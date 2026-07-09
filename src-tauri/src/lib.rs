@@ -675,7 +675,11 @@ fn extract_palette_from_image(img: &image::DynamicImage) -> Vec<String> {
 // Return album cover art as a base64 data URL (downscaled thumbnail), using a
 // disk cache so repeated requests across sessions are cheap.
 #[tauri::command]
-async fn get_track_cover(app: AppHandle, path: String) -> Result<Option<String>, String> {
+async fn get_track_cover(
+    app: AppHandle,
+    db: State<'_, db::Db>,
+    path: String,
+) -> Result<Option<String>, String> {
     let path_buf = PathBuf::from(&path);
     if !is_allowed_audio(&app, &path_buf) {
         return Err("Path is not within an allowed music folder".to_string());
@@ -683,40 +687,67 @@ async fn get_track_cover(app: AppHandle, path: String) -> Result<Option<String>,
 
     let cache = cover_cache_dir(&app);
 
-    // The CPU-bound decode/encode runs on the blocking pool so it never stalls
-    // the async runtime's worker threads.
-    let result = tauri::async_runtime::spawn_blocking(move || -> Option<String> {
-        let key = cover_cache_key(&path_buf);
+    // 1. Try to get it from the database first
+    if let Some((_, _, bytes)) = db::db_get_cover_art(&db, &path) {
+        let b64 = general_purpose::STANDARD.encode(&bytes);
+        return Ok(Some(format!("data:image/jpeg;base64,{b64}")));
+    }
 
-        // Fast path: serve a previously cached thumbnail.
-        if let (Some(dir), Some(k)) = (&cache, &key) {
-            if let Ok(bytes) = fs::read(dir.join(format!("{k}.jpg"))) {
-                let b64 = general_purpose::STANDARD.encode(&bytes);
-                return Some(format!("data:image/jpeg;base64,{b64}"));
-            }
-        }
+    // 2. If it is NOT in the database, and the file exists on disk:
+    if path_buf.exists() {
+        let p_buf = path_buf.clone();
+        let result = tauri::async_runtime::spawn_blocking(move || -> Option<String> {
+            let key = cover_cache_key(&p_buf);
 
-        let (raw, raw_mime) = extract_cover(&path_buf)?;
-
-        // Downscale when possible; otherwise fall back to the original bytes.
-        match make_thumbnail(&raw) {
-            Some(thumb) => {
-                if let (Some(dir), Some(k)) = (&cache, &key) {
-                    let _ = fs::write(dir.join(format!("{k}.jpg")), &thumb);
+            // Fast path: serve a previously cached thumbnail.
+            if let (Some(dir), Some(k)) = (&cache, &key) {
+                if let Ok(bytes) = fs::read(dir.join(format!("{k}.jpg"))) {
+                    let b64 = general_purpose::STANDARD.encode(&bytes);
+                    return Some(format!("data:image/jpeg;base64,{b64}"));
                 }
-                let b64 = general_purpose::STANDARD.encode(&thumb);
-                Some(format!("data:image/jpeg;base64,{b64}"))
             }
-            None => {
-                let b64 = general_purpose::STANDARD.encode(&raw);
-                Some(format!("data:{raw_mime};base64,{b64}"))
+
+            let (raw, raw_mime) = extract_cover(&p_buf)?;
+
+            // Downscale when possible; otherwise fall back to the original bytes.
+            match make_thumbnail(&raw) {
+                Some(thumb) => {
+                    if let (Some(dir), Some(k)) = (&cache, &key) {
+                        let _ = fs::write(dir.join(format!("{k}.jpg")), &thumb);
+                    }
+                    let b64 = general_purpose::STANDARD.encode(&thumb);
+                    Some(format!("data:image/jpeg;base64,{b64}"))
+                }
+                None => {
+                    let b64 = general_purpose::STANDARD.encode(&raw);
+                    Some(format!("data:{raw_mime};base64,{b64}"))
+                }
+            }
+        })
+        .await
+        .map_err(|e| format!("Cover task failed: {e}"))?;
+
+        // 3. Since we generated the thumbnail/cover, save it to the DB if we can find its album/artist
+        if let Some(ref b64_str) = result {
+            if let Some(comma_idx) = b64_str.find(',') {
+                if let Ok(bytes) = general_purpose::STANDARD.decode(&b64_str[comma_idx + 1..]) {
+                    if let Some(tagged_file) = lofty::read_from_path(&path_buf).ok() {
+                        if let Some(tag) = tagged_file.primary_tag().or_else(|| tagged_file.first_tag()) {
+                            let album = tag.album().map(|v| v.to_string()).unwrap_or_default();
+                            let artist = tag.artist().map(|v| v.to_string()).unwrap_or_default();
+                            if !album.is_empty() || !artist.is_empty() {
+                                let _ = db::db_save_cover_art(&db, &album, &artist, &bytes);
+                            }
+                        }
+                    }
+                }
             }
         }
-    })
-    .await
-    .map_err(|e| format!("Cover task failed: {e}"))?;
 
-    Ok(result)
+        return Ok(result);
+    }
+
+    Ok(None)
 }
 
 // Ensure the on-disk cover thumbnail exists and return its filesystem path.
@@ -730,7 +761,11 @@ async fn get_track_cover(app: AppHandle, path: String) -> Result<Option<String>,
 //
 // Returns None when the file has no embeddable/decodable cover art.
 #[tauri::command]
-async fn get_track_cover_path(app: AppHandle, path: String) -> Result<Option<String>, String> {
+async fn get_track_cover_path(
+    app: AppHandle,
+    db: State<'_, db::Db>,
+    path: String,
+) -> Result<Option<String>, String> {
     let path_buf = PathBuf::from(&path);
     if !is_allowed_audio(&app, &path_buf) {
         return Err("Path is not within an allowed music folder".to_string());
@@ -738,29 +773,67 @@ async fn get_track_cover_path(app: AppHandle, path: String) -> Result<Option<Str
 
     let cache = cover_cache_dir(&app);
 
-    // Same CPU-bound decode/downscale as get_track_cover, on the blocking pool,
-    // but the result lives on disk (as {key}.jpg) rather than crossing the IPC
-    // boundary. The key embeds mtime+size, so it self-invalidates on file change.
-    let result = tauri::async_runtime::spawn_blocking(move || -> Option<String> {
-        let dir = cache?;
-        let key = cover_cache_key(&path_buf)?;
-        let file = dir.join(format!("{key}.jpg"));
+    // 1. Try to get it from the database first
+    if let Some((album, artist, bytes)) = db::db_get_cover_art(&db, &path) {
+        let result = tauri::async_runtime::spawn_blocking(move || -> Option<String> {
+            let dir = cache?;
+            let mut hasher = DefaultHasher::new();
+            album.hash(&mut hasher);
+            artist.hash(&mut hasher);
+            let key = format!("db_{:016x}", hasher.finish());
+            let file = dir.join(format!("{key}.jpg"));
+            if !file.exists() {
+                let _ = fs::write(&file, &bytes);
+            }
+            Some(file.to_string_lossy().into_owned())
+        })
+        .await
+        .map_err(|e| format!("Cover task failed: {e}"))?;
 
-        // Fast path: thumbnail already cached on disk.
-        if file.exists() {
-            return Some(file.to_string_lossy().into_owned());
+        return Ok(result);
+    }
+
+    // 2. If it is NOT in the database, and the file exists on disk:
+    if path_buf.exists() {
+        let p_buf = path_buf.clone();
+        let result = tauri::async_runtime::spawn_blocking(move || -> Option<String> {
+            let dir = cache?;
+            let key = cover_cache_key(&p_buf)?;
+            let file = dir.join(format!("{key}.jpg"));
+
+            // Fast path: thumbnail already cached on disk.
+            if file.exists() {
+                return Some(file.to_string_lossy().into_owned());
+            }
+
+            // Decode → downscale → cache a JPEG thumbnail, then hand back its path.
+            let (raw, _mime) = extract_cover(&p_buf)?;
+            let thumb = make_thumbnail(&raw)?;
+            fs::write(&file, &thumb).ok()?;
+            Some(file.to_string_lossy().into_owned())
+        })
+        .await
+        .map_err(|e| format!("Cover task failed: {e}"))?;
+
+        // 3. Since we generated the thumbnail/cover, save it to the DB if we can find its album/artist
+        if let Some(ref thumb_path_str) = result {
+            if let Ok(thumb_bytes) = fs::read(thumb_path_str) {
+                if let Some(tagged_file) = lofty::read_from_path(&path_buf).ok() {
+                    if let Some(tag) = tagged_file.primary_tag().or_else(|| tagged_file.first_tag()) {
+                        let album = tag.album().map(|v| v.to_string()).unwrap_or_default();
+                        let artist = tag.artist().map(|v| v.to_string()).unwrap_or_default();
+                        if !album.is_empty() || !artist.is_empty() {
+                            let _ = db::db_save_cover_art(&db, &album, &artist, &thumb_bytes);
+                        }
+                    }
+                }
+            }
         }
 
-        // Decode → downscale → cache a JPEG thumbnail, then hand back its path.
-        let (raw, _mime) = extract_cover(&path_buf)?;
-        let thumb = make_thumbnail(&raw)?;
-        fs::write(&file, &thumb).ok()?;
-        Some(file.to_string_lossy().into_owned())
-    })
-    .await
-    .map_err(|e| format!("Cover task failed: {e}"))?;
+        return Ok(result);
+    }
 
-    Ok(result)
+    Ok(None)
 }
 
 // Return the 3-color gradient palette for a track's cover art, computed natively
@@ -3326,7 +3399,11 @@ pub fn run() {
             db::db_recents,
             db::db_record_recent,
             db::db_kv_get,
-            db::db_kv_set
+            db::db_kv_set,
+            db::db_export_backup,
+            db::db_import_backup,
+            db::db_relocate_root,
+            db::db_prune_and_get_missing
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

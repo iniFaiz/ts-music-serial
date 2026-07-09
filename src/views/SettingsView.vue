@@ -37,7 +37,9 @@
                 stroke-width="1.8"
                 class="text-gray-400 shrink-0"
               >
-                <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+                <path
+                  d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"
+                />
               </svg>
               <span class="text-sm text-gray-200 truncate" :title="root">{{ root }}</span>
             </div>
@@ -74,7 +76,7 @@
     <Section title="Audio Output" description="Choose which device audio is played through.">
       <SelectInt
         label="Output device"
-        :modelValue="store.wasapiExclusive ? '' : (store.outputDevice || '')"
+        :modelValue="store.wasapiExclusive ? '' : store.outputDevice || ''"
         :options="deviceOptions"
         :disabled="store.wasapiExclusive"
         @update:modelValue="onDeviceChange"
@@ -153,8 +155,8 @@
           @update:modelValue="(v) => store.setNormalizationPreamp(v)"
         />
         <p class="text-xs text-gray-500">
-          Levels loudness across tracks using ReplayGain tags, falling back to an automatic
-          loudness analysis (computed once per track in the background).
+          Levels loudness across tracks using ReplayGain tags, falling back to an automatic loudness
+          analysis (computed once per track in the background).
         </p>
       </div>
 
@@ -176,8 +178,8 @@
           label="Waveform seek bar"
         />
         <p class="text-xs text-gray-500">
-          Replace the seek slider with the track's amplitude waveform. Each track is decoded
-          once to build it (cached afterwards), so the first play may take a moment.
+          Replace the seek slider with the track's amplitude waveform. Each track is decoded once to
+          build it (cached afterwards), so the first play may take a moment.
         </p>
       </div>
     </Section>
@@ -273,7 +275,8 @@
           @update:modelValue="(v) => store.setLyricsOffset(v)"
         />
         <p class="text-xs text-gray-500 mt-1">
-          Nudge every lyric earlier (positive) or later (negative) if the timing is consistently off. 0 = no change.
+          Nudge every lyric earlier (positive) or later (negative) if the timing is consistently
+          off. 0 = no change.
         </p>
       </div>
     </Section>
@@ -289,35 +292,27 @@
         label="Enable Discord Rich Presence"
       />
       <p class="text-xs text-gray-500 mt-2 leading-relaxed">
-        Shows the artist and track you're listening to on your Discord profile,
-        with the album cover as artwork. Pausing hides the status. Requires the
-        Discord desktop app to be running.
+        Shows the artist and track you're listening to on your Discord profile, with the album cover
+        as artwork. Pausing hides the status. Requires the Discord desktop app to be running.
       </p>
     </Section>
 
     <!-- System Tray -->
-    <Section
-      title="System Tray"
-      description="Keep music playing when the window is closed."
-    >
+    <Section title="System Tray" description="Keep music playing when the window is closed.">
       <ToggleInt
         :modelValue="store.closeToTray"
         @update:modelValue="(v) => store.setCloseToTray(v)"
         label="Close to tray"
       />
       <p class="text-xs text-gray-500 mt-2 leading-relaxed">
-        While enabled, a tray icon appears and closing the window hides ts-music
-        to the system tray instead of quitting — playback keeps running. Click
-        the tray icon to bring the window back, or use its menu to control
-        playback and quit.
+        While enabled, a tray icon appears and closing the window hides ts-music to the system tray
+        instead of quitting — playback keeps running. Click the tray icon to bring the window back,
+        or use its menu to control playback and quit.
       </p>
     </Section>
 
     <!-- Keyboard Shortcuts -->
-    <Section
-      title="Keyboard Shortcuts"
-      description="Control playback from anywhere in the app."
-    >
+    <Section title="Keyboard Shortcuts" description="Control playback from anywhere in the app.">
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-1.5">
         <div
           v-for="(s, i) in shortcuts"
@@ -337,8 +332,8 @@
         </div>
       </div>
       <p class="text-xs text-gray-500 mt-3">
-        Shortcuts are ignored while you're typing in a text field. Hardware media
-        keys (play/pause, next, previous) are handled by the system controls.
+        Shortcuts are ignored while you're typing in a text field. Hardware media keys (play/pause,
+        next, previous) are handled by the system controls.
       </p>
     </Section>
 
@@ -404,82 +399,135 @@
     </Section>
 
     <!-- Library -->
-    <Section title="Library">
-      <div class="flex items-center justify-between mb-5">
+    <Section
+      title="Library"
+      description="Manage your music library database, playlists, backups, and settings."
+    >
+      <!-- Import playlist -->
+      <div class="flex items-center justify-between gap-4 mb-5">
         <div>
           <h3 class="text-white font-medium text-sm">Import playlist</h3>
           <p class="text-xs text-gray-500">Load an .m3u / .m3u8 file into a new playlist.</p>
         </div>
         <button
           @click="importM3u"
-          class="px-4 py-2 bg-[#3a3a3a] hover:bg-[#444] text-white rounded-md transition-colors text-sm font-medium shrink-0"
+          :disabled="store.loading"
+          class="px-4 py-2 bg-[#3a3a3a] hover:bg-[#444] disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-md transition-colors text-sm font-medium shrink-0"
         >
           Import M3U
         </button>
       </div>
-      <div class="flex items-center justify-between">
+
+      <!-- Export Backup -->
+      <div class="flex items-center justify-between gap-4 mb-5 border-t border-white/5 pt-5">
+        <div>
+          <h3 class="text-white font-medium text-sm">Export Full Backup</h3>
+          <p class="text-xs text-gray-500">
+            Export a full copy of your library database and settings for moving to another PC.
+          </p>
+        </div>
+        <button
+          @click="store.exportBackup()"
+          :disabled="store.loading"
+          class="px-4 py-2 bg-[#3a3a3a] hover:bg-[#444] disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-md transition-colors text-sm font-medium shrink-0"
+        >
+          Export Backup
+        </button>
+      </div>
+
+      <!-- Import Backup -->
+      <div class="flex items-center justify-between gap-4 mb-5 border-t border-white/5 pt-5">
+        <div>
+          <h3 class="text-white font-medium text-sm">Import Backup</h3>
+          <p class="text-xs text-gray-500">
+            Restore library database and settings from a previously exported backup file.
+          </p>
+        </div>
+        <button
+          @click="store.importBackup()"
+          :disabled="store.loading"
+          class="px-4 py-2 bg-[#3a3a3a] hover:bg-[#444] disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-md transition-colors text-sm font-medium shrink-0"
+        >
+          Import Backup
+        </button>
+      </div>
+
+      <!-- Reset library -->
+      <div class="flex items-center justify-between gap-4 border-t border-white/5 pt-5">
         <div>
           <h3 class="text-white font-medium text-sm">Reset library</h3>
           <p class="text-xs text-gray-500">Clear all songs, albums, playlists and likes.</p>
         </div>
         <button
           @click="confirmReset"
-          :disabled="store.resettingLibrary"
-          class="px-4 py-2 rounded-md transition-colors text-sm font-medium shrink-0 flex items-center gap-2"
-          :class="store.resettingLibrary
-            ? 'bg-red-600/60 text-white/80 cursor-not-allowed'
-            : 'bg-red-600 hover:bg-red-700 text-white'"
+          :disabled="store.loading"
+          class="px-4 py-2 rounded-md bg-red-600 hover:bg-red-500 disabled:opacity-40 disabled:cursor-not-allowed text-white transition-colors text-sm font-medium shrink-0"
         >
-          <svg
-            v-if="store.resettingLibrary"
-            class="w-4 h-4 animate-spin"
-            xmlns="http://www.w3.org/2000/svg"
-            fill="none"
-            viewBox="0 0 24 24"
-          >
-            <circle
-              class="opacity-25"
-              cx="12"
-              cy="12"
-              r="10"
-              stroke="currentColor"
-              stroke-width="4"
-            ></circle>
-            <path
-              class="opacity-75"
-              fill="currentColor"
-              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-            ></path>
-          </svg>
-          {{ store.resettingLibrary ? 'Resetting...' : 'Reset Library' }}
+          Reset Library
         </button>
       </div>
-      <div v-if="store.resettingLibrary" class="mt-2">
-        <span class="text-xs text-gray-400 flex items-center gap-2">
-          <svg
-            class="w-3 h-3 animate-spin text-[var(--accent-color)]"
-            xmlns="http://www.w3.org/2000/svg"
-            fill="none"
-            viewBox="0 0 24 24"
-          >
-            <circle
-              class="opacity-25"
-              cx="12"
-              cy="12"
-              r="10"
-              stroke="currentColor"
-              stroke-width="4"
-            ></circle>
-            <path
-              class="opacity-75"
-              fill="currentColor"
-              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-            ></path>
-          </svg>
-          {{ store.statusMessage }}
-        </span>
+
+      <!-- Footer for status message / loading indicator, same as folders card -->
+      <div
+        v-if="store.statusMessage"
+        class="flex items-center gap-5 mt-5 pt-3 border-t border-white/5"
+      >
+        <span class="text-xs text-gray-500 truncate">{{ store.statusMessage }}</span>
       </div>
     </Section>
+
+    <!-- Backup Report Modal -->
+    <Transition name="modal">
+      <div
+        v-if="store.showBackupReportModal"
+        class="fixed inset-0 z-[300] flex items-center justify-center bg-black/70 backdrop-blur-md"
+        @click.self="store.showBackupReportModal = false"
+      >
+        <div
+          class="modal-panel w-[500px] max-w-[92vw] bg-[#1c1c1e] rounded-2xl shadow-2xl border border-[#2c2c2e] p-6 flex flex-col max-h-[80vh]"
+        >
+          <h2 class="text-lg font-bold text-white mb-3">Backup Import Report</h2>
+          <p class="text-sm text-gray-400 mb-4 leading-relaxed">
+            The database was imported, but the following songs could not be found on your disk. They
+            have been removed from your active library pages to keep your library clean:
+          </p>
+
+          <!-- Scrollable list of missing tracks -->
+          <div
+            class="flex-1 overflow-y-auto min-h-[150px] max-h-[350px] bg-[#2a2a2a] rounded-lg border border-white/5 p-3 mb-6 space-y-2"
+          >
+            <div
+              v-for="(track, idx) in store.missingTracksReport"
+              :key="idx"
+              class="flex items-center gap-3 text-xs py-1.5 border-b border-white/5 last:border-b-0 text-left"
+            >
+              <CoverImage :path="track.path" className="h-10 w-10 rounded-md shrink-0" />
+              <div class="min-w-0 flex-1">
+                <div class="font-semibold text-gray-200 truncate">
+                  {{ track.title || 'Untitled' }}
+                </div>
+                <div class="text-gray-400 truncate">{{ track.artist || 'Unknown Artist' }}</div>
+                <div
+                  class="text-gray-500 font-mono scale-[0.9] origin-left truncate mt-0.5"
+                  :title="track.path"
+                >
+                  {{ track.path }}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="flex justify-end">
+            <button
+              @click="store.showBackupReportModal = false"
+              class="px-5 py-2 bg-[var(--accent-color)] hover:bg-red-500 text-white rounded-lg text-sm font-semibold transition shadow-lg"
+            >
+              OK
+            </button>
+          </div>
+        </div>
+      </div>
+    </Transition>
   </div>
 </template>
 
@@ -492,6 +540,7 @@ import ToggleInt from '../components/settings/ToggleInt.vue';
 import SelectInt from '../components/settings/SelectInt.vue';
 import SliderInt from '../components/settings/SliderInt.vue';
 import EqualizerPanel from '../components/EqualizerPanel.vue';
+import CoverImage from '../components/CoverImage.vue';
 
 const devices = ref([]);
 

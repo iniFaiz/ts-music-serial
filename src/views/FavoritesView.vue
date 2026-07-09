@@ -51,7 +51,9 @@ const playLastFavorites = () => {
 <template>
   <div class="flex flex-col h-full overflow-auto">
     <!-- Header -->
-    <div class="p-8 flex gap-8 items-end bg-gradient-to-b from-[#3a2030] to-[var(--app-bg)] relative">
+    <div
+      class="p-8 flex gap-8 items-end bg-gradient-to-b from-[#3a2030] to-[var(--app-bg)] relative"
+    >
       <div
         class="h-52 w-52 shrink-0 rounded-md shadow-2xl bg-gradient-to-br from-[var(--accent-color)] to-[#7a1020] flex items-center justify-center"
       >
@@ -96,7 +98,7 @@ const playLastFavorites = () => {
             </svg>
             Play
           </button>
-          
+
           <button
             @click="shuffleFavorites"
             :disabled="songs.length === 0"

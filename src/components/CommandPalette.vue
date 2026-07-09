@@ -117,7 +117,9 @@ function activate(item) {
     router.push({ name: 'ArtistDetail', params: { name: item.data.artist } });
   } else if (item.type === 'playlist') {
     router.push(
-      item.data.is_smart ? '/smart/' + item.data.id : { name: 'PlaylistDetail', params: { id: item.data.id } }
+      item.data.is_smart
+        ? '/smart/' + item.data.id
+        : { name: 'PlaylistDetail', params: { id: item.data.id } }
     );
   }
 }
@@ -183,7 +185,9 @@ function isGroupStart(i) {
               placeholder="Search songs, albums, artists, playlists…"
               class="flex-1 bg-transparent text-white text-[15px] focus:outline-none placeholder-gray-600"
             />
-            <kbd class="text-[10px] text-gray-500 border border-[#3a3a3a] rounded px-1.5 py-0.5">Esc</kbd>
+            <kbd class="text-[10px] text-gray-500 border border-[#3a3a3a] rounded px-1.5 py-0.5"
+              >Esc</kbd
+            >
           </div>
 
           <!-- Results -->
@@ -271,9 +275,7 @@ function isGroupStart(i) {
                     {{ item.type === 'song' ? 'Play' : 'Open' }}
                     <kbd class="cmdk-kbd">↵</kbd>
                   </span>
-                  <span
-                    v-else-if="item.type === 'song'"
-                    class="text-[11px] text-gray-600 shrink-0"
+                  <span v-else-if="item.type === 'song'" class="text-[11px] text-gray-600 shrink-0"
                     >Play</span
                   >
                 </button>

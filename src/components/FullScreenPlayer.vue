@@ -123,14 +123,14 @@ const lines = computed(() => {
   }
 
   const result = [];
-  
+
   // 1. Check if there's an intro gap before the first line
   if (rawLines[0] && rawLines[0].time_ms > 6000) {
     result.push({
       isGap: true,
       time_ms: 2000,
       endTimeMs: rawLines[0].time_ms - 1000,
-      text: '• • •'
+      text: '• • •',
     });
   }
 
@@ -150,7 +150,7 @@ const lines = computed(() => {
           isGap: true,
           time_ms: gapStart,
           endTimeMs: gapEnd,
-          text: '• • •'
+          text: '• • •',
         });
       }
     } else {
@@ -174,15 +174,13 @@ function getDotColor(line, dotIdx) {
   const now = currentMs.value;
   const elapsed = Math.max(0, Math.min(duration, now - line.time_ms));
   const p = elapsed / duration;
-  
+
   const startRange = dotIdx * 0.33;
   const dotProgress = Math.max(0, Math.min(1, (p - startRange) / 0.33));
   const opacity = 0.2 + (0.95 - 0.2) * dotProgress;
-  
+
   return `rgba(255, 255, 255, ${opacity.toFixed(3)})`;
 }
-
-
 
 // ---- Smooth scroll (custom RAF, same logic as LyricsPanel) ---------------
 let npRafId = null;
@@ -205,8 +203,14 @@ function npSmoothScrollTo(container, target, duration = 650) {
   function step(now) {
     const p = Math.min((now - t0) / duration, 1);
     container.scrollTop = start + delta * easeInOutQuart(p);
-    if (p < 1) { npRafId = requestAnimationFrame(step); }
-    else { npRafId = null; setTimeout(() => { npIsAutoScrolling = false; }, 80); }
+    if (p < 1) {
+      npRafId = requestAnimationFrame(step);
+    } else {
+      npRafId = null;
+      setTimeout(() => {
+        npIsAutoScrolling = false;
+      }, 80);
+    }
   }
   npRafId = requestAnimationFrame(step);
 }
@@ -214,7 +218,7 @@ function npSmoothScrollTo(container, target, duration = 650) {
 function npScrollToLine(idx) {
   const container = linesEl.value;
   if (!container) return;
-  
+
   const el = container.querySelector(`[data-line="${idx}"]`);
   if (!el) return;
   const h = container.clientHeight;
@@ -237,7 +241,7 @@ watch(activeIdx, (idx, oldIdx) => {
 
   // If previous line was a gap, wait for its collapse transition to finish
   // so the layout is stable before we calculate scroll position
-  const prevLine = (oldIdx >= 0 && oldIdx < lines.value.length) ? lines.value[oldIdx] : null;
+  const prevLine = oldIdx >= 0 && oldIdx < lines.value.length ? lines.value[oldIdx] : null;
   if (prevLine && prevLine.isGap) {
     nextTick(() => {
       const container = linesEl.value;
@@ -251,7 +255,9 @@ watch(activeIdx, (idx, oldIdx) => {
           gapEl.removeEventListener('transitionend', onEnd);
           npScrollToLine(idx);
         };
-        const onEnd = (e) => { if (e.propertyName === 'height') doScroll(); };
+        const onEnd = (e) => {
+          if (e.propertyName === 'height') doScroll();
+        };
         gapEl.addEventListener('transitionend', onEnd);
         // Safety fallback if transitionend doesn't fire
         setTimeout(doScroll, 500);
@@ -266,10 +272,13 @@ watch(activeIdx, (idx, oldIdx) => {
   nextTick(() => npScrollToLine(idx));
 });
 
-watch(() => [song.value?.path, lines.value], () => {
-  npLastScrolledIdx = -1;
-  npUserPausedUntil = 0;
-});
+watch(
+  () => [song.value?.path, lines.value],
+  () => {
+    npLastScrolledIdx = -1;
+    npUserPausedUntil = 0;
+  }
+);
 
 onMounted(() => {
   document.addEventListener('click', closeLosslessPopup);
@@ -310,14 +319,18 @@ const remaining = computed(() =>
 // ---- Color Extraction for Apple Music Animated Gradient Background ----
 const colors = ref(defaultPalette());
 
-watch(coverUrl, async (newUrl) => {
-  const path = store.currentSong?.path;
-  if (path || newUrl) {
-    colors.value = await extractColorsForPath(path, newUrl);
-  } else {
-    colors.value = defaultPalette();
-  }
-}, { immediate: true });
+watch(
+  coverUrl,
+  async (newUrl) => {
+    const path = store.currentSong?.path;
+    if (path || newUrl) {
+      colors.value = await extractColorsForPath(path, newUrl);
+    } else {
+      colors.value = defaultPalette();
+    }
+  },
+  { immediate: true }
+);
 
 const close = () => {
   store.exitFullscreenWithTransition();
@@ -344,7 +357,9 @@ const goToAlbum = (albumName) => {
     >
       <!-- Animated gradient backdrop (not see-through) -->
       <div class="absolute inset-0 bg-[#0a0a0a] overflow-hidden">
-        <div class="absolute inset-0 opacity-90 filter blur-[80px] transform scale-[2.2] origin-center pointer-events-none">
+        <div
+          class="absolute inset-0 opacity-90 filter blur-[80px] transform scale-[2.2] origin-center pointer-events-none"
+        >
           <div class="blob blob-1" :style="{ backgroundColor: colors[0] }"></div>
           <div class="blob blob-2" :style="{ backgroundColor: colors[1] }"></div>
           <div class="blob blob-3" :style="{ backgroundColor: colors[2] }"></div>
@@ -352,7 +367,9 @@ const goToAlbum = (albumName) => {
         </div>
         <!-- Dark overlay to ensure text contrast (removed expensive backdrop-blur) -->
         <div class="absolute inset-0 bg-[#0a0a0a]/38"></div>
-        <div class="absolute inset-0 bg-gradient-to-t from-[#0a0a0a] via-[#0a0a0a]/20 to-[#0a0a0a]/10"></div>
+        <div
+          class="absolute inset-0 bg-gradient-to-t from-[#0a0a0a] via-[#0a0a0a]/20 to-[#0a0a0a]/10"
+        ></div>
       </div>
 
       <!-- Draggable top strip + close button -->
@@ -389,8 +406,23 @@ const goToAlbum = (albumName) => {
           :class="store.showRomaji ? 'bg-white/25' : 'bg-white/10 hover:bg-white/20'"
           :title="store.showRomaji ? 'Hide romaji' : 'Show romaji'"
         >
-          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="m5 8 6 6" /><path d="m4 14 6-6 2-3" /><path d="M2 5h12" /><path d="M7 2h1" /><path d="m22 22-5-10-5 10" /><path d="M14 18h6" />
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="m5 8 6 6" />
+            <path d="m4 14 6-6 2-3" />
+            <path d="M2 5h12" />
+            <path d="M7 2h1" />
+            <path d="m22 22-5-10-5 10" />
+            <path d="M14 18h6" />
           </svg>
         </button>
       </div>
@@ -400,7 +432,9 @@ const goToAlbum = (albumName) => {
         class="relative flex flex-col items-center justify-center h-full px-6 pb-8 lg:flex-row sm:px-12 lg:px-20 pt-14"
       >
         <!-- Left: cover + controls -->
-        <div class="flex flex-col items-stretch w-full max-w-[420px] shrink-0 transition-all duration-500 ease-[cubic-bezier(0.25,1,0.5,1)]">
+        <div
+          class="flex flex-col items-stretch w-full max-w-[420px] shrink-0 transition-all duration-500 ease-[cubic-bezier(0.25,1,0.5,1)]"
+        >
           <div
             class="np-cover aspect-square w-full rounded-xl overflow-hidden shadow-2xl bg-[#222] border border-white/10"
           >
@@ -442,7 +476,7 @@ const goToAlbum = (albumName) => {
                   {{ song.artist }}
                 </span>
                 <span v-if="song.album">
-                  — 
+                  —
                   <span
                     @click="goToAlbum(song.album)"
                     class="hover:text-[var(--accent-color)] hover:underline cursor-pointer transition-colors"
@@ -455,7 +489,11 @@ const goToAlbum = (albumName) => {
             <button
               @click="store.toggleFavorite(song.path)"
               class="transition shrink-0 hover:scale-110"
-              :class="store.isFavorite(song.path) ? 'text-[var(--accent-color)]' : 'text-white/60 hover:text-white'"
+              :class="
+                store.isFavorite(song.path)
+                  ? 'text-[var(--accent-color)]'
+                  : 'text-white/60 hover:text-white'
+              "
               title="Like"
             >
               <svg
@@ -560,15 +598,37 @@ const goToAlbum = (albumName) => {
           <div class="flex items-center justify-center gap-6 mt-6">
             <button
               @click="store.toggleShuffle()"
-              :class="store.shuffleMode ? 'text-[var(--accent-color)]' : 'text-white/60 hover:text-white'"
+              :class="
+                store.shuffleMode ? 'text-[var(--accent-color)]' : 'text-white/60 hover:text-white'
+              "
               title="Shuffle"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
                 <path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5" />
               </svg>
             </button>
-            <button @click="store.prevSong()" class="text-white/90 hover:text-white" title="Previous">
-              <svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 24 24" fill="currentColor">
+            <button
+              @click="store.prevSong()"
+              class="text-white/90 hover:text-white"
+              title="Previous"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="30"
+                height="30"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+              >
                 <polygon points="19 20 9 12 19 4 19 20"></polygon>
                 <rect x="4" y="4" width="2.5" height="16"></rect>
               </svg>
@@ -577,16 +637,40 @@ const goToAlbum = (albumName) => {
               @click="store.togglePlay()"
               class="flex items-center justify-center w-16 h-16 text-black transition bg-white rounded-full hover:scale-105"
             >
-              <svg v-if="store.isPlaying" xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 24 24" fill="currentColor">
+              <svg
+                v-if="store.isPlaying"
+                xmlns="http://www.w3.org/2000/svg"
+                width="30"
+                height="30"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+              >
                 <rect x="6" y="4" width="4" height="16"></rect>
                 <rect x="14" y="4" width="4" height="16"></rect>
               </svg>
-              <svg v-else xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 24 24" fill="currentColor">
+              <svg
+                v-else
+                xmlns="http://www.w3.org/2000/svg"
+                width="30"
+                height="30"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+              >
                 <polygon points="6 3 20 12 6 21 6 3"></polygon>
               </svg>
             </button>
-            <button @click="store.nextSong(true)" class="text-white/90 hover:text-white" title="Next">
-              <svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 24 24" fill="currentColor">
+            <button
+              @click="store.nextSong(true)"
+              class="text-white/90 hover:text-white"
+              title="Next"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="30"
+                height="30"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+              >
                 <polygon points="5 4 15 12 5 20 5 4"></polygon>
                 <rect x="17.5" y="4" width="2.5" height="16"></rect>
               </svg>
@@ -594,23 +678,53 @@ const goToAlbum = (albumName) => {
             <button
               @click="store.toggleLoop()"
               class="relative"
-              :class="store.loopMode > 0 ? 'text-[var(--accent-color)]' : 'text-white/60 hover:text-white'"
+              :class="
+                store.loopMode > 0 ? 'text-[var(--accent-color)]' : 'text-white/60 hover:text-white'
+              "
               title="Loop"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
                 <path d="M17 1l4 4-4 4"></path>
                 <path d="M3 11V9a4 4 0 0 1 4-4h14"></path>
                 <path d="M7 23l-4-4 4-4"></path>
                 <path d="M21 13v2a4 4 0 0 1-4 4H3"></path>
               </svg>
-              <span v-if="store.loopMode === 2" class="absolute -top-1 -right-2 text-[8px] font-bold">1</span>
+              <span
+                v-if="store.loopMode === 2"
+                class="absolute -top-1 -right-2 text-[8px] font-bold"
+                >1</span
+              >
             </button>
           </div>
 
           <!-- Volume -->
           <div class="flex items-center gap-2 mt-4 text-white/60">
-            <button @click="store.toggleMute()" class="hover:text-white" :title="store.isMuted ? 'Unmute' : 'Mute'">
-              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <button
+              @click="store.toggleMute()"
+              class="hover:text-white"
+              :title="store.isMuted ? 'Unmute' : 'Mute'"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
                 <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
                 <path v-if="!store.isMuted" d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
                 <template v-else>
@@ -637,12 +751,25 @@ const goToAlbum = (albumName) => {
         <!-- Right: lyrics (with dynamic transition classes instead of v-if) -->
         <div
           class="lyrics-container h-full min-w-0 flex flex-col transition-all duration-500 ease-[cubic-bezier(0.25,1,0.5,1)]"
-          :class="showLyricsColumn ? 'opacity-100 flex-1 max-w-[650px] translate-x-0 pointer-events-auto ml-8 lg:ml-16' : 'opacity-0 max-w-0 translate-x-12 pointer-events-none overflow-hidden ml-0'"
+          :class="
+            showLyricsColumn
+              ? 'opacity-100 flex-1 max-w-[650px] translate-x-0 pointer-events-auto ml-8 lg:ml-16'
+              : 'opacity-0 max-w-0 translate-x-12 pointer-events-none overflow-hidden ml-0'
+          "
         >
           <div
             ref="linesEl"
             class="flex-1 overflow-y-auto np-lyrics-scroll py-[35vh] w-full lg:w-[650px] lg:min-w-[650px]"
-            @scroll.passive="() => { if (npIsAutoScrolling) return; npUserPausedUntil = Date.now() + 3000; if (npUserScrollTimer) clearTimeout(npUserScrollTimer); npUserScrollTimer = setTimeout(() => { npUserPausedUntil = 0; }, 3100); }"
+            @scroll.passive="
+              () => {
+                if (npIsAutoScrolling) return;
+                npUserPausedUntil = Date.now() + 3000;
+                if (npUserScrollTimer) clearTimeout(npUserScrollTimer);
+                npUserScrollTimer = setTimeout(() => {
+                  npUserPausedUntil = 0;
+                }, 3100);
+              }
+            "
           >
             <!-- Loading -->
             <div v-if="lyricsLoading" class="text-2xl font-bold text-white/40">Loading lyrics…</div>
@@ -659,7 +786,7 @@ const goToAlbum = (albumName) => {
                   synced ? 'cursor-pointer' : '',
                   i === activeIdx ? 'np-line-active' : 'np-line-dim',
                   line.isGap ? 'np-line-gap' : 'mb-4',
-                  (line.words && line.words.length) ? 'np-words' : '',
+                  line.words && line.words.length ? 'np-words' : '',
                 ]"
               >
                 <span
@@ -668,9 +795,24 @@ const goToAlbum = (albumName) => {
                   :class="{ 'np-gap-dots-active': i === activeIdx }"
                 >
                   <span class="dots-wrapper">
-                    <span :style="{ color: i === activeIdx ? getDotColor(line, 0) : 'rgba(255,255,255,0.2)' }">•</span>
-                    <span :style="{ color: i === activeIdx ? getDotColor(line, 1) : 'rgba(255,255,255,0.2)' }">•</span>
-                    <span :style="{ color: i === activeIdx ? getDotColor(line, 2) : 'rgba(255,255,255,0.2)' }">•</span>
+                    <span
+                      :style="{
+                        color: i === activeIdx ? getDotColor(line, 0) : 'rgba(255,255,255,0.2)',
+                      }"
+                      >•</span
+                    >
+                    <span
+                      :style="{
+                        color: i === activeIdx ? getDotColor(line, 1) : 'rgba(255,255,255,0.2)',
+                      }"
+                      >•</span
+                    >
+                    <span
+                      :style="{
+                        color: i === activeIdx ? getDotColor(line, 2) : 'rgba(255,255,255,0.2)',
+                      }"
+                      >•</span
+                    >
                   </span>
                 </span>
                 <LyricContent
@@ -678,7 +820,7 @@ const goToAlbum = (albumName) => {
                   :line="line"
                   :active="i === activeIdx"
                   :is-past="i < activeIdx"
-                  :current-ms="(i === activeIdx || i === activeIdx - 1) ? currentMs : 0"
+                  :current-ms="i === activeIdx || i === activeIdx - 1 ? currentMs : 0"
                   :show-romaji="store.showRomaji"
                 />
               </p>
@@ -689,7 +831,9 @@ const goToAlbum = (albumName) => {
               <div class="mb-2 text-3xl font-bold">Lyrics not found</div>
               <p class="mb-4 text-sm text-white/40">
                 No lyrics were found locally, on LRCLIB, or NetEase
-                <span v-if="!store.musixmatchConfigured">(add a Musixmatch token in Settings for more sources)</span>.
+                <span v-if="!store.musixmatchConfigured"
+                  >(add a Musixmatch token in Settings for more sources)</span
+                >.
               </p>
               <button
                 @click="fetchLyrics(true)"
@@ -709,9 +853,7 @@ const goToAlbum = (albumName) => {
       </div>
 
       <!-- Bottom-right lyrics toggle button -->
-      <div
-        class="absolute z-30 bottom-6 right-6"
-      >
+      <div class="absolute z-30 bottom-6 right-6">
         <button
           @click="showLyricsOption = !showLyricsOption"
           class="flex items-center justify-center w-10 h-10 text-white transition-all rounded-full bg-white/10 hover:bg-white/20 active:scale-95"
@@ -767,8 +909,6 @@ input[type='range']::-webkit-slider-thumb {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
 }
 
-
-
 .np-lyrics-scroll {
   scrollbar-width: thin;
   scrollbar-color: transparent transparent;
@@ -801,12 +941,14 @@ input[type='range']::-webkit-slider-thumb {
 
 .np-line {
   transition:
-    color     0.45s cubic-bezier(0.25, 1, 0.5, 1),
-    opacity   0.45s cubic-bezier(0.25, 1, 0.5, 1),
-    transform 0.5s  cubic-bezier(0.34, 1.56, 0.64, 1);
+    color 0.45s cubic-bezier(0.25, 1, 0.5, 1),
+    opacity 0.45s cubic-bezier(0.25, 1, 0.5, 1),
+    transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
   transform-origin: left center;
   padding-right: 24px; /* Prevent text clipping on scale/translate */
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 2px 6px rgba(0, 0, 0, 0.15);
+  text-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.2),
+    0 2px 6px rgba(0, 0, 0, 0.15);
 }
 /* Word-by-word (karaoke) lines drive their brightness with the gradient wipe, so
    entering the active state must NOT also ride the slow opacity ramp: transitioning
@@ -817,8 +959,8 @@ input[type='range']::-webkit-slider-thumb {
    (→ .np-line-dim) still fades the finished line out. */
 .np-line.np-words.np-line-active {
   transition:
-    color     0.45s cubic-bezier(0.25, 1, 0.5, 1),
-    transform 0.5s  cubic-bezier(0.34, 1.56, 0.64, 1);
+    color 0.45s cubic-bezier(0.25, 1, 0.5, 1),
+    transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 .np-line-active {
@@ -976,7 +1118,7 @@ input[type='range']::-webkit-slider-thumb {
   padding: 0 !important;
   opacity: 0;
   overflow: hidden;
-  transition: 
+  transition:
     height 0.4s cubic-bezier(0.25, 1, 0.5, 1),
     margin 0.4s cubic-bezier(0.25, 1, 0.5, 1),
     opacity 0.4s cubic-bezier(0.25, 1, 0.5, 1);

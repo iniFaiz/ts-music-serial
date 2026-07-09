@@ -11,10 +11,9 @@ const route = useRoute();
 const artistName = route.params.name;
 
 // Artist tracks, ordered by album then track number in SQL.
-const { data: artistSongs } = useQuery(
-  () => invoke('db_artist_tracks', { artist: artistName }),
-  { initial: [] }
-);
+const { data: artistSongs } = useQuery(() => invoke('db_artist_tracks', { artist: artistName }), {
+  initial: [],
+});
 
 const representativePath = computed(() => {
   const withCover = artistSongs.value.find((s) => s.has_cover);

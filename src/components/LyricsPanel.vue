@@ -12,31 +12,46 @@ const hasRomaji = computed(() => !!(lyrics.value && lyrics.value.has_romaji));
 
 async function fetchLyrics(force = false) {
   const song = store.currentSong;
-  if (!song) { lyrics.value = null; lyricsState.value = 'idle'; return; }
+  if (!song) {
+    lyrics.value = null;
+    lyricsState.value = 'idle';
+    return;
+  }
   lyricsState.value = 'loading';
   const result = await loadLyrics(song, { force });
   lyrics.value = result;
   lyricsState.value = 'done';
 }
 
-watch(() => store.lyricsPanelOpen, (open) => {
-  if (open && lyricsState.value === 'idle') fetchLyrics();
-});
+watch(
+  () => store.lyricsPanelOpen,
+  (open) => {
+    if (open && lyricsState.value === 'idle') fetchLyrics();
+  }
+);
 
-watch(() => store.currentSong, () => {
-  lyrics.value = null;
-  lyricsState.value = 'idle';
-  if (store.lyricsPanelOpen) fetchLyrics();
-});
+watch(
+  () => store.currentSong,
+  () => {
+    lyrics.value = null;
+    lyricsState.value = 'idle';
+    if (store.lyricsPanelOpen) fetchLyrics();
+  }
+);
 
-watch(() => store.lyricsSource, () => {
-  lyrics.value = null;
-  lyricsState.value = 'idle';
-  if (store.lyricsPanelOpen) fetchLyrics(true);
-});
+watch(
+  () => store.lyricsSource,
+  () => {
+    lyrics.value = null;
+    lyricsState.value = 'idle';
+    if (store.lyricsPanelOpen) fetchLyrics(true);
+  }
+);
 
 // +50ms lookahead: compensates for the ~50ms average lag from the 100ms poll interval
-const currentTimeMs = computed(() => Math.floor(store.currentTime * 1000) + 50 + store.lyricsOffsetMs);
+const currentTimeMs = computed(
+  () => Math.floor(store.currentTime * 1000) + 50 + store.lyricsOffsetMs
+);
 
 const panelLines = computed(() => {
   const rawLines = (lyrics.value && lyrics.value.lines) || [];
@@ -45,14 +60,14 @@ const panelLines = computed(() => {
   }
 
   const result = [];
-  
+
   // 1. Check if there's an intro gap before the first line
   if (rawLines[0] && rawLines[0].time_ms > 6000) {
     result.push({
       isGap: true,
       time_ms: 2000,
       endTimeMs: rawLines[0].time_ms - 1000,
-      text: '• • •'
+      text: '• • •',
     });
   }
 
@@ -72,7 +87,7 @@ const panelLines = computed(() => {
           isGap: true,
           time_ms: gapStart,
           endTimeMs: gapEnd,
-          text: '• • •'
+          text: '• • •',
         });
       }
     } else {
@@ -105,11 +120,11 @@ function getDotColor(line, dotIdx) {
   const now = currentTimeMs.value;
   const elapsed = Math.max(0, Math.min(duration, now - line.time_ms));
   const p = elapsed / duration;
-  
+
   const startRange = dotIdx * 0.33;
   const dotProgress = Math.max(0, Math.min(1, (p - startRange) / 0.33));
   const opacity = 0.2 + (0.95 - 0.2) * dotProgress;
-  
+
   return `rgba(255, 255, 255, ${opacity.toFixed(3)})`;
 }
 
@@ -117,8 +132,8 @@ function getDotColor(line, dotIdx) {
 
 const scrollRef = ref(null);
 let rafId = null;
-let isAutoScrolling = false;   // true while our RAF animation is running
-let userPausedUntil = 0;       // epoch ms — ignore auto-scroll until this time
+let isAutoScrolling = false; // true while our RAF animation is running
+let userPausedUntil = 0; // epoch ms — ignore auto-scroll until this time
 let userScrollTimer = null;
 let lastScrolledIdx = -1;
 
@@ -146,7 +161,9 @@ function smoothScrollTo(container, targetTop, duration = 550) {
     } else {
       rafId = null;
       // Short grace period so the scroll-end event doesn't flip the flag yet
-      setTimeout(() => { isAutoScrolling = false; }, 80);
+      setTimeout(() => {
+        isAutoScrolling = false;
+      }, 80);
     }
   }
 
@@ -156,7 +173,7 @@ function smoothScrollTo(container, targetTop, duration = 550) {
 function scrollToLine(idx) {
   const container = scrollRef.value;
   if (!container) return;
-  
+
   const el = container.querySelector(`[data-line="${idx}"]`);
   if (!el) return;
 
@@ -173,7 +190,9 @@ function onScroll() {
   if (isAutoScrolling) return;
   userPausedUntil = Date.now() + 3000;
   if (userScrollTimer) clearTimeout(userScrollTimer);
-  userScrollTimer = setTimeout(() => { userPausedUntil = 0; }, 3100);
+  userScrollTimer = setTimeout(() => {
+    userPausedUntil = 0;
+  }, 3100);
 }
 
 // Trigger scroll whenever the active line changes
@@ -193,7 +212,8 @@ watch(activeIdx, async (idx, oldIdx) => {
 
   // If previous line was a gap, wait for its collapse transition to finish
   // so the layout is stable before we calculate scroll position
-  const prevLine = (oldIdx >= 0 && oldIdx < panelLines.value.length) ? panelLines.value[oldIdx] : null;
+  const prevLine =
+    oldIdx >= 0 && oldIdx < panelLines.value.length ? panelLines.value[oldIdx] : null;
   if (prevLine && prevLine.isGap) {
     await nextTick();
     const container = scrollRef.value;
@@ -207,7 +227,9 @@ watch(activeIdx, async (idx, oldIdx) => {
         gapEl.removeEventListener('transitionend', onEnd);
         scrollToLine(idx);
       };
-      const onEnd = (e) => { if (e.propertyName === 'height') doScroll(); };
+      const onEnd = (e) => {
+        if (e.propertyName === 'height') doScroll();
+      };
       gapEl.addEventListener('transitionend', onEnd);
       // Safety fallback if transitionend doesn't fire
       setTimeout(doScroll, 500);
@@ -223,10 +245,13 @@ watch(activeIdx, async (idx, oldIdx) => {
 });
 
 // Reset scroll state on song/lyrics change
-watch(() => [store.currentSong?.path, lyrics.value], () => {
-  lastScrolledIdx = -1;
-  userPausedUntil = 0;
-});
+watch(
+  () => [store.currentSong?.path, lyrics.value],
+  () => {
+    lastScrolledIdx = -1;
+    userPausedUntil = 0;
+  }
+);
 
 onUnmounted(() => {
   if (rafId) cancelAnimationFrame(rafId);
@@ -254,8 +279,23 @@ function seekToLine(line) {
         :class="store.showRomaji ? 'bg-white/25' : 'bg-white/10 hover:bg-white/20'"
         :title="store.showRomaji ? 'Hide romaji' : 'Show romaji'"
       >
-        <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="m5 8 6 6" /><path d="m4 14 6-6 2-3" /><path d="M2 5h12" /><path d="M7 2h1" /><path d="m22 22-5-10-5 10" /><path d="M14 18h6" />
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          width="15"
+          height="15"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="m5 8 6 6" />
+          <path d="m4 14 6-6 2-3" />
+          <path d="M2 5h12" />
+          <path d="M7 2h1" />
+          <path d="m22 22-5-10-5 10" />
+          <path d="M14 18h6" />
         </svg>
       </button>
 
@@ -266,9 +306,27 @@ function seekToLine(line) {
       >
         <!-- Loading -->
         <div v-if="lyricsState === 'loading'" class="flex items-center justify-center h-full">
-          <svg class="animate-spin text-gray-700" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none">
-            <circle class="opacity-20" cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3"></circle>
-            <path class="opacity-80" fill="currentColor" d="M12 3a9 9 0 0 1 9 9h-3a6 6 0 0 0-6-6V3z"></path>
+          <svg
+            class="animate-spin text-gray-700"
+            xmlns="http://www.w3.org/2000/svg"
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+          >
+            <circle
+              class="opacity-20"
+              cx="12"
+              cy="12"
+              r="9"
+              stroke="currentColor"
+              stroke-width="3"
+            ></circle>
+            <path
+              class="opacity-80"
+              fill="currentColor"
+              d="M12 3a9 9 0 0 1 9 9h-3a6 6 0 0 0-6-6V3z"
+            ></path>
           </svg>
         </div>
 
@@ -283,7 +341,7 @@ function seekToLine(line) {
             :class="[
               i === activeIdx ? 'lp-active' : 'lp-dim',
               line.isGap ? 'lp-line-gap' : '',
-              (line.words && line.words.length) ? 'lp-words' : '',
+              line.words && line.words.length ? 'lp-words' : '',
             ]"
           >
             <span
@@ -292,9 +350,24 @@ function seekToLine(line) {
               :class="{ 'lp-gap-dots-active': i === activeIdx }"
             >
               <span class="dots-wrapper">
-                <span :style="{ color: i === activeIdx ? getDotColor(line, 0) : 'rgba(255,255,255,0.2)' }">•</span>
-                <span :style="{ color: i === activeIdx ? getDotColor(line, 1) : 'rgba(255,255,255,0.2)' }">•</span>
-                <span :style="{ color: i === activeIdx ? getDotColor(line, 2) : 'rgba(255,255,255,0.2)' }">•</span>
+                <span
+                  :style="{
+                    color: i === activeIdx ? getDotColor(line, 0) : 'rgba(255,255,255,0.2)',
+                  }"
+                  >•</span
+                >
+                <span
+                  :style="{
+                    color: i === activeIdx ? getDotColor(line, 1) : 'rgba(255,255,255,0.2)',
+                  }"
+                  >•</span
+                >
+                <span
+                  :style="{
+                    color: i === activeIdx ? getDotColor(line, 2) : 'rgba(255,255,255,0.2)',
+                  }"
+                  >•</span
+                >
               </span>
             </span>
             <LyricContent
@@ -302,7 +375,7 @@ function seekToLine(line) {
               :line="line"
               :active="i === activeIdx"
               :is-past="i < activeIdx"
-              :current-ms="(i === activeIdx || i === activeIdx - 1) ? currentTimeMs : 0"
+              :current-ms="i === activeIdx || i === activeIdx - 1 ? currentTimeMs : 0"
               :show-romaji="store.showRomaji"
             />
           </div>
@@ -315,16 +388,35 @@ function seekToLine(line) {
             :key="i"
             class="lp-line lp-active"
             :class="line.text === '' ? 'mt-5' : ''"
-          >{{ line.text || '\u00A0' }}</div>
+          >
+            {{ line.text || '\u00A0' }}
+          </div>
         </div>
 
         <!-- Not found -->
-        <div v-else-if="lyricsState === 'done' && (!lyrics || !hasLyrics)" class="flex flex-col items-center justify-center h-full gap-3 text-center px-4">
-          <svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="text-gray-700">
-            <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
+        <div
+          v-else-if="lyricsState === 'done' && (!lyrics || !hasLyrics)"
+          class="flex flex-col items-center justify-center h-full gap-3 text-center px-4"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="26"
+            height="26"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.5"
+            class="text-gray-700"
+          >
+            <path
+              d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"
+            />
           </svg>
           <p class="text-xs text-gray-600">Lyrics not found</p>
-          <button @click="fetchLyrics(true)" class="text-[11px] text-gray-500 hover:text-white transition-colors">
+          <button
+            @click="fetchLyrics(true)"
+            class="text-[11px] text-gray-500 hover:text-white transition-colors"
+          >
             Try again
           </button>
         </div>
@@ -347,13 +439,7 @@ function seekToLine(line) {
 .lyrics-scroll {
   scrollbar-width: thin;
   scrollbar-color: transparent transparent;
-  mask-image: linear-gradient(
-    to bottom,
-    transparent 0%,
-    black 12%,
-    black 88%,
-    transparent 100%
-  );
+  mask-image: linear-gradient(to bottom, transparent 0%, black 12%, black 88%, transparent 100%);
 }
 .lyrics-scroll:hover {
   scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
@@ -382,9 +468,9 @@ function seekToLine(line) {
   padding: 0.18rem 0;
   /* Animate color, opacity, and the subtle left nudge */
   transition:
-    color      0.45s cubic-bezier(0.25, 1, 0.5, 1),
-    opacity    0.45s cubic-bezier(0.25, 1, 0.5, 1),
-    transform  0.5s  cubic-bezier(0.34, 1.56, 0.64, 1);
+    color 0.45s cubic-bezier(0.25, 1, 0.5, 1),
+    opacity 0.45s cubic-bezier(0.25, 1, 0.5, 1),
+    transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
   transform-origin: left center;
 }
 
@@ -397,8 +483,8 @@ function seekToLine(line) {
    transition, so leaving active (→ .lp-dim) still fades the finished line out. */
 .lp-line.lp-words.lp-active {
   transition:
-    color      0.45s cubic-bezier(0.25, 1, 0.5, 1),
-    transform  0.5s  cubic-bezier(0.34, 1.56, 0.64, 1);
+    color 0.45s cubic-bezier(0.25, 1, 0.5, 1),
+    transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 /* Active line: full white, nudged slightly right, very subtle scale pop */
@@ -449,7 +535,7 @@ function seekToLine(line) {
   padding: 0 !important;
   opacity: 0;
   overflow: hidden;
-  transition: 
+  transition:
     height 0.4s cubic-bezier(0.25, 1, 0.5, 1),
     margin 0.4s cubic-bezier(0.25, 1, 0.5, 1),
     opacity 0.4s cubic-bezier(0.25, 1, 0.5, 1);

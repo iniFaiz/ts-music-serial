@@ -181,9 +181,7 @@ function datasetMatchesKey(ds, key, kind) {
 
 function findCoverByKey(key, kind = 'cover') {
   if (key == null) return null;
-  const nodes = document.querySelectorAll(
-    '[data-cover-key], [data-artist-key], [data-album-key]'
-  );
+  const nodes = document.querySelectorAll('[data-cover-key], [data-artist-key], [data-album-key]');
   for (const n of nodes) {
     if (datasetMatchesKey(n.dataset, key, kind)) {
       return n.querySelector('.cover-image') || n;
@@ -228,8 +226,7 @@ async function waitForMorphTarget(key, kind) {
   for (;;) {
     let el = document.querySelector('[data-last-clicked="true"]');
     if (el) {
-      const parent =
-        el.closest('[data-cover-key], [data-artist-key], [data-album-key]') || el;
+      const parent = el.closest('[data-cover-key], [data-artist-key], [data-album-key]') || el;
       if (!datasetMatchesKey(parent.dataset, key, kind)) {
         el = null; // Mismatch, fall back to the generic finder
       }

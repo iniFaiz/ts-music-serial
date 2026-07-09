@@ -145,7 +145,7 @@ watch(
       try {
         await invoke('player_stop');
       } catch (err) {
-        console.warn("Failed to stop player:", err);
+        console.warn('Failed to stop player:', err);
       }
       store.syncDiscord();
       return;
@@ -209,8 +209,8 @@ watch(
       if (store.transitionMode !== 'off' && !store.wasapiExclusive) {
         const np = store.nextUpPath();
         if (np && np !== song.path) {
-          const nextSong = store.queue.find(s => s.path === np);
-          const hint = nextSong ? (nextSong.duration_secs || 0) : 0;
+          const nextSong = store.queue.find((s) => s.path === np);
+          const hint = nextSong ? nextSong.duration_secs || 0 : 0;
           invoke('player_prepare_next', { path: np, durationHint: hint }).catch(() => {});
         }
       }
@@ -227,11 +227,11 @@ watch(
 
 // Reactively prepare the next track whenever the transition settings, queue, or next track path changes
 watch(
-  () => (store.transitionMode !== 'off' && !store.wasapiExclusive) ? store.nextUpPath() : null,
+  () => (store.transitionMode !== 'off' && !store.wasapiExclusive ? store.nextUpPath() : null),
   (np) => {
     if (np && store.currentSong && np !== store.currentSong.path) {
-      const nextSong = store.queue.find(s => s.path === np);
-      const hint = nextSong ? (nextSong.duration_secs || 0) : 0;
+      const nextSong = store.queue.find((s) => s.path === np);
+      const hint = nextSong ? nextSong.duration_secs || 0 : 0;
       invoke('player_prepare_next', { path: np, durationHint: hint }).catch(() => {});
     }
   },
@@ -458,7 +458,11 @@ const poll = async () => {
       // 'off'/exclusive advance immediately; crossfade/gapless give the backend a
       // short window to drive the transition itself before we fall back to it.
       if (!finishedSince) finishedSince = Date.now();
-      if (store.transitionMode === 'off' || store.wasapiExclusive || Date.now() - finishedSince > 600) {
+      if (
+        store.transitionMode === 'off' ||
+        store.wasapiExclusive ||
+        Date.now() - finishedSince > 600
+      ) {
         await handleTrackEnded();
         finishedSince = 0;
       }
@@ -560,7 +564,7 @@ onMounted(async () => {
       }
     });
   } catch (err) {
-    console.error("Failed to listen to track-changed:", err);
+    console.error('Failed to listen to track-changed:', err);
   }
 });
 
@@ -598,7 +602,9 @@ const formatTime = (seconds) => {
 
     <div class="h-24 flex items-center justify-between px-4">
       <!-- Controls -->
-      <div class="flex items-center justify-start gap-1.5 sm:gap-3 md:gap-4.5 flex-1 min-w-[95px] sm:min-w-[150px] md:min-w-[180px] lg:min-w-[200px] pl-1 sm:pl-4">
+      <div
+        class="flex items-center justify-start gap-1.5 sm:gap-3 md:gap-4.5 flex-1 min-w-[95px] sm:min-w-[150px] md:min-w-[180px] lg:min-w-[200px] pl-1 sm:pl-4"
+      >
         <!-- Shuffle -->
         <button
           @click="store.toggleShuffle()"
@@ -749,13 +755,17 @@ const formatTime = (seconds) => {
       </div>
 
       <!-- Progress bar -->
-      <div class="flex flex-col items-center flex-1 min-w-[110px] sm:min-w-[180px] md:min-w-[220px] lg:min-w-[300px] px-1 sm:px-4">
+      <div
+        class="flex flex-col items-center flex-1 min-w-[110px] sm:min-w-[180px] md:min-w-[220px] lg:min-w-[300px] px-1 sm:px-4"
+      >
         <div
           v-if="store.currentSong"
           class="flex items-center gap-2 md:gap-4 mb-1.5 md:mb-2 w-full justify-center"
         >
           <!-- Left spacer container: ensures the title/artist text is centered regardless of cover image size -->
-          <div class="w-[30px] sm:w-[60px] md:w-[75px] lg:w-[80px] flex items-center justify-start shrink-0">
+          <div
+            class="w-[30px] sm:w-[60px] md:w-[75px] lg:w-[80px] flex items-center justify-start shrink-0"
+          >
             <!-- Group container: CoverImage on left, Lossless Badge on right, both aligned to top -->
             <div class="hidden sm:flex items-start shrink-0 gap-1.5 relative">
               <button
@@ -768,7 +778,9 @@ const formatTime = (seconds) => {
                   :path="store.currentSong.path"
                   className="h-8 w-8 md:h-10 md:w-10 rounded shadow-sm bg-[#333]"
                 />
-                <div class="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none">
+                <div
+                  class="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none"
+                >
                   <svg
                     xmlns="http://www.w3.org/2000/svg"
                     width="14"
@@ -803,51 +815,51 @@ const formatTime = (seconds) => {
                   >
                     <path
                       d="M8.184,0.35C9.944,0.35 10.703,3.296 11.338,5.238C11.673,3.842 11.497,3.542 11.857,3.542C11.99,3.542 12.126,3.633 12.126,3.798C12.126,3.809 12.123,3.839 12.117,3.883L12.091,4.058C12.02,4.522 11.845,5.494 11.654,6.144C13.198,10.191 14.345,4.861 14.474,3.772C14.493,3.615 14.612,3.542 14.731,3.542C14.891,3.542 15.022,3.662 14.997,3.843C14.72,5.605 14.295,8.35 12.547,8.35C11.582,8.35 11.04,7.595 10.611,6.73C9.54,4.626 9.047,1.093 7.997,1.093C7.66,1.093 7.411,1.444 7.394,1.444C7.362,1.444 7.337,1.301 7.023,0.909C7.322,0.567 7.734,0.35 8.184,0.35ZM2.458,0.354C5.211,0.354 5.456,7.618 7.014,7.618C7.197,7.618 7.394,7.507 7.61,7.256C7.729,7.458 7.851,7.638 7.978,7.796C7.667,8.151 7.28,8.35 6.795,8.35C5.054,8.349 4.306,5.434 3.663,3.466C3.511,4.097 3.432,4.669 3.402,4.925C3.382,5.088 3.263,5.163 3.143,5.163C3.009,5.163 2.874,5.071 2.874,4.908L2.874,4.908L2.877,4.87C2.966,4.223 3.146,3.243 3.347,2.56C3.079,1.858 2.745,1.091 2.252,1.091C1.257,1.091 0.687,3.591 0.527,4.925C0.508,5.088 0.388,5.163 0.268,5.163C0.135,5.163 0,5.071 0,4.908C0,4.896 0.001,4.883 0.002,4.87C0.283,2.836 0.808,0.354 2.458,0.354ZM5.315,0.35C5.809,0.35 6.339,0.608 6.797,1.211C6.822,1.241 7.078,1.639 7.159,1.777C8.277,3.802 8.818,7.627 9.881,7.627C10.065,7.627 10.264,7.513 10.484,7.256C10.604,7.458 10.726,7.638 10.852,7.796C10.542,8.15 10.155,8.35 9.67,8.35C6.933,8.349 6.636,1.09 5.128,1.09C4.788,1.09 4.536,1.444 4.519,1.444C4.487,1.444 4.462,1.301 4.148,0.909C4.455,0.558 4.87,0.35 5.315,0.35Z"
-                  />
-                </svg>
-              </button>
-
-              <!-- Popover (slightly larger) -->
-              <div
-                v-if="losslessPopupOpen"
-                class="lossless-popover-content absolute top-full left-1/2 -translate-x-1/2 mt-3 z-[100] bg-[#1c1c1e] border border-[#323236] rounded-xl shadow-2xl p-4 w-[230px] text-center select-none animate-fade-in"
-                @click.stop
-              >
-                <!-- Upward pointing arrow -->
-                <div
-                  class="absolute bottom-full left-1/2 -translate-x-1/2 translate-y-1/2 w-2 h-2 bg-[#1c1c1e] border-l border-t border-[#323236] rotate-45"
-                ></div>
-
-                <!-- Lossless Logo (Small) -->
-                <div class="flex justify-center mb-2">
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    viewBox="0 0 15 9"
-                    class="h-5 w-[35px] text-white fill-current"
-                  >
-                    <path
-                      d="M8.184,0.35C9.944,0.35 10.703,3.296 11.338,5.238C11.673,3.842 11.497,3.542 11.857,3.542C11.99,3.542 12.126,3.633 12.126,3.798C12.126,3.809 12.123,3.839 12.117,3.883L12.091,4.058C12.02,4.522 11.845,5.494 11.654,6.144C13.198,10.191 14.345,4.861 14.474,3.772C14.493,3.615 14.612,3.542 14.731,3.542C14.891,3.542 15.022,3.662 14.997,3.843C14.72,5.605 14.295,8.35 12.547,8.35C11.582,8.35 11.04,7.595 10.611,6.73C9.54,4.626 9.047,1.093 7.997,1.093C7.66,1.093 7.411,1.444 7.394,1.444C7.362,1.444 7.337,1.301 7.023,0.909C7.322,0.567 7.734,0.35 8.184,0.35ZM2.458,0.354C5.211,0.354 5.456,7.618 7.014,7.618C7.197,7.618 7.394,7.507 7.61,7.256C7.729,7.458 7.851,7.638 7.978,7.796C7.667,8.151 7.28,8.35 6.795,8.35C5.054,8.349 4.306,5.434 3.663,3.466C3.511,4.097 3.432,4.669 3.402,4.925C3.382,5.088 3.263,5.163 3.143,5.163C3.009,5.163 2.874,5.071 2.874,4.908L2.874,4.908L2.877,4.87C2.966,4.223 3.146,3.243 3.347,2.56C3.079,1.858 2.745,1.091 2.252,1.091C1.257,1.091 0.687,3.591 0.527,4.925C0.508,5.088 0.388,5.163 0.268,5.163C0.135,5.163 0,5.071 0,4.908C0,4.896 0.001,4.883 0.002,4.87C0.283,2.836 0.808,0.354 2.458,0.354ZM5.315,0.35C5.809,0.35 6.339,0.608 6.797,1.211C6.822,1.241 7.078,1.639 7.159,1.777C8.277,3.802 8.818,7.627 9.881,7.627C10.065,7.627 10.264,7.513 10.484,7.256C10.604,7.458 10.726,7.638 10.852,7.796C10.542,8.15 10.155,8.35 9.67,8.35C6.933,8.349 6.636,1.09 5.128,1.09C4.788,1.09 4.536,1.444 4.519,1.444C4.487,1.444 4.462,1.301 4.148,0.909C4.455,0.558 4.87,0.35 5.315,0.35Z"
                     />
                   </svg>
-                </div>
+                </button>
 
-                <!-- Title -->
-                <h4 class="text-sm font-bold text-white mb-0.5">Lossless</h4>
-                <!-- Description -->
-                <p class="text-xs text-gray-400 mb-3 leading-normal">
-                  This audio is playing with lossless compression.
-                </p>
-
-                <!-- Technical Specs -->
+                <!-- Popover (slightly larger) -->
                 <div
-                  class="bg-[#2c2c2e]/60 rounded-lg py-1 px-3 text-xs font-semibold text-[var(--accent-color)] font-variant-numeric tracking-wide border border-white/5"
+                  v-if="losslessPopupOpen"
+                  class="lossless-popover-content absolute top-full left-1/2 -translate-x-1/2 mt-3 z-[100] bg-[#1c1c1e] border border-[#323236] rounded-xl shadow-2xl p-4 w-[230px] text-center select-none animate-fade-in"
+                  @click.stop
                 >
-                  {{ formatLosslessSpecs() }}
+                  <!-- Upward pointing arrow -->
+                  <div
+                    class="absolute bottom-full left-1/2 -translate-x-1/2 translate-y-1/2 w-2 h-2 bg-[#1c1c1e] border-l border-t border-[#323236] rotate-45"
+                  ></div>
+
+                  <!-- Lossless Logo (Small) -->
+                  <div class="flex justify-center mb-2">
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      viewBox="0 0 15 9"
+                      class="h-5 w-[35px] text-white fill-current"
+                    >
+                      <path
+                        d="M8.184,0.35C9.944,0.35 10.703,3.296 11.338,5.238C11.673,3.842 11.497,3.542 11.857,3.542C11.99,3.542 12.126,3.633 12.126,3.798C12.126,3.809 12.123,3.839 12.117,3.883L12.091,4.058C12.02,4.522 11.845,5.494 11.654,6.144C13.198,10.191 14.345,4.861 14.474,3.772C14.493,3.615 14.612,3.542 14.731,3.542C14.891,3.542 15.022,3.662 14.997,3.843C14.72,5.605 14.295,8.35 12.547,8.35C11.582,8.35 11.04,7.595 10.611,6.73C9.54,4.626 9.047,1.093 7.997,1.093C7.66,1.093 7.411,1.444 7.394,1.444C7.362,1.444 7.337,1.301 7.023,0.909C7.322,0.567 7.734,0.35 8.184,0.35ZM2.458,0.354C5.211,0.354 5.456,7.618 7.014,7.618C7.197,7.618 7.394,7.507 7.61,7.256C7.729,7.458 7.851,7.638 7.978,7.796C7.667,8.151 7.28,8.35 6.795,8.35C5.054,8.349 4.306,5.434 3.663,3.466C3.511,4.097 3.432,4.669 3.402,4.925C3.382,5.088 3.263,5.163 3.143,5.163C3.009,5.163 2.874,5.071 2.874,4.908L2.874,4.908L2.877,4.87C2.966,4.223 3.146,3.243 3.347,2.56C3.079,1.858 2.745,1.091 2.252,1.091C1.257,1.091 0.687,3.591 0.527,4.925C0.508,5.088 0.388,5.163 0.268,5.163C0.135,5.163 0,5.071 0,4.908C0,4.896 0.001,4.883 0.002,4.87C0.283,2.836 0.808,0.354 2.458,0.354ZM5.315,0.35C5.809,0.35 6.339,0.608 6.797,1.211C6.822,1.241 7.078,1.639 7.159,1.777C8.277,3.802 8.818,7.627 9.881,7.627C10.065,7.627 10.264,7.513 10.484,7.256C10.604,7.458 10.726,7.638 10.852,7.796C10.542,8.15 10.155,8.35 9.67,8.35C6.933,8.349 6.636,1.09 5.128,1.09C4.788,1.09 4.536,1.444 4.519,1.444C4.487,1.444 4.462,1.301 4.148,0.909C4.455,0.558 4.87,0.35 5.315,0.35Z"
+                      />
+                    </svg>
+                  </div>
+
+                  <!-- Title -->
+                  <h4 class="text-sm font-bold text-white mb-0.5">Lossless</h4>
+                  <!-- Description -->
+                  <p class="text-xs text-gray-400 mb-3 leading-normal">
+                    This audio is playing with lossless compression.
+                  </p>
+
+                  <!-- Technical Specs -->
+                  <div
+                    class="bg-[#2c2c2e]/60 rounded-lg py-1 px-3 text-xs font-semibold text-[var(--accent-color)] font-variant-numeric tracking-wide border border-white/5"
+                  >
+                    {{ formatLosslessSpecs() }}
+                  </div>
                 </div>
               </div>
             </div>
           </div>
-        </div>
 
           <!-- Song Title & Artist text container: set flex-1, text-center and min-w-0 -->
           <div class="flex flex-col overflow-hidden text-center min-w-0 flex-1">
@@ -863,7 +875,9 @@ const formatTime = (seconds) => {
           </div>
 
           <!-- Right spacer container: matches the width of the left container to center text perfectly -->
-          <div class="w-[30px] sm:w-[60px] md:w-[75px] lg:w-[80px] flex items-center justify-end shrink-0">
+          <div
+            class="w-[30px] sm:w-[60px] md:w-[75px] lg:w-[80px] flex items-center justify-end shrink-0"
+          >
             <button
               @click="store.toggleFavorite(store.currentSong.path)"
               class="transition hover:scale-110 shrink-0"
@@ -906,7 +920,10 @@ const formatTime = (seconds) => {
                and cross-fade when toggled. It stays thin when the waveform is off
                (so the player bar keeps its compact height) and gains room only
                when the waveform is on. -->
-          <div class="relative flex-1 flex items-center" :class="store.waveformEnabled ? 'h-8' : 'h-5'">
+          <div
+            class="relative flex-1 flex items-center"
+            :class="store.waveformEnabled ? 'h-8' : 'h-5'"
+          >
             <input
               type="range"
               min="0"
@@ -929,8 +946,18 @@ const formatTime = (seconds) => {
                 :current="seekValue"
                 :duration="Math.max(store.duration || 100, seekValue)"
                 :disabled="!store.currentSong"
-                @input="(v) => { seekValue = v; onSeekInput(); }"
-                @commit="(v) => { seekValue = v; onSeekCommit(); }"
+                @input="
+                  (v) => {
+                    seekValue = v;
+                    onSeekInput();
+                  }
+                "
+                @commit="
+                  (v) => {
+                    seekValue = v;
+                    onSeekCommit();
+                  }
+                "
               />
             </Transition>
           </div>
@@ -939,14 +966,19 @@ const formatTime = (seconds) => {
       </div>
 
       <!-- Volume -->
-      <div class="flex items-center justify-end gap-1.5 sm:gap-2.5 md:gap-3 flex-1 min-w-[70px] sm:min-w-[140px] md:min-w-[180px] lg:min-w-[220px] pr-1 sm:pr-4">
+      <div
+        class="flex items-center justify-end gap-1.5 sm:gap-2.5 md:gap-3 flex-1 min-w-[70px] sm:min-w-[140px] md:min-w-[180px] lg:min-w-[220px] pr-1 sm:pr-4"
+      >
         <!-- Real-time audio visualizer (reacts to the playing track) -->
         <Visualizer v-if="store.visualizerEnabled && store.currentSong" />
 
         <!-- Lyrics panel toggle -->
         <button
           v-if="store.currentSong"
-          @click="store.queuePanelOpen = false; store.lyricsPanelOpen = !store.lyricsPanelOpen"
+          @click="
+            store.queuePanelOpen = false;
+            store.lyricsPanelOpen = !store.lyricsPanelOpen;
+          "
           class="transition hover:text-white"
           :class="store.lyricsPanelOpen ? 'text-[var(--accent-color)]' : 'text-gray-400'"
           title="Lyrics"
@@ -962,7 +994,9 @@ const formatTime = (seconds) => {
             stroke-linecap="round"
             stroke-linejoin="round"
           >
-            <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
+            <path
+              d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"
+            />
             <line x1="8.5" y1="10" x2="13.5" y2="10" />
             <line x1="8.5" y1="13.5" x2="11.5" y2="13.5" />
           </svg>
@@ -970,7 +1004,10 @@ const formatTime = (seconds) => {
 
         <!-- Queue toggle (with an ∞ badge when unlimited autoplay is on) -->
         <button
-          @click="store.lyricsPanelOpen = false; store.queuePanelOpen = !store.queuePanelOpen"
+          @click="
+            store.lyricsPanelOpen = false;
+            store.queuePanelOpen = !store.queuePanelOpen;
+          "
           class="transition hover:text-white relative"
           :class="store.queuePanelOpen ? 'text-[var(--accent-color)]' : 'text-gray-400'"
           title="Queue"
@@ -1110,7 +1147,9 @@ input[type='range']::-webkit-slider-thumb {
   background: #ffffff;
   margin-top: -4px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
-  transition: transform 0.15s ease-in-out, background-color 0.15s ease-in-out;
+  transition:
+    transform 0.15s ease-in-out,
+    background-color 0.15s ease-in-out;
 }
 input[type='range']::-moz-range-thumb {
   height: 12px;
@@ -1129,7 +1168,9 @@ input[type='range']::-moz-range-thumb {
 }
 .seeker-input::-webkit-slider-thumb {
   transform: scale(0);
-  transition: transform 0.15s cubic-bezier(0.4, 0, 0.2, 1), margin-top 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+  transition:
+    transform 0.15s cubic-bezier(0.4, 0, 0.2, 1),
+    margin-top 0.15s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .seeker-input::-moz-range-thumb {
   transform: scale(0);

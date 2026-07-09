@@ -15,10 +15,10 @@ const playlistId = computed(() => route.params.id);
 const playlist = computed(() => store.getPlaylist(playlistId.value));
 // Playlist tracks (in order) fetched from the DB; re-runs on library changes or
 // when the route id changes.
-const { data: songs } = useQuery(
-  () => invoke('db_playlist_tracks', { id: playlistId.value }),
-  { deps: [() => playlistId.value], initial: [] }
-);
+const { data: songs } = useQuery(() => invoke('db_playlist_tracks', { id: playlistId.value }), {
+  deps: [() => playlistId.value],
+  initial: [],
+});
 
 const suggestedSongs = ref([]);
 

@@ -25,8 +25,8 @@ const keyFor = (item) => {
 // HTML5 drag-and-drop is unreliable in Tauri/webview contexts.
 // This uses mousedown/mousemove/mouseup for a rock-solid experience.
 
-const dragIndex = ref(-1);   // row being dragged
-const overIndex = ref(-1);   // row the cursor is currently over (drop target)
+const dragIndex = ref(-1); // row being dragged
+const overIndex = ref(-1); // row the cursor is currently over (drop target)
 const listContainer = ref(null);
 
 const getRowIndexFromY = (clientY) => {
@@ -174,7 +174,14 @@ const navigateToArtist = (artistName) => {
               @mousedown="onGripMouseDown(index, $event)"
               title="Drag to reorder"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+                stroke="none"
+              >
                 <circle cx="9" cy="5" r="1.5"></circle>
                 <circle cx="15" cy="5" r="1.5"></circle>
                 <circle cx="9" cy="12" r="1.5"></circle>
@@ -249,8 +256,13 @@ const navigateToArtist = (artistName) => {
 }
 
 @keyframes grip-pulse {
-  0%, 100% { transform: scale(1); }
-  50% { transform: scale(1.15); }
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.15);
+  }
 }
 
 /* Reorder: every displaced row glides to its new position (one clean pass). */

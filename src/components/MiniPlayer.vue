@@ -78,10 +78,14 @@ async function fetchLyrics(force = false) {
 
 // Re-derive the backdrop colors whenever the cover changes; the blobs ease
 // between palettes (CSS transition) for a smooth per-track background change.
-watch(coverUrl, async (url) => {
-  const path = song.value?.path;
-  colors.value = path || url ? await extractColorsForPath(path, url) : defaultPalette();
-}, { immediate: true });
+watch(
+  coverUrl,
+  async (url) => {
+    const path = song.value?.path;
+    colors.value = path || url ? await extractColorsForPath(path, url) : defaultPalette();
+  },
+  { immediate: true }
+);
 
 watch(
   () => store.miniPlayerOpen,
@@ -176,7 +180,9 @@ watch(
 const chromeActive = ref(true);
 let hideTimer = null;
 const popoverOpen = computed(() => queueOpen.value || volumeOpen.value || moreOpen.value);
-const bottomAutohide = computed(() => (view.value === 'lyrics' || isArtwork.value) && !popoverOpen.value);
+const bottomAutohide = computed(
+  () => (view.value === 'lyrics' || isArtwork.value) && !popoverOpen.value
+);
 const topAutohide = computed(() => isArtwork.value && !popoverOpen.value);
 const anyAutohide = computed(() => bottomAutohide.value || topAutohide.value);
 const bottomChromeVisible = computed(() => !bottomAutohide.value || chromeActive.value);
@@ -213,7 +219,12 @@ const lines = computed(() => {
 
   const result = [];
   if (rawLines[0] && rawLines[0].time_ms > 6000) {
-    result.push({ isGap: true, time_ms: 2000, endTimeMs: rawLines[0].time_ms - 1000, text: '• • •' });
+    result.push({
+      isGap: true,
+      time_ms: 2000,
+      endTimeMs: rawLines[0].time_ms - 1000,
+      text: '• • •',
+    });
   }
   for (let i = 0; i < rawLines.length; i++) {
     const currentLine = rawLines[i];
@@ -449,7 +460,9 @@ const expandToFull = () => {
 
 const closeWindow = () => {
   store.exitMiniPlayer().finally(() => {
-    getCurrentWindow().close().catch(() => {});
+    getCurrentWindow()
+      .close()
+      .catch(() => {});
   });
 };
 
@@ -533,8 +546,17 @@ onUnmounted(() => {
           draggable="false"
         />
         <div v-else class="flex items-center justify-center w-full h-full text-white/20">
-          <svg xmlns="http://www.w3.org/2000/svg" class="w-1/4 h-1/4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2">
-            <path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle>
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            class="w-1/4 h-1/4"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.2"
+          >
+            <path d="M9 18V5l12-2v13"></path>
+            <circle cx="6" cy="18" r="3"></circle>
+            <circle cx="18" cy="16" r="3"></circle>
           </svg>
         </div>
       </div>
@@ -546,7 +568,9 @@ onUnmounted(() => {
           <div class="mini-blob mini-blob-4" :style="{ backgroundColor: colors[0] }"></div>
         </div>
         <div class="absolute inset-0 bg-[#0a0a0a]/40"></div>
-        <div class="absolute inset-0 bg-gradient-to-t from-[#0a0a0a] via-[#0a0a0a]/20 to-[#0a0a0a]/10"></div>
+        <div
+          class="absolute inset-0 bg-gradient-to-t from-[#0a0a0a] via-[#0a0a0a]/20 to-[#0a0a0a]/10"
+        ></div>
       </div>
 
       <!-- ============================ TOP CHROME ======================== -->
@@ -555,7 +579,9 @@ onUnmounted(() => {
         data-tauri-drag-region
         class="z-20 flex items-start gap-3 px-3 pt-3 pb-2 shrink-0 transition-opacity duration-300"
         :class="[
-          isArtwork ? 'absolute top-0 left-0 right-0 bg-gradient-to-b from-black/60 to-transparent pb-6' : 'relative',
+          isArtwork
+            ? 'absolute top-0 left-0 right-0 bg-gradient-to-b from-black/60 to-transparent pb-6'
+            : 'relative',
           topChromeVisible ? 'opacity-100' : 'opacity-0 pointer-events-none',
         ]"
       >
@@ -566,15 +592,46 @@ onUnmounted(() => {
           class="h-12 w-12 rounded-md overflow-hidden shrink-0 shadow-lg bg-[#333] border border-white/10 relative group focus:outline-none"
           title="Show album art"
         >
-          <img v-if="coverUrl" :src="coverUrl" class="object-cover w-full h-full" alt="" draggable="false" />
+          <img
+            v-if="coverUrl"
+            :src="coverUrl"
+            class="object-cover w-full h-full"
+            alt=""
+            draggable="false"
+          />
           <div v-else class="flex items-center justify-center w-full h-full text-white/30">
-            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-              <path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle>
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+            >
+              <path d="M9 18V5l12-2v13"></path>
+              <circle cx="6" cy="18" r="3"></circle>
+              <circle cx="18" cy="16" r="3"></circle>
             </svg>
           </div>
-          <div class="absolute inset-0 flex items-center justify-center transition-opacity opacity-0 bg-black/40 group-hover:opacity-100">
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="15 3 21 3 21 9"></polyline><polyline points="9 21 3 21 3 15"></polyline><line x1="21" y1="3" x2="14" y2="10"></line><line x1="3" y1="21" x2="10" y2="14"></line>
+          <div
+            class="absolute inset-0 flex items-center justify-center transition-opacity opacity-0 bg-black/40 group-hover:opacity-100"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <polyline points="15 3 21 3 21 9"></polyline>
+              <polyline points="9 21 3 21 3 15"></polyline>
+              <line x1="21" y1="3" x2="14" y2="10"></line>
+              <line x1="3" y1="21" x2="10" y2="14"></line>
             </svg>
           </div>
         </button>
@@ -601,8 +658,23 @@ onUnmounted(() => {
           :class="store.showRomaji ? 'bg-white/25' : 'bg-white/10 hover:bg-white/20'"
           :title="store.showRomaji ? 'Hide romaji' : 'Show romaji'"
         >
-          <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="m5 8 6 6" /><path d="m4 14 6-6 2-3" /><path d="M2 5h12" /><path d="M7 2h1" /><path d="m22 22-5-10-5 10" /><path d="M14 18h6" />
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="15"
+            height="15"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="m5 8 6 6" />
+            <path d="m4 14 6-6 2-3" />
+            <path d="M2 5h12" />
+            <path d="M7 2h1" />
+            <path d="m22 22-5-10-5 10" />
+            <path d="M14 18h6" />
           </svg>
         </button>
 
@@ -613,8 +685,21 @@ onUnmounted(() => {
             class="p-1.5 rounded-md text-white/70 hover:text-white hover:bg-white/15 transition"
             title="Expand to full player"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="15 3 21 3 21 9"></polyline><polyline points="9 21 3 21 3 15"></polyline><line x1="21" y1="3" x2="14" y2="10"></line><line x1="3" y1="21" x2="10" y2="14"></line>
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="15"
+              height="15"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <polyline points="15 3 21 3 21 9"></polyline>
+              <polyline points="9 21 3 21 3 15"></polyline>
+              <line x1="21" y1="3" x2="14" y2="10"></line>
+              <line x1="3" y1="21" x2="10" y2="14"></line>
             </svg>
           </button>
           <button
@@ -622,8 +707,19 @@ onUnmounted(() => {
             class="p-1.5 rounded-md text-white/70 hover:text-white hover:bg-[#e81123] transition"
             title="Close window"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line>
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="15"
+              height="15"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
             </svg>
           </button>
         </div>
@@ -632,87 +728,134 @@ onUnmounted(() => {
       <!-- ============================ MIDDLE ============================ -->
       <div
         class="relative z-10 min-h-0"
-        :class="(view === 'lyrics' || isArtwork || queuePresent) ? 'flex-1' : ''"
+        :class="view === 'lyrics' || isArtwork || queuePresent ? 'flex-1' : ''"
         :data-tauri-drag-region="isArtwork && !queueOpen ? '' : null"
       >
         <!-- Queue (mirrors the main QueuePanel) — slides up as a frosted sheet over
              the lyrics/backdrop; positioned so it overlays whatever is behind it. -->
         <Transition name="mini-queue" @after-leave="onQueueAfterLeave">
           <div v-if="queueOpen" class="absolute inset-0 z-10 flex flex-col mini-queue-panel">
-          <div class="flex items-center justify-between px-4 py-2.5 shrink-0">
-            <h2 class="text-sm font-bold">Queue</h2>
-            <div class="flex items-center gap-3">
-              <button
-                v-if="store.queue.length > 1"
-                @click="store.clearQueue()"
-                class="text-xs text-[var(--text-secondary)] hover:text-white transition"
-                title="Clear queue"
-              >
-                Clear
-              </button>
-              <button
-                @click="store.toggleAutoplay()"
-                class="transition"
-                :class="store.autoplayMode ? 'text-[var(--accent-color)]' : 'text-gray-400 hover:text-white'"
-                :title="store.autoplayMode ? 'Autoplay on' : 'Autoplay off'"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M12 12c-2-2.67-4-4-6-4a4 4 0 1 0 0 8c2 0 4-1.33 6-4Zm0 0c2 2.67 4 4 6 4a4 4 0 0 0 0-8c-2 0-4 1.33-6 4Z" />
-                </svg>
-              </button>
-            </div>
-          </div>
-          <div ref="queueListEl" class="relative flex-1 px-2 pt-1 pb-36 overflow-auto mini-scroll">
-            <div v-if="store.queue.length === 0" class="p-8 text-sm text-center text-gray-600">
-              The queue is empty.
-            </div>
-            <TransitionGroup v-else name="queue" tag="div" class="space-y-1">
-              <div
-                v-for="(qsong, index) in store.queue"
-                :key="keyFor(qsong)"
-                :data-queue-idx="index"
-                @dblclick="store.playQueueIndex(index)"
-                class="queue-row group flex items-center gap-2 p-1.5 rounded-md hover:bg-white/10 transition-colors"
-                :class="{
-                  'bg-white/10': isCurrent(qsong),
-                  'opacity-30': index === dragIndex,
-                  'drop-target-above': overIndex === index && dragIndex !== index && dragIndex > index,
-                  'drop-target-below': overIndex === index && dragIndex !== index && dragIndex < index,
-                }"
-              >
-                <div
-                  class="shrink-0 cursor-grab active:cursor-grabbing text-gray-500 hover:text-gray-200 transition-colors"
-                  @mousedown="onGripMouseDown(index, $event)"
-                  title="Drag to reorder"
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="none">
-                    <circle cx="9" cy="5" r="1.5"></circle><circle cx="15" cy="5" r="1.5"></circle><circle cx="9" cy="12" r="1.5"></circle><circle cx="15" cy="12" r="1.5"></circle><circle cx="9" cy="19" r="1.5"></circle><circle cx="15" cy="19" r="1.5"></circle>
-                  </svg>
-                </div>
-                <CoverImage :path="qsong.path" className="h-9 w-9 rounded shrink-0 bg-[#333]" />
-                <div class="flex-1 min-w-0" @click="store.playQueueIndex(index)">
-                  <div class="text-[12px] font-medium truncate leading-tight" :class="isCurrent(qsong) ? 'text-[var(--accent-color)]' : 'text-white'">
-                    {{ qsong.title }}
-                  </div>
-                  <div
-                    @click.stop="goToArtist(qsong.artist)"
-                    class="text-[11px] text-[var(--text-secondary)] hover:text-[var(--accent-color)] hover:underline cursor-pointer truncate transition-colors"
-                  >
-                    {{ qsong.artist }}
-                  </div>
-                </div>
+            <div class="flex items-center justify-between px-4 py-2.5 shrink-0">
+              <h2 class="text-sm font-bold">Queue</h2>
+              <div class="flex items-center gap-3">
                 <button
-                  @click.stop="store.removeFromQueue(index)"
-                  class="text-gray-400 transition opacity-0 group-hover:opacity-100 hover:text-white shrink-0"
-                  title="Remove from queue"
+                  v-if="store.queue.length > 1"
+                  @click="store.clearQueue()"
+                  class="text-xs text-[var(--text-secondary)] hover:text-white transition"
+                  title="Clear queue"
                 >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line>
+                  Clear
+                </button>
+                <button
+                  @click="store.toggleAutoplay()"
+                  class="transition"
+                  :class="
+                    store.autoplayMode
+                      ? 'text-[var(--accent-color)]'
+                      : 'text-gray-400 hover:text-white'
+                  "
+                  :title="store.autoplayMode ? 'Autoplay on' : 'Autoplay off'"
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="18"
+                    height="18"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <path
+                      d="M12 12c-2-2.67-4-4-6-4a4 4 0 1 0 0 8c2 0 4-1.33 6-4Zm0 0c2 2.67 4 4 6 4a4 4 0 0 0 0-8c-2 0-4 1.33-6 4Z"
+                    />
                   </svg>
                 </button>
               </div>
-            </TransitionGroup>
-          </div>
+            </div>
+            <div
+              ref="queueListEl"
+              class="relative flex-1 px-2 pt-1 pb-36 overflow-auto mini-scroll"
+            >
+              <div v-if="store.queue.length === 0" class="p-8 text-sm text-center text-gray-600">
+                The queue is empty.
+              </div>
+              <TransitionGroup v-else name="queue" tag="div" class="space-y-1">
+                <div
+                  v-for="(qsong, index) in store.queue"
+                  :key="keyFor(qsong)"
+                  :data-queue-idx="index"
+                  @dblclick="store.playQueueIndex(index)"
+                  class="queue-row group flex items-center gap-2 p-1.5 rounded-md hover:bg-white/10 transition-colors"
+                  :class="{
+                    'bg-white/10': isCurrent(qsong),
+                    'opacity-30': index === dragIndex,
+                    'drop-target-above':
+                      overIndex === index && dragIndex !== index && dragIndex > index,
+                    'drop-target-below':
+                      overIndex === index && dragIndex !== index && dragIndex < index,
+                  }"
+                >
+                  <div
+                    class="shrink-0 cursor-grab active:cursor-grabbing text-gray-500 hover:text-gray-200 transition-colors"
+                    @mousedown="onGripMouseDown(index, $event)"
+                    title="Drag to reorder"
+                  >
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="12"
+                      height="12"
+                      viewBox="0 0 24 24"
+                      fill="currentColor"
+                      stroke="none"
+                    >
+                      <circle cx="9" cy="5" r="1.5"></circle>
+                      <circle cx="15" cy="5" r="1.5"></circle>
+                      <circle cx="9" cy="12" r="1.5"></circle>
+                      <circle cx="15" cy="12" r="1.5"></circle>
+                      <circle cx="9" cy="19" r="1.5"></circle>
+                      <circle cx="15" cy="19" r="1.5"></circle>
+                    </svg>
+                  </div>
+                  <CoverImage :path="qsong.path" className="h-9 w-9 rounded shrink-0 bg-[#333]" />
+                  <div class="flex-1 min-w-0" @click="store.playQueueIndex(index)">
+                    <div
+                      class="text-[12px] font-medium truncate leading-tight"
+                      :class="isCurrent(qsong) ? 'text-[var(--accent-color)]' : 'text-white'"
+                    >
+                      {{ qsong.title }}
+                    </div>
+                    <div
+                      @click.stop="goToArtist(qsong.artist)"
+                      class="text-[11px] text-[var(--text-secondary)] hover:text-[var(--accent-color)] hover:underline cursor-pointer truncate transition-colors"
+                    >
+                      {{ qsong.artist }}
+                    </div>
+                  </div>
+                  <button
+                    @click.stop="store.removeFromQueue(index)"
+                    class="text-gray-400 transition opacity-0 group-hover:opacity-100 hover:text-white shrink-0"
+                    title="Remove from queue"
+                  >
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="15"
+                      height="15"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    >
+                      <line x1="18" y1="6" x2="6" y2="18"></line>
+                      <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                  </button>
+                </div>
+              </TransitionGroup>
+            </div>
           </div>
         </Transition>
 
@@ -723,7 +866,9 @@ onUnmounted(() => {
           class="h-full overflow-y-auto mini-lyrics-scroll px-5 py-[30%]"
           @scroll.passive="onLyricsScroll"
         >
-          <div v-if="lyricsLoading" class="text-lg font-semibold text-white/40">Loading lyrics…</div>
+          <div v-if="lyricsLoading" class="text-lg font-semibold text-white/40">
+            Loading lyrics…
+          </div>
 
           <template v-else-if="lines.length">
             <p
@@ -739,11 +884,30 @@ onUnmounted(() => {
                 line.words && line.words.length ? 'mini-words' : '',
               ]"
             >
-              <span v-if="line.isGap" class="mini-gap-dots" :class="{ 'mini-gap-dots-active': i === activeIdx }">
+              <span
+                v-if="line.isGap"
+                class="mini-gap-dots"
+                :class="{ 'mini-gap-dots-active': i === activeIdx }"
+              >
                 <span class="dots-wrapper">
-                  <span :style="{ color: i === activeIdx ? getDotColor(line, 0) : 'rgba(255,255,255,0.2)' }">•</span>
-                  <span :style="{ color: i === activeIdx ? getDotColor(line, 1) : 'rgba(255,255,255,0.2)' }">•</span>
-                  <span :style="{ color: i === activeIdx ? getDotColor(line, 2) : 'rgba(255,255,255,0.2)' }">•</span>
+                  <span
+                    :style="{
+                      color: i === activeIdx ? getDotColor(line, 0) : 'rgba(255,255,255,0.2)',
+                    }"
+                    >•</span
+                  >
+                  <span
+                    :style="{
+                      color: i === activeIdx ? getDotColor(line, 1) : 'rgba(255,255,255,0.2)',
+                    }"
+                    >•</span
+                  >
+                  <span
+                    :style="{
+                      color: i === activeIdx ? getDotColor(line, 2) : 'rgba(255,255,255,0.2)',
+                    }"
+                    >•</span
+                  >
                 </span>
               </span>
               <LyricContent
@@ -751,15 +915,21 @@ onUnmounted(() => {
                 :line="line"
                 :active="i === activeIdx"
                 :is-past="i < activeIdx"
-                :current-ms="(i === activeIdx || i === activeIdx - 1) ? currentMs : 0"
+                :current-ms="i === activeIdx || i === activeIdx - 1 ? currentMs : 0"
                 :show-romaji="store.showRomaji && hasRomaji"
               />
             </p>
           </template>
 
-          <div v-else class="flex flex-col items-center justify-center h-full text-center text-white/50">
+          <div
+            v-else
+            class="flex flex-col items-center justify-center h-full text-center text-white/50"
+          >
             <div class="mb-1 text-base font-semibold">Lyrics not found</div>
-            <button @click="fetchLyrics(true)" class="mt-2 text-xs px-3 py-1.5 rounded-md bg-white/10 hover:bg-white/20 transition">
+            <button
+              @click="fetchLyrics(true)"
+              class="mt-2 text-xs px-3 py-1.5 rounded-md bg-white/10 hover:bg-white/20 transition"
+            >
               Retry
             </button>
           </div>
@@ -773,7 +943,9 @@ onUnmounted(() => {
         ref="bottomChromeEl"
         class="z-20 px-4 pt-1 pb-4 shrink-0 transition-opacity duration-300"
         :class="[
-          (isArtwork || view === 'lyrics' || queuePresent) ? 'absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/85 via-black/55 to-transparent pt-12' : 'relative',
+          isArtwork || view === 'lyrics' || queuePresent
+            ? 'absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/85 via-black/55 to-transparent pt-12'
+            : 'relative',
           bottomChromeVisible ? 'opacity-100' : 'opacity-0 pointer-events-none',
         ]"
       >
@@ -784,8 +956,27 @@ onUnmounted(() => {
             class="p-1.5 -ml-1 rounded-md text-white/80 hover:text-white hover:bg-white/15 transition shrink-0"
             title="Back to player"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="3" y="4" width="18" height="16" rx="2"></rect><rect x="6.5" y="13" width="7" height="4" rx="1" fill="currentColor" stroke="none"></rect>
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <rect x="3" y="4" width="18" height="16" rx="2"></rect>
+              <rect
+                x="6.5"
+                y="13"
+                width="7"
+                height="4"
+                rx="1"
+                fill="currentColor"
+                stroke="none"
+              ></rect>
             </svg>
           </button>
           <div class="flex-1 min-w-0">
@@ -798,11 +989,27 @@ onUnmounted(() => {
           <button
             @click="store.toggleFavorite(song.path)"
             class="transition shrink-0 hover:scale-110"
-            :class="store.isFavorite(song.path) ? 'text-[var(--accent-color)]' : 'text-white/60 hover:text-white'"
+            :class="
+              store.isFavorite(song.path)
+                ? 'text-[var(--accent-color)]'
+                : 'text-white/60 hover:text-white'
+            "
             title="Love"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="17" height="17" viewBox="0 0 24 24" :fill="store.isFavorite(song.path) ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path>
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="17"
+              height="17"
+              viewBox="0 0 24 24"
+              :fill="store.isFavorite(song.path) ? 'currentColor' : 'none'"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path
+                d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"
+              ></path>
             </svg>
           </button>
         </div>
@@ -817,7 +1024,9 @@ onUnmounted(() => {
           @change="onSeekCommit"
           :disabled="!song"
           class="mini-seek w-full appearance-none cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-          :style="{ background: `linear-gradient(to right, #fff ${progressPercentage}%, rgba(255,255,255,0.28) ${progressPercentage}%)` }"
+          :style="{
+            background: `linear-gradient(to right, #fff ${progressPercentage}%, rgba(255,255,255,0.28) ${progressPercentage}%)`,
+          }"
         />
         <div class="flex justify-between text-[10px] text-white/50 mt-1 mb-2 tabular-nums">
           <span>{{ formatTime(store.currentTime) }}</span>
@@ -830,17 +1039,28 @@ onUnmounted(() => {
           <div class="flex items-center gap-1">
             <div class="relative">
               <button
-                @click.stop="volumeOpen = !volumeOpen; moreOpen = false"
+                @click.stop="
+                  volumeOpen = !volumeOpen;
+                  moreOpen = false;
+                "
                 class="p-1.5 rounded-full text-white/70 hover:text-white hover:bg-white/10 transition"
                 :title="store.isMuted ? 'Unmute' : 'Volume'"
               >
                 <svg
-                  xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
-                  stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="18"
+                  height="18"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
                 >
                   <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
                   <template v-if="store.isMuted">
-                    <line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line>
+                    <line x1="23" y1="9" x2="17" y2="15"></line>
+                    <line x1="17" y1="9" x2="23" y2="15"></line>
                   </template>
                   <template v-else>
                     <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
@@ -854,30 +1074,64 @@ onUnmounted(() => {
                 @click.stop
                 class="absolute bottom-full left-0 mb-3 flex items-center gap-2.5 px-3 py-2.5 rounded-full bg-[#2c2c2e] border border-white/10 shadow-2xl w-[200px] animate-mini-pop"
               >
-                <div class="absolute top-full left-4 -translate-y-1/2 w-2.5 h-2.5 bg-[#2c2c2e] border-r border-b border-white/10 rotate-45"></div>
+                <div
+                  class="absolute top-full left-4 -translate-y-1/2 w-2.5 h-2.5 bg-[#2c2c2e] border-r border-b border-white/10 rotate-45"
+                ></div>
                 <button
                   @click="store.toggleMute()"
                   class="text-white/80 hover:text-white shrink-0 flex items-center justify-center w-[15px] h-[15px]"
                   :title="store.isMuted ? 'Unmute' : 'Mute'"
                 >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="block">
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="15"
+                    height="15"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    class="block"
+                  >
                     <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
                     <template v-if="store.isMuted">
-                      <line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line>
+                      <line x1="23" y1="9" x2="17" y2="15"></line>
+                      <line x1="17" y1="9" x2="23" y2="15"></line>
                     </template>
                     <path v-else d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
                   </svg>
                 </button>
                 <input
-                  type="range" min="0" max="1" step="0.01"
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.01"
                   :value="store.isMuted ? 0 : store.volume"
                   @input="store.setVolume($event.target.value)"
                   class="mini-vol flex-1 appearance-none cursor-pointer"
-                  :style="{ background: `linear-gradient(to right, var(--accent-color) ${volumePercentage}%, rgba(255,255,255,0.22) ${volumePercentage}%)` }"
+                  :style="{
+                    background: `linear-gradient(to right, var(--accent-color) ${volumePercentage}%, rgba(255,255,255,0.22) ${volumePercentage}%)`,
+                  }"
                 />
-                <span class="shrink-0 flex items-center justify-center w-[15px] h-[15px] text-white/80">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="block">
-                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                <span
+                  class="shrink-0 flex items-center justify-center w-[15px] h-[15px] text-white/80"
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="15"
+                    height="15"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    class="block"
+                  >
+                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                    <path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path>
+                    <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
                   </svg>
                 </span>
               </div>
@@ -885,13 +1139,28 @@ onUnmounted(() => {
 
             <div class="relative">
               <button
-                @click.stop="moreOpen = !moreOpen; volumeOpen = false"
+                @click.stop="
+                  moreOpen = !moreOpen;
+                  volumeOpen = false;
+                "
                 class="p-1.5 rounded-full transition"
-                :class="(store.shuffleMode || store.loopMode > 0) ? 'text-[var(--accent-color)]' : 'text-white/70 hover:text-white hover:bg-white/10'"
+                :class="
+                  store.shuffleMode || store.loopMode > 0
+                    ? 'text-[var(--accent-color)]'
+                    : 'text-white/70 hover:text-white hover:bg-white/10'
+                "
                 title="More"
               >
-                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-                  <circle cx="5" cy="12" r="1.6"></circle><circle cx="12" cy="12" r="1.6"></circle><circle cx="19" cy="12" r="1.6"></circle>
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="18"
+                  height="18"
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                >
+                  <circle cx="5" cy="12" r="1.6"></circle>
+                  <circle cx="12" cy="12" r="1.6"></circle>
+                  <circle cx="19" cy="12" r="1.6"></circle>
                 </svg>
               </button>
               <div
@@ -905,7 +1174,17 @@ onUnmounted(() => {
                   :class="store.shuffleMode ? 'text-[var(--accent-color)]' : 'text-white/80'"
                 >
                   <span class="flex items-center gap-2">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="15"
+                      height="15"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    >
                       <path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5" />
                     </svg>
                     Shuffle
@@ -918,8 +1197,21 @@ onUnmounted(() => {
                   :class="store.loopMode > 0 ? 'text-[var(--accent-color)]' : 'text-white/80'"
                 >
                   <span class="flex items-center gap-2">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <path d="M17 1l4 4-4 4"></path><path d="M3 11V9a4 4 0 0 1 4-4h14"></path><path d="M7 23l-4-4 4-4"></path><path d="M21 13v2a4 4 0 0 1-4 4H3"></path>
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="15"
+                      height="15"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    >
+                      <path d="M17 1l4 4-4 4"></path>
+                      <path d="M3 11V9a4 4 0 0 1 4-4h14"></path>
+                      <path d="M7 23l-4-4 4-4"></path>
+                      <path d="M21 13v2a4 4 0 0 1-4 4H3"></path>
                     </svg>
                     Repeat{{ store.loopMode === 2 ? ' One' : '' }}
                   </span>
@@ -929,10 +1221,24 @@ onUnmounted(() => {
                   v-if="song"
                   @click="store.toggleFavorite(song.path)"
                   class="flex items-center gap-2 w-full px-3 py-2 text-xs hover:bg-white/10 transition"
-                  :class="store.isFavorite(song.path) ? 'text-[var(--accent-color)]' : 'text-white/80'"
+                  :class="
+                    store.isFavorite(song.path) ? 'text-[var(--accent-color)]' : 'text-white/80'
+                  "
                 >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" :fill="store.isFavorite(song.path) ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path>
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="15"
+                    height="15"
+                    viewBox="0 0 24 24"
+                    :fill="store.isFavorite(song.path) ? 'currentColor' : 'none'"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <path
+                      d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"
+                    ></path>
                   </svg>
                   {{ store.isFavorite(song.path) ? 'Loved' : 'Love' }}
                 </button>
@@ -942,22 +1248,66 @@ onUnmounted(() => {
 
           <!-- Center: transport -->
           <div class="flex items-center gap-4">
-            <button @click="store.prevSong()" :disabled="!song" class="text-white/90 hover:text-white transition disabled:opacity-30" title="Previous">
-              <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
-                <polygon points="19 20 9 12 19 4 19 20"></polygon><rect x="4" y="4" width="2.4" height="16"></rect>
+            <button
+              @click="store.prevSong()"
+              :disabled="!song"
+              class="text-white/90 hover:text-white transition disabled:opacity-30"
+              title="Previous"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="22"
+                height="22"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+              >
+                <polygon points="19 20 9 12 19 4 19 20"></polygon>
+                <rect x="4" y="4" width="2.4" height="16"></rect>
               </svg>
             </button>
-            <button @click="store.togglePlay()" :disabled="!song" class="text-white hover:scale-105 transition disabled:opacity-30" title="Play/Pause">
-              <svg v-if="store.isPlaying" xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 24 24" fill="currentColor">
-                <rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect>
+            <button
+              @click="store.togglePlay()"
+              :disabled="!song"
+              class="text-white hover:scale-105 transition disabled:opacity-30"
+              title="Play/Pause"
+            >
+              <svg
+                v-if="store.isPlaying"
+                xmlns="http://www.w3.org/2000/svg"
+                width="30"
+                height="30"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+              >
+                <rect x="6" y="4" width="4" height="16"></rect>
+                <rect x="14" y="4" width="4" height="16"></rect>
               </svg>
-              <svg v-else xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 24 24" fill="currentColor">
+              <svg
+                v-else
+                xmlns="http://www.w3.org/2000/svg"
+                width="30"
+                height="30"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+              >
                 <polygon points="6 3 20 12 6 21 6 3"></polygon>
               </svg>
             </button>
-            <button @click="store.nextSong(true)" :disabled="!song" class="text-white/90 hover:text-white transition disabled:opacity-30" title="Next">
-              <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
-                <polygon points="5 4 15 12 5 20 5 4"></polygon><rect x="17.6" y="4" width="2.4" height="16"></rect>
+            <button
+              @click="store.nextSong(true)"
+              :disabled="!song"
+              class="text-white/90 hover:text-white transition disabled:opacity-30"
+              title="Next"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="22"
+                height="22"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+              >
+                <polygon points="5 4 15 12 5 20 5 4"></polygon>
+                <rect x="17.6" y="4" width="2.4" height="16"></rect>
               </svg>
             </button>
           </div>
@@ -968,23 +1318,55 @@ onUnmounted(() => {
               v-if="lyricsButtonVisible"
               @click="toggleLyrics"
               class="p-1.5 rounded-md transition"
-              :class="view === 'lyrics' ? 'text-white bg-white/20' : 'text-white/70 hover:text-white hover:bg-white/10'"
+              :class="
+                view === 'lyrics'
+                  ? 'text-white bg-white/20'
+                  : 'text-white/70 hover:text-white hover:bg-white/10'
+              "
               :title="view === 'lyrics' ? 'Hide lyrics' : 'Show lyrics'"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
                 <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
-                <line x1="8" y1="10" x2="16" y2="10"></line><line x1="8" y1="14" x2="12" y2="14"></line>
+                <line x1="8" y1="10" x2="16" y2="10"></line>
+                <line x1="8" y1="14" x2="12" y2="14"></line>
               </svg>
             </button>
             <button
               @click="toggleQueue"
               class="p-1.5 rounded-md transition relative"
-              :class="queueOpen ? 'text-white bg-white/20' : 'text-white/70 hover:text-white hover:bg-white/10'"
+              :class="
+                queueOpen
+                  ? 'text-white bg-white/20'
+                  : 'text-white/70 hover:text-white hover:bg-white/10'
+              "
               title="Queue"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <line x1="3" y1="6" x2="16" y2="6"></line><line x1="3" y1="12" x2="13" y2="12"></line><line x1="3" y1="18" x2="13" y2="18"></line>
-                <polygon points="18 14 22 16.5 18 19" fill="currentColor" stroke="none"></polygon><line x1="18" y1="9" x2="18" y2="13"></line>
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <line x1="3" y1="6" x2="16" y2="6"></line>
+                <line x1="3" y1="12" x2="13" y2="12"></line>
+                <line x1="3" y1="18" x2="13" y2="18"></line>
+                <polygon points="18 14 22 16.5 18 19" fill="currentColor" stroke="none"></polygon>
+                <line x1="18" y1="9" x2="18" y2="13"></line>
               </svg>
               <span
                 v-if="store.autoplayMode"
@@ -1002,7 +1384,9 @@ onUnmounted(() => {
                   stroke-linecap="round"
                   stroke-linejoin="round"
                 >
-                  <path d="M12 12c-2-2.67-4-4-6-4a4 4 0 1 0 0 8c2 0 4-1.33 6-4Zm0 0c2 2.67 4 4 6 4a4 4 0 0 0 0-8c-2 0-4 1.33-6 4Z" />
+                  <path
+                    d="M12 12c-2-2.67-4-4-6-4a4 4 0 1 0 0 8c2 0 4-1.33 6-4Zm0 0c2 2.67 4 4 6 4a4 4 0 0 0 0-8c-2 0-4 1.33-6 4Z"
+                  />
                 </svg>
               </span>
             </button>
@@ -1028,7 +1412,9 @@ onUnmounted(() => {
   background: #fff;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
   transform: scale(0);
-  transition: transform 0.15s cubic-bezier(0.4, 0, 0.2, 1), margin-top 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+  transition:
+    transform 0.15s cubic-bezier(0.4, 0, 0.2, 1),
+    margin-top 0.15s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .mini-seek::-moz-range-thumb {
   height: 12px;
@@ -1113,30 +1499,60 @@ onUnmounted(() => {
   animation: mini-blob-move-4 25s infinite alternate ease-in-out;
 }
 @keyframes mini-blob-move-1 {
-  0% { transform: translate(0, 0) scale(1) rotate(0deg); }
-  50% { transform: translate(40px, 25px) scale(1.1) rotate(180deg); }
-  100% { transform: translate(15px, 55px) scale(0.95) rotate(360deg); }
+  0% {
+    transform: translate(0, 0) scale(1) rotate(0deg);
+  }
+  50% {
+    transform: translate(40px, 25px) scale(1.1) rotate(180deg);
+  }
+  100% {
+    transform: translate(15px, 55px) scale(0.95) rotate(360deg);
+  }
 }
 @keyframes mini-blob-move-2 {
-  0% { transform: translate(0, 0) scale(1) rotate(0deg); }
-  50% { transform: translate(-40px, -50px) scale(0.9) rotate(-180deg); }
-  100% { transform: translate(-15px, 20px) scale(1.05) rotate(-360deg); }
+  0% {
+    transform: translate(0, 0) scale(1) rotate(0deg);
+  }
+  50% {
+    transform: translate(-40px, -50px) scale(0.9) rotate(-180deg);
+  }
+  100% {
+    transform: translate(-15px, 20px) scale(1.05) rotate(-360deg);
+  }
 }
 @keyframes mini-blob-move-3 {
-  0% { transform: translate(0, 0) scale(1); }
-  50% { transform: translate(30px, -30px) scale(1.08); }
-  100% { transform: translate(-40px, 40px) scale(0.92); }
+  0% {
+    transform: translate(0, 0) scale(1);
+  }
+  50% {
+    transform: translate(30px, -30px) scale(1.08);
+  }
+  100% {
+    transform: translate(-40px, 40px) scale(0.92);
+  }
 }
 @keyframes mini-blob-move-4 {
-  0% { transform: translate(0, 0) scale(1); }
-  50% { transform: translate(-35px, 35px) scale(1.04); }
-  100% { transform: translate(35px, -20px) scale(0.95); }
+  0% {
+    transform: translate(0, 0) scale(1);
+  }
+  50% {
+    transform: translate(-35px, 35px) scale(1.04);
+  }
+  100% {
+    transform: translate(35px, -20px) scale(0.95);
+  }
 }
 
 /* Lyrics scroll area: fade top/bottom, hidden scrollbar */
 .mini-lyrics-scroll {
   scrollbar-width: none;
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 14%, #000 86%, transparent 100%);
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 14%,
+    #000 86%,
+    transparent 100%
+  );
   mask-image: linear-gradient(to bottom, transparent 0, #000 14%, #000 86%, transparent 100%);
 }
 .mini-lyrics-scroll::-webkit-scrollbar {

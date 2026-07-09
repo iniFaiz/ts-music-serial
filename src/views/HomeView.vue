@@ -49,7 +49,10 @@ const { data: recentlyPlayed } = useQuery(() => store.recentlyPlayed(60), {
   initial: [],
 });
 const { data: onRepeat } = useQuery(() => store.onRepeat(60), { watchStats: true, initial: [] });
-const { data: mostPlayed } = useQuery(() => store.mostPlayed(60), { watchStats: true, initial: [] });
+const { data: mostPlayed } = useQuery(() => store.mostPlayed(60), {
+  watchStats: true,
+  initial: [],
+});
 const { data: recentlyAdded } = useQuery(() => store.recentlyAdded(60), { initial: [] });
 
 // ---- Big "Top Picks" gradient cards ----
@@ -111,7 +114,9 @@ const { data: genreStations } = useQuery(() => store.topGenres(14), {
   watchStats: true,
   initial: [],
 });
-const hasStations = computed(() => artistStations.value.length > 0 || genreStations.value.length > 0);
+const hasStations = computed(
+  () => artistStations.value.length > 0 || genreStations.value.length > 0
+);
 
 // ---- Cover maps for resolving recent album/station cards ----
 const { data: albumRows } = useQuery(() => invoke('db_albums', { search: null }), { initial: [] });
@@ -130,17 +135,38 @@ const resolveRecent = (r) => {
   if (r.type === 'playlist') {
     const pl = store.getPlaylist(r.key);
     if (!pl || pl.is_smart) return null;
-    return { kind: 'playlist', id: pl.id, title: pl.name, sub: 'Playlist', cover: pl.cover, name: pl.name };
+    return {
+      kind: 'playlist',
+      id: pl.id,
+      title: pl.name,
+      sub: 'Playlist',
+      cover: pl.cover,
+      name: pl.name,
+    };
   }
   if (r.type === 'smart') {
     const sp = store.getSmartPlaylist(r.key);
     if (!sp) return null;
-    return { kind: 'smart', id: sp.id, title: sp.name, sub: 'Smart Playlist', color: sp.color, cover: sp.cover };
+    return {
+      kind: 'smart',
+      id: sp.id,
+      title: sp.name,
+      sub: 'Smart Playlist',
+      color: sp.color,
+      cover: sp.cover,
+    };
   }
   if (r.type === 'collection') {
     const c = getCollection(r.key);
     if (!c) return null;
-    return { kind: 'collection', key: r.key, title: c.title, sub: 'Mix', color: c.color, icon: c.icon };
+    return {
+      kind: 'collection',
+      key: r.key,
+      title: c.title,
+      sub: 'Mix',
+      color: c.color,
+      icon: c.icon,
+    };
   }
   if (r.type === 'album') {
     const cover = albumCoverMap.value.get(r.key);
@@ -251,9 +277,20 @@ const goToArtist = (artist, event) => {
 
     <!-- Empty library state -->
     <div v-if="!hasSongs" class="px-8 py-20 text-center">
-      <div class="mx-auto w-20 h-20 rounded-2xl bg-gradient-to-br from-[var(--accent-color)] to-[#7a1020] flex items-center justify-center mb-5 shadow-xl">
-        <svg xmlns="http://www.w3.org/2000/svg" width="38" height="38" viewBox="0 0 24 24" fill="#fff" stroke="none">
-          <path d="M9 18V5l12-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="18" cy="16" r="3" />
+      <div
+        class="mx-auto w-20 h-20 rounded-2xl bg-gradient-to-br from-[var(--accent-color)] to-[#7a1020] flex items-center justify-center mb-5 shadow-xl"
+      >
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          width="38"
+          height="38"
+          viewBox="0 0 24 24"
+          fill="#fff"
+          stroke="none"
+        >
+          <path d="M9 18V5l12-2v13" />
+          <circle cx="6" cy="18" r="3" />
+          <circle cx="18" cy="16" r="3" />
         </svg>
       </div>
       <h2 class="text-xl font-bold text-white mb-1">Your library is empty</h2>
@@ -273,7 +310,9 @@ const goToArtist = (artist, event) => {
       <Shelf v-if="recentItems.length" title="Recently Played" to="/collection/recently-played">
         <div
           v-for="item in recentItems"
-          :key="item.kind + '-' + (item.id || item.key || item.name || (item.song && item.song.path))"
+          :key="
+            item.kind + '-' + (item.id || item.key || item.name || (item.song && item.song.path))
+          "
           class="rec-card shrink-0 w-40 group cursor-pointer"
           :data-cover-key="item.kind === 'album' ? item.name : item.id || item.key || undefined"
           :data-artist-key="item.kind === 'song' ? item.sub : undefined"
@@ -285,9 +324,21 @@ const goToArtist = (artist, event) => {
           >
             <!-- Art per kind -->
             <CoverImage
-              v-if="item.kind === 'song' || item.kind === 'album' || (item.kind === 'station' && item.coverPath)"
-              :path="item.kind === 'station' ? item.coverPath : (item.song ? item.song.path : item.coverPath)"
-              :class="item.kind === 'station' ? 'w-full h-full !rounded-full' : 'w-full h-full rounded-xl'"
+              v-if="
+                item.kind === 'song' ||
+                item.kind === 'album' ||
+                (item.kind === 'station' && item.coverPath)
+              "
+              :path="
+                item.kind === 'station'
+                  ? item.coverPath
+                  : item.song
+                    ? item.song.path
+                    : item.coverPath
+              "
+              :class="
+                item.kind === 'station' ? 'w-full h-full !rounded-full' : 'w-full h-full rounded-xl'
+              "
               className="bg-[#282828]"
             />
             <PlaylistCover
@@ -304,7 +355,11 @@ const goToArtist = (artist, event) => {
               :cover="item.cover"
               :icon="item.icon || (item.kind === 'station' ? 'radio' : 'bolt')"
               :show-title="false"
-              :className="(item.kind === 'station' ? 'w-full h-full rounded-full' : 'w-full h-full rounded-xl') + ' cover-image'"
+              :className="
+                (item.kind === 'station'
+                  ? 'w-full h-full rounded-full'
+                  : 'w-full h-full rounded-xl') + ' cover-image'
+              "
             />
 
             <!-- Play overlay -->
@@ -316,7 +371,14 @@ const goToArtist = (artist, event) => {
                 @click.stop="onRecentPlay(item)"
                 class="bg-[var(--accent-color)] text-white rounded-full p-2.5 shadow-xl translate-y-2 opacity-0 group-hover:translate-y-0 group-hover:opacity-100 transition-all duration-300 hover:scale-110 hover:bg-red-500"
               >
-                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="18"
+                  height="18"
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                  stroke="none"
+                >
                   <polygon points="5 3 19 12 5 21 5 3" />
                 </svg>
               </div>
@@ -353,7 +415,9 @@ const goToArtist = (artist, event) => {
           @click="openWithMorph('/collection/' + c.key, $event)"
           class="shrink-0 w-64 text-left group"
         >
-          <div class="w-64 aspect-[4/5] rounded-2xl overflow-hidden shadow-xl group-hover:scale-[1.02] transition-transform duration-200 ease-out relative">
+          <div
+            class="w-64 aspect-[4/5] rounded-2xl overflow-hidden shadow-xl group-hover:scale-[1.02] transition-transform duration-200 ease-out relative"
+          >
             <SmartCover
               :title="c.title"
               top-label="Made for You"
@@ -366,7 +430,14 @@ const goToArtist = (artist, event) => {
               @click.stop="playCollection(c.key)"
               class="absolute bottom-3 right-3 bg-white text-black rounded-full p-3 shadow-xl opacity-0 translate-y-2 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-300 hover:scale-110"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+                stroke="none"
+              >
                 <polygon points="5 3 19 12 5 21 5 3" />
               </svg>
             </div>
@@ -378,7 +449,12 @@ const goToArtist = (artist, event) => {
       <SongScroller title="On Repeat" :songs="onRepeat" to="/collection/on-repeat" />
 
       <!-- Most Played (ranked) -->
-      <SongScroller title="Most Played" :songs="mostPlayed" to="/collection/most-played" show-rank />
+      <SongScroller
+        title="Most Played"
+        :songs="mostPlayed"
+        to="/collection/most-played"
+        show-rank
+      />
 
       <!-- Smart Playlists -->
       <Shelf title="Your Smart Playlists">
@@ -389,20 +465,42 @@ const goToArtist = (artist, event) => {
           @click="openWithMorph('/smart/' + sp.id, $event)"
           class="shrink-0 w-48 text-left group"
         >
-          <div class="w-48 h-48 rounded-2xl overflow-hidden shadow-xl group-hover:scale-[1.03] transition-transform duration-200 ease-out relative mb-2.5">
-            <PlaylistCover :name="sp.name" :cover="sp.cover" :size="192" className="w-full h-full cover-image" />
+          <div
+            class="w-48 h-48 rounded-2xl overflow-hidden shadow-xl group-hover:scale-[1.03] transition-transform duration-200 ease-out relative mb-2.5"
+          >
+            <PlaylistCover
+              :name="sp.name"
+              :cover="sp.cover"
+              :size="192"
+              className="w-full h-full cover-image"
+            />
             <div
               @click.stop="store.playSmartPlaylist(sp.id)"
               class="absolute bottom-2.5 right-2.5 bg-white text-black rounded-full p-2.5 shadow-xl opacity-0 translate-y-2 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-300 hover:scale-110"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+                stroke="none"
+              >
                 <polygon points="5 3 19 12 5 21 5 3" />
               </svg>
             </div>
           </div>
           <div class="text-[13px] font-semibold text-white truncate flex items-center gap-1.5">
             <span class="truncate">{{ sp.name }}</span>
-            <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="currentColor" stroke="none" class="text-[var(--accent-color)] shrink-0">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="11"
+              height="11"
+              viewBox="0 0 24 24"
+              fill="currentColor"
+              stroke="none"
+              class="text-[var(--accent-color)] shrink-0"
+            >
               <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
             </svg>
           </div>
@@ -417,12 +515,29 @@ const goToArtist = (artist, event) => {
             @click="createFromTemplate(t)"
             class="shrink-0 w-48 text-left group"
           >
-            <div class="w-48 h-48 rounded-2xl overflow-hidden shadow-xl group-hover:scale-[1.03] transition-transform duration-200 ease-out relative mb-2.5">
+            <div
+              class="w-48 h-48 rounded-2xl overflow-hidden shadow-xl group-hover:scale-[1.03] transition-transform duration-200 ease-out relative mb-2.5"
+            >
               <PlaylistCover :name="t.name" :size="192" className="w-full h-full" />
-              <div class="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                <div class="bg-white/90 text-black rounded-full p-2.5 shadow-xl scale-90 group-hover:scale-100 transition-transform">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
-                    <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
+              <div
+                class="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center"
+              >
+                <div
+                  class="bg-white/90 text-black rounded-full p-2.5 shadow-xl scale-90 group-hover:scale-100 transition-transform"
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="18"
+                    height="18"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="3"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <line x1="12" y1="5" x2="12" y2="19" />
+                    <line x1="5" y1="12" x2="19" y2="12" />
                   </svg>
                 </div>
               </div>
@@ -436,9 +551,22 @@ const goToArtist = (artist, event) => {
              other cards' covers instead of centering against their taller
              (cover + label) height. -->
         <button @click="store.openSmartModal('create')" class="shrink-0 w-48 group self-start">
-          <div class="w-48 h-48 rounded-2xl border-2 border-dashed border-white/15 group-hover:border-[var(--accent-color)] flex flex-col items-center justify-center gap-2 text-gray-500 group-hover:text-[var(--accent-color)] transition-colors mb-2.5">
-            <svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
+          <div
+            class="w-48 h-48 rounded-2xl border-2 border-dashed border-white/15 group-hover:border-[var(--accent-color)] flex flex-col items-center justify-center gap-2 text-gray-500 group-hover:text-[var(--accent-color)] transition-colors mb-2.5"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="30"
+              height="30"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <line x1="12" y1="5" x2="12" y2="19" />
+              <line x1="5" y1="12" x2="19" y2="12" />
             </svg>
             <span class="text-xs font-semibold">New Smart Playlist</span>
           </div>
@@ -449,7 +577,11 @@ const goToArtist = (artist, event) => {
       <SongScroller title="Recently Added" :songs="recentlyAdded" to="/collection/recently-added" />
 
       <!-- Stations for You -->
-      <Shelf v-if="hasStations" title="Stations for You" subtitle="Endless mixes built from your library">
+      <Shelf
+        v-if="hasStations"
+        title="Stations for You"
+        subtitle="Endless mixes built from your library"
+      >
         <!-- Artist stations (circular) -->
         <button
           v-for="a in artistStations"
@@ -457,11 +589,24 @@ const goToArtist = (artist, event) => {
           @click="store.playStation('artist', a.name)"
           class="shrink-0 w-36 group text-center"
         >
-          <div class="w-36 h-36 rounded-full overflow-hidden shadow-xl group-hover:scale-[1.04] transition-transform duration-200 ease-out relative mb-2.5 mx-auto">
+          <div
+            class="w-36 h-36 rounded-full overflow-hidden shadow-xl group-hover:scale-[1.04] transition-transform duration-200 ease-out relative mb-2.5 mx-auto"
+          >
             <CoverImage :path="a.coverPath" className="w-full h-full bg-[#282828]" />
-            <div class="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-              <div class="bg-[var(--accent-color)] text-white rounded-full p-3 shadow-xl scale-90 group-hover:scale-100 transition-transform hover:bg-red-500">
-                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+            <div
+              class="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center"
+            >
+              <div
+                class="bg-[var(--accent-color)] text-white rounded-full p-3 shadow-xl scale-90 group-hover:scale-100 transition-transform hover:bg-red-500"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="18"
+                  height="18"
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                  stroke="none"
+                >
                   <polygon points="5 3 19 12 5 21 5 3" />
                 </svg>
               </div>
@@ -478,11 +623,30 @@ const goToArtist = (artist, event) => {
           @click="store.playStation('genre', g.name)"
           class="shrink-0 w-36 group text-center"
         >
-          <div class="w-36 h-36 rounded-2xl overflow-hidden shadow-xl group-hover:scale-[1.04] transition-transform duration-200 ease-out relative mb-2.5">
-            <SmartCover :title="g.name" :color="''" icon="radio" :show-title="false" className="w-full h-full" />
-            <div class="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-              <div class="bg-white text-black rounded-full p-3 shadow-xl scale-90 group-hover:scale-100 transition-transform">
-                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+          <div
+            class="w-36 h-36 rounded-2xl overflow-hidden shadow-xl group-hover:scale-[1.04] transition-transform duration-200 ease-out relative mb-2.5"
+          >
+            <SmartCover
+              :title="g.name"
+              :color="''"
+              icon="radio"
+              :show-title="false"
+              className="w-full h-full"
+            />
+            <div
+              class="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center"
+            >
+              <div
+                class="bg-white text-black rounded-full p-3 shadow-xl scale-90 group-hover:scale-100 transition-transform"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="18"
+                  height="18"
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                  stroke="none"
+                >
                   <polygon points="5 3 19 12 5 21 5 3" />
                 </svg>
               </div>
