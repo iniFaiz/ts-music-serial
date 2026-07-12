@@ -6,6 +6,7 @@ import { loadLyrics, activeLineIndex } from '../lyricsCache';
 import { useRouter } from 'vue-router';
 import LyricContent from './LyricContent.vue';
 import { extractColorsForPath, defaultPalette } from '../colorExtract';
+import MarqueeText from './MarqueeText.vue';
 
 const router = useRouter();
 const coverUrl = ref(null);
@@ -466,8 +467,8 @@ const goToAlbum = (albumName) => {
 
           <!-- Title row -->
           <div class="flex items-center justify-between gap-3 mt-5">
-            <div class="min-w-0">
-              <div class="text-xl font-bold truncate">{{ song.title }}</div>
+            <div class="min-w-0 flex-1">
+              <MarqueeText :text="song.title" class="text-xl font-bold" />
               <div class="text-sm truncate text-white/60">
                 <span
                   @click="goToArtist(song.artist)"

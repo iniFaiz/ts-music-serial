@@ -22,6 +22,7 @@ import { extractColorsForPath, defaultPalette } from '../colorExtract';
 import LyricContent from './LyricContent.vue';
 import LosslessBadge from './LosslessBadge.vue';
 import CoverImage from './CoverImage.vue';
+import MarqueeText from './MarqueeText.vue';
 
 const router = useRouter();
 
@@ -638,8 +639,8 @@ onUnmounted(() => {
 
         <!-- Title / artist / lossless (non-artwork) -->
         <div v-if="!isArtwork" class="flex-1 min-w-0 text-center pt-0.5">
-          <div class="text-sm font-semibold leading-tight truncate pointer-events-none">
-            {{ song ? song.title : 'Not Playing' }}
+          <div class="text-sm font-semibold leading-tight pointer-events-none">
+            <MarqueeText :text="song ? song.title : 'Not Playing'" :center="true" />
           </div>
           <div v-if="song" class="text-xs leading-tight truncate text-white/60 pointer-events-none">
             {{ song.artist }}<span v-if="song.album"> — {{ song.album }}</span>
@@ -980,7 +981,9 @@ onUnmounted(() => {
             </svg>
           </button>
           <div class="flex-1 min-w-0">
-            <div class="text-sm font-semibold leading-tight truncate">{{ song.title }}</div>
+            <div class="text-sm font-semibold leading-tight flex items-center">
+              <MarqueeText :text="song.title" />
+            </div>
             <div class="text-xs leading-tight truncate text-white/60">
               {{ song.artist }}<span v-if="song.album"> — {{ song.album }}</span>
             </div>

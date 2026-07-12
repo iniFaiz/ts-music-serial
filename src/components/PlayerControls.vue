@@ -9,6 +9,7 @@ import Visualizer from './Visualizer.vue';
 import WaveformSeekbar from './WaveformSeekbar.vue';
 import { navigateWithTransition } from '../viewTransition';
 import { loadWaveform, getCachedWaveform } from '../waveformCache';
+import MarqueeText from './MarqueeText.vue';
 
 const router = useRouter();
 const playerCoverRef = ref(null);
@@ -863,10 +864,11 @@ const formatTime = (seconds) => {
 
           <!-- Song Title & Artist text container: set flex-1, text-center and min-w-0 -->
           <div class="flex flex-col overflow-hidden text-center min-w-0 flex-1">
-            <span
-              class="text-xs md:text-sm font-medium text-white truncate max-w-[80px] sm:max-w-[180px] md:max-w-[260px] lg:max-w-[360px] xl:max-w-[450px]"
-              >{{ store.currentSong.title }}</span
-            >
+            <MarqueeText
+              :text="store.currentSong.title"
+              :center="true"
+              class="text-xs md:text-sm font-medium text-white max-w-[80px] sm:max-w-[180px] md:max-w-[260px] lg:max-w-[360px] xl:max-w-[450px] mx-auto"
+            />
             <span
               @click="navigateToArtist(store.currentSong.artist)"
               class="text-[10px] md:text-xs text-gray-400 hover:text-[var(--accent-color)] hover:underline cursor-pointer truncate max-w-[80px] sm:max-w-[180px] md:max-w-[260px] lg:max-w-[360px] xl:max-w-[450px] transition-colors"
