@@ -468,7 +468,7 @@ const goToAlbum = (albumName) => {
           <!-- Title row -->
           <div class="flex items-center justify-between gap-3 mt-5">
             <div class="min-w-0 flex-1">
-              <MarqueeText :text="song.title" class="text-xl font-bold" />
+              <MarqueeText :text="song.title" :gap="80" class="text-xl font-bold" />
               <div class="text-sm truncate text-white/60">
                 <span
                   @click="goToArtist(song.artist)"
