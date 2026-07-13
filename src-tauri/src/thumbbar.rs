@@ -18,11 +18,11 @@
 // that invariant exactly like the SMTC `MediaController`.
 // ---------------------------------------------------------------------------
 
+use parking_lot::Mutex;
 use std::ffi::c_void;
 use std::mem::size_of;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicU32, Ordering};
-use parking_lot::Mutex;
 
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -33,9 +33,7 @@ use windows::Win32::Graphics::Gdi::{
     DIB_RGB_COLORS, HGDIOBJ,
 };
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
-use windows::Win32::System::Registry::{
-    RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD,
-};
+use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
 use windows::Win32::UI::Shell::{
     DefSubclassProc, ITaskbarList3, SetWindowSubclass, TaskbarList, THBF_ENABLED, THBN_CLICKED,
     THB_FLAGS, THB_ICON, THB_TOOLTIP, THUMBBUTTON, THUMBBUTTONMASK,
@@ -98,16 +96,7 @@ fn edge(px: f32, py: f32, ax: f32, ay: f32, bx: f32, by: f32) -> f32 {
     (px - bx) * (ay - by) - (ax - bx) * (py - by)
 }
 
-fn in_tri(
-    px: f32,
-    py: f32,
-    ax: f32,
-    ay: f32,
-    bx: f32,
-    by: f32,
-    cx: f32,
-    cy: f32,
-) -> bool {
+fn in_tri(px: f32, py: f32, ax: f32, ay: f32, bx: f32, by: f32, cx: f32, cy: f32) -> bool {
     let d1 = edge(px, py, ax, ay, bx, by);
     let d2 = edge(px, py, bx, by, cx, cy);
     let d3 = edge(px, py, cx, cy, ax, ay);
@@ -274,7 +263,12 @@ impl Inner {
     }
 
     unsafe fn destroy_icons(&self) {
-        for icon in [self.icon_prev, self.icon_play, self.icon_pause, self.icon_next] {
+        for icon in [
+            self.icon_prev,
+            self.icon_play,
+            self.icon_pause,
+            self.icon_next,
+        ] {
             if !icon.is_invalid() {
                 let _ = DestroyIcon(icon);
             }

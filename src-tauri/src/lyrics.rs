@@ -275,7 +275,10 @@ pub fn lyrics_from_text(text: &str, source: &str) -> Option<Lyrics> {
 // ---- Provider: LRCLIB -----------------------------------------------------
 
 fn lrclib_value_to_lyrics(v: &serde_json::Value) -> Option<Lyrics> {
-    if v.get("instrumental").and_then(|x| x.as_bool()).unwrap_or(false) {
+    if v.get("instrumental")
+        .and_then(|x| x.as_bool())
+        .unwrap_or(false)
+    {
         return None;
     }
     if let Some(s) = v.get("syncedLyrics").and_then(|x| x.as_str()) {
@@ -356,14 +359,32 @@ pub fn is_netease_metadata(line: &LyricLine) -> bool {
     }
 
     let t_lower = t.to_lowercase();
-    
+
     // 1. Starts with english/common prefix patterns
     let prefix_patterns = &[
-        "by:", "lrc:", "translator:", "lyrics by", "composed by", "produced by",
-        "arranged by", "remix by", "vocals by", "instrumental by", "lyrics:",
-        "composer:", "vocals:", "music:", "music by", "translation:",
-        "translated by", "synced by", "timing by", "timed by", "lrc by",
-        "romaji by", "romanized by"
+        "by:",
+        "lrc:",
+        "translator:",
+        "lyrics by",
+        "composed by",
+        "produced by",
+        "arranged by",
+        "remix by",
+        "vocals by",
+        "instrumental by",
+        "lyrics:",
+        "composer:",
+        "vocals:",
+        "music:",
+        "music by",
+        "translation:",
+        "translated by",
+        "synced by",
+        "timing by",
+        "timed by",
+        "lrc by",
+        "romaji by",
+        "romanized by",
     ];
     if prefix_patterns.iter().any(|&pat| t_lower.starts_with(pat)) {
         return true;
@@ -373,18 +394,64 @@ pub fn is_netease_metadata(line: &LyricLine) -> bool {
     let separators = &[':', '：', '/', '-', '—', '|', '='];
     let safe_keywords = &[
         // Chinese
-        "作词", "作曲", "编曲", "制作人", "监制", "和声", "混音", "母带", 
-        "录音", "策划", "宣发", "发卡", "设计", "原唱", "翻唱", "伴奏", 
-        "后期", "音响", "企划", "统筹", "出品", "发行",
+        "作词",
+        "作曲",
+        "编曲",
+        "制作人",
+        "监制",
+        "和声",
+        "混音",
+        "母带",
+        "录音",
+        "策划",
+        "宣发",
+        "发卡",
+        "设计",
+        "原唱",
+        "翻唱",
+        "伴奏",
+        "后期",
+        "音响",
+        "企划",
+        "统筹",
+        "出品",
+        "发行",
         // Japanese
-        "作詞", "作曲", "編曲", "訳詞", "プロデュース", "プロデューサー", 
-        "マスタリング", "翻訳", "制作", "音響", "録音", "動画",
+        "作詞",
+        "作曲",
+        "編曲",
+        "訳詞",
+        "プロデュース",
+        "プロデューサー",
+        "マスタリング",
+        "翻訳",
+        "制作",
+        "音響",
+        "録音",
+        "動画",
         // Korean
-        "작사", "작곡", "편곡", "번역", "개사", "프로듀서", "일러스트", 
-        "제작", "협력", "제공", "유통", "기획", "영상",
+        "작사",
+        "작곡",
+        "편곡",
+        "번역",
+        "개사",
+        "프로듀서",
+        "일러스트",
+        "제작",
+        "협력",
+        "제공",
+        "유통",
+        "기획",
+        "영상",
         // English
-        "lyricist", "composer", "arranger", "translator", "translation", 
-        "producer", "mixing", "mastering"
+        "lyricist",
+        "composer",
+        "arranger",
+        "translator",
+        "translation",
+        "producer",
+        "mixing",
+        "mastering",
     ];
 
     for &k in safe_keywords {
@@ -392,9 +459,9 @@ pub fn is_netease_metadata(line: &LyricLine) -> bool {
             let idx = t_lower.find(k).unwrap();
             let after_k = &t_lower[idx + k.len()..];
             let after_trimmed = after_k.trim_start();
-            if after_trimmed.starts_with(|c| separators.contains(&c)) 
-                || after_k.starts_with(' ') 
-                || after_k.is_empty() 
+            if after_trimmed.starts_with(|c| separators.contains(&c))
+                || after_k.starts_with(' ')
+                || after_k.is_empty()
             {
                 return true;
             }
@@ -403,9 +470,26 @@ pub fn is_netease_metadata(line: &LyricLine) -> bool {
 
     // 3. Keywords requiring a hard separator
     let hard_keywords = &[
-        "노래", "가수", "보컬", "세션", "기타", "베이스", "드럼", "키보드",
-        "歌", "唄", "ボーカル", "コーラス", "vocal", "vocals", "singer", 
-        "chorus", "guitar", "bass", "drums", "keyboard"
+        "노래",
+        "가수",
+        "보컬",
+        "세션",
+        "기타",
+        "베이스",
+        "드럼",
+        "키보드",
+        "歌",
+        "唄",
+        "ボーカル",
+        "コーラス",
+        "vocal",
+        "vocals",
+        "singer",
+        "chorus",
+        "guitar",
+        "bass",
+        "drums",
+        "keyboard",
     ];
     for &k in hard_keywords {
         if t_lower.contains(k) {
@@ -421,21 +505,65 @@ pub fn is_netease_metadata(line: &LyricLine) -> bool {
     // 4. Specific watermark and contributor keywords (case-insensitive substring match)
     let specific_keywords = &[
         // Chinese
-        "歌词贡献", "翻译贡献", "贡献者", "歌词及翻译", "网易云", "网易首发",
-        "时间轴", "和声编写", "歌词制作", "制作歌词", "歌词由", "本歌词由", 
-        "此歌词由", "感谢您的支持", "感谢您支持", "qq音乐", "腾讯音乐", 
-        "酷狗", "酷我", "虾米音乐", "提供", "上传", "校对", "同步", 
-        "有疑问请联系", "lrc制作", "lrc下载", "歌词下载", "词与曲",
+        "歌词贡献",
+        "翻译贡献",
+        "贡献者",
+        "歌词及翻译",
+        "网易云",
+        "网易首发",
+        "时间轴",
+        "和声编写",
+        "歌词制作",
+        "制作歌词",
+        "歌词由",
+        "本歌词由",
+        "此歌词由",
+        "感谢您的支持",
+        "感谢您支持",
+        "qq音乐",
+        "腾讯音乐",
+        "酷狗",
+        "酷我",
+        "虾米音乐",
+        "提供",
+        "上传",
+        "校对",
+        "同步",
+        "有疑问请联系",
+        "lrc制作",
+        "lrc下载",
+        "歌词下载",
+        "词与曲",
         // Japanese
-        "歌詞提供", "対訳", "翻訳者", "歌詞制作", "タイムライン", "音源", 
-        "初音ミクwiki", "ボカロ中文wiki",
+        "歌詞提供",
+        "対訳",
+        "翻訳者",
+        "歌詞制作",
+        "タイムライン",
+        "音源",
+        "初音ミクwiki",
+        "ボカロ中文wiki",
         // Korean
-        "가사 제공", "가사 번역", "가사 제작", "싱크 조절", "싱크 제작", 
-        "시간축", "번역자", "개사자", "출처", "공식 유튜브",
+        "가사 제공",
+        "가사 번역",
+        "가사 제작",
+        "싱크 조절",
+        "싱크 제작",
+        "시간축",
+        "번역자",
+        "개사자",
+        "출처",
+        "공식 유튜브",
         // English
-        "lyrics translation", "english lyrics", "romanized by", "romaji by", 
-        "transliterated by", "provided by", "corrected by", "edited by", 
-        "lyrics support"
+        "lyrics translation",
+        "english lyrics",
+        "romanized by",
+        "romaji by",
+        "transliterated by",
+        "provided by",
+        "corrected by",
+        "edited by",
+        "lyrics support",
     ];
     for &k in specific_keywords {
         if t_lower.contains(k) {
@@ -657,13 +785,23 @@ fn build_netease_lyrics(v: &serde_json::Value) -> Option<Lyrics> {
             .as_ref()
             .map(|s| parse_yrc(s))
             .filter(|v| !v.is_empty())
-            .or_else(|| romalrc.as_ref().map(|s| parse_lrc(s)).filter(|v| !v.is_empty()))
+            .or_else(|| {
+                romalrc
+                    .as_ref()
+                    .map(|s| parse_lrc(s))
+                    .filter(|v| !v.is_empty())
+            })
     } else {
         romalrc
             .as_ref()
             .map(|s| parse_lrc(s))
             .filter(|v| !v.is_empty())
-            .or_else(|| yromalrc.as_ref().map(|s| parse_yrc(s)).filter(|v| !v.is_empty()))
+            .or_else(|| {
+                yromalrc
+                    .as_ref()
+                    .map(|s| parse_yrc(s))
+                    .filter(|v| !v.is_empty())
+            })
     };
     let has_romaji = match romaji_lines.as_ref() {
         Some(r) => attach_romaji(&mut lines, r),
@@ -766,7 +904,9 @@ fn generate_token_guid() -> String {
 
     let mut seed = nanos;
     let mut next_random = move || {
-        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         seed
     };
 
@@ -783,30 +923,53 @@ fn generate_token_guid() -> String {
 fn clean_song_title(title: &str) -> String {
     let mut cleaned = title.to_string();
     let patterns = &[
-        "feat.", "featuring", "remaster", "single version", "album version", 
-        "radio edit", "extended mix", "live version", "official video", 
-        "official audio", "lyric video", "bonus track", "acoustic version",
-        "original mix", "deluxe version", "special version", "with "
+        "feat.",
+        "featuring",
+        "remaster",
+        "single version",
+        "album version",
+        "radio edit",
+        "extended mix",
+        "live version",
+        "official video",
+        "official audio",
+        "lyric video",
+        "bonus track",
+        "acoustic version",
+        "original mix",
+        "deluxe version",
+        "special version",
+        "with ",
     ];
 
     if let Some(pos) = cleaned.rfind('(') {
         let inside = &cleaned[pos + 1..];
         let inside_lower = inside.to_lowercase();
-        if patterns.iter().any(|&p| inside_lower.contains(p)) || inside_lower.contains("version") || inside_lower.contains("remix") {
+        if patterns.iter().any(|&p| inside_lower.contains(p))
+            || inside_lower.contains("version")
+            || inside_lower.contains("remix")
+        {
             cleaned = cleaned[..pos].trim().to_string();
         }
     }
     if let Some(pos) = cleaned.rfind('[') {
         let inside = &cleaned[pos + 1..];
         let inside_lower = inside.to_lowercase();
-        if patterns.iter().any(|&p| inside_lower.contains(p)) || inside_lower.contains("version") || inside_lower.contains("remix") {
+        if patterns.iter().any(|&p| inside_lower.contains(p))
+            || inside_lower.contains("version")
+            || inside_lower.contains("remix")
+        {
             cleaned = cleaned[..pos].trim().to_string();
         }
     }
     if let Some(pos) = cleaned.rfind(" - ") {
         let after = &cleaned[pos + 3..];
         let after_lower = after.to_lowercase();
-        if patterns.iter().any(|&p| after_lower.contains(p)) || after_lower.contains("version") || after_lower.contains("remix") || after_lower.contains("remaster") {
+        if patterns.iter().any(|&p| after_lower.contains(p))
+            || after_lower.contains("version")
+            || after_lower.contains("remix")
+            || after_lower.contains("remaster")
+        {
             cleaned = cleaned[..pos].trim().to_string();
         }
     }
@@ -843,11 +1006,7 @@ pub async fn get_musixmatch_token(client: &reqwest::Client) -> Option<(String, S
     }
 
     let v: serde_json::Value = resp.json().await.ok()?;
-    let token = v
-        .get("message")?
-        .get("body")?
-        .get("user_token")?
-        .as_str()?;
+    let token = v.get("message")?.get("body")?.get("user_token")?.as_str()?;
     Some((token.to_string(), cookie_header))
 }
 
@@ -1079,10 +1238,22 @@ pub async fn from_musixmatch(
 
     // 3. Ensure we have basic cookie headers if none was cached
     if current_cookie.is_empty() {
-        current_cookie = format!("AWSELB=0; AWSELBCORS=0; x-mxm-token-guid={}", generate_token_guid());
+        current_cookie = format!(
+            "AWSELB=0; AWSELBCORS=0; x-mxm-token-guid={}",
+            generate_token_guid()
+        );
     }
 
-    let mut v = fetch_musixmatch_raw(client, title, artist, album, duration, &current_token, &current_cookie).await?;
+    let mut v = fetch_musixmatch_raw(
+        client,
+        title,
+        artist,
+        album,
+        duration,
+        &current_token,
+        &current_cookie,
+    )
+    .await?;
 
     // Check for 401 / renew error in response
     let mut status_code = v
@@ -1102,7 +1273,16 @@ pub async fn from_musixmatch(
             *CACHED_COOKIE.lock() = Some(cookie);
 
             // Retry with new token and sticky cookies
-            v = fetch_musixmatch_raw(client, title, artist, album, duration, &current_token, &current_cookie).await?;
+            v = fetch_musixmatch_raw(
+                client,
+                title,
+                artist,
+                album,
+                duration,
+                &current_token,
+                &current_cookie,
+            )
+            .await?;
         }
     }
 
@@ -1112,7 +1292,8 @@ pub async fn from_musixmatch(
     }
 
     // Fallback: retry with fuzzy parameters (only title and artist)
-    let mut v_fuzzy = fetch_musixmatch_fuzzy(client, title, artist, &current_token, &current_cookie).await?;
+    let mut v_fuzzy =
+        fetch_musixmatch_fuzzy(client, title, artist, &current_token, &current_cookie).await?;
 
     // Check for 401 error in fuzzy response
     status_code = v_fuzzy
@@ -1129,7 +1310,9 @@ pub async fn from_musixmatch(
             // Update memory cache
             *CACHED_TOKEN.lock() = Some(t);
             *CACHED_COOKIE.lock() = Some(cookie);
-            v_fuzzy = fetch_musixmatch_fuzzy(client, title, artist, &current_token, &current_cookie).await?;
+            v_fuzzy =
+                fetch_musixmatch_fuzzy(client, title, artist, &current_token, &current_cookie)
+                    .await?;
         }
     }
 
@@ -1140,7 +1323,14 @@ pub async fn from_musixmatch(
     // Second Fallback: retry with cleaned title (strip parentheses/brackets)
     let cleaned_title = clean_song_title(title);
     if cleaned_title != title {
-        let mut v_cleaned = fetch_musixmatch_fuzzy(client, &cleaned_title, artist, &current_token, &current_cookie).await?;
+        let mut v_cleaned = fetch_musixmatch_fuzzy(
+            client,
+            &cleaned_title,
+            artist,
+            &current_token,
+            &current_cookie,
+        )
+        .await?;
 
         // Check for 401 error in cleaned response
         status_code = v_cleaned
@@ -1153,11 +1343,18 @@ pub async fn from_musixmatch(
             if let Some((t, cookie)) = get_musixmatch_token(client).await {
                 current_token = t.clone();
                 current_cookie = cookie.clone();
-                
+
                 // Update memory cache
                 *CACHED_TOKEN.lock() = Some(t);
                 *CACHED_COOKIE.lock() = Some(cookie);
-                v_cleaned = fetch_musixmatch_fuzzy(client, &cleaned_title, artist, &current_token, &current_cookie).await?;
+                v_cleaned = fetch_musixmatch_fuzzy(
+                    client,
+                    &cleaned_title,
+                    artist,
+                    &current_token,
+                    &current_cookie,
+                )
+                .await?;
             }
         }
 

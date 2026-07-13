@@ -39,7 +39,7 @@ pub fn export_m3u(db: State<Db>, dest: String, playlist_id: String) -> Result<us
         return Err("Destination must be a .m3u or .m3u8 file".into());
     }
 
-    let tracks = crate::db::db_playlist_tracks(db, playlist_id)?;
+    let tracks = crate::db::playlists::db_playlist_tracks(db, playlist_id)?;
     let mut out = String::from("#EXTM3U\n");
     for t in &tracks {
         out.push_str(&format!(

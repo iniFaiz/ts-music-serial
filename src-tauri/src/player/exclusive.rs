@@ -36,14 +36,14 @@ use wasapi::{
     WaveFormat,
 };
 
-use crate::{
+use super::{
     build_decoder, EqualizerShared, EqualizerSource, PlaybackInfo, PlayerStatus, SpectrumShared,
     SpectrumSource,
 };
 
 // Lock-free transport/state shared with the render thread.
 struct ExclusiveShared {
-    active: AtomicBool,          // true while a render thread owns the device
+    active: AtomicBool,         // true while a render thread owns the device
     playing: AtomicBool,        // play / pause
     finished: AtomicBool,       // the track has drained
     position_frames: AtomicU64, // frames played so far (÷ sample_rate = seconds)
@@ -300,7 +300,12 @@ fn write_sample(out: &mut [u8], s: f32, sample_type: SampleType, store_bits: u16
 // The source's declared bit depth (16 / 24 / 32) so exclusive output can match
 // the lossless original instead of always defaulting to 16-bit.
 fn source_bit_depth(path: &Path) -> Option<u8> {
-    Probe::open(path).ok()?.read().ok()?.properties().bit_depth()
+    Probe::open(path)
+        .ok()?
+        .read()
+        .ok()?
+        .properties()
+        .bit_depth()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -332,7 +337,11 @@ fn render_loop(
     let sample_rate = decoder.sample_rate();
     let channels = decoder.channels();
     let source_bits = source_bit_depth(Path::new(&path));
-    let duration = if decoded_dur > 0.0 { decoded_dur } else { duration_hint.max(0.0) };
+    let duration = if decoded_dur > 0.0 {
+        decoded_dur
+    } else {
+        duration_hint.max(0.0)
+    };
 
     // Open the default render device in exclusive mode.
     //
@@ -402,13 +411,20 @@ fn render_loop(
             };
             match audio_client.initialize_client(&format, &Direction::Render, &mode) {
                 Ok(()) => {
-                    let render_client =
-                        audio_client.get_audiorenderclient().map_err(|e| e.to_string())?;
+                    let render_client = audio_client
+                        .get_audiorenderclient()
+                        .map_err(|e| e.to_string())?;
                     let buffer_frames =
                         audio_client.get_buffer_size().map_err(|e| e.to_string())?;
                     return Ok((
-                        audio_client, render_client, sample_type, store_bits, blockalign,
-                        buffer_frames, dev_rate, dev_ch,
+                        audio_client,
+                        render_client,
+                        sample_type,
+                        store_bits,
+                        blockalign,
+                        buffer_frames,
+                        dev_rate,
+                        dev_ch,
                     ));
                 }
                 Err(e) => {
@@ -434,8 +450,14 @@ fn render_loop(
                                     let buffer_frames =
                                         c2.get_buffer_size().map_err(|e| e.to_string())?;
                                     return Ok((
-                                        c2, render_client, sample_type, store_bits, blockalign,
-                                        buffer_frames, dev_rate, dev_ch,
+                                        c2,
+                                        render_client,
+                                        sample_type,
+                                        store_bits,
+                                        blockalign,
+                                        buffer_frames,
+                                        dev_rate,
+                                        dev_ch,
                                     ));
                                 }
                                 last_err = format!("aligned period {p2} hns also failed");
@@ -473,7 +495,9 @@ fn render_loop(
     );
 
     shared.sample_rate.store(dev_rate, Ordering::SeqCst);
-    shared.duration_ms.store((duration * 1000.0) as u64, Ordering::SeqCst);
+    shared
+        .duration_ms
+        .store((duration * 1000.0) as u64, Ordering::SeqCst);
 
     // Decode → EQ → spectrum tap → resample to the device's rate/channels. The
     // EQ runs at the file's rate (its coefficients are computed for it) and the
@@ -583,15 +607,19 @@ fn render_loop(
 
         let playing = shared.playing.load(Ordering::SeqCst);
         if playing && !finished {
-            let volume =
-                (*last_volume.lock() * *norm_factor.lock()).clamp(0.0, 4.0);
+            let volume = (*last_volume.lock() * *norm_factor.lock()).clamp(0.0, 4.0);
             let mut produced: u64 = 0;
             'fill: for f in 0..frames {
                 for c in 0..ch {
                     match src.next() {
                         Some(sample) => {
                             let off = f * blockalign + c * bytes_per_sample;
-                            write_sample(&mut data[off..], sample * volume, sample_type, store_bits);
+                            write_sample(
+                                &mut data[off..],
+                                sample * volume,
+                                sample_type,
+                                store_bits,
+                            );
                         }
                         None => {
                             finished = true;

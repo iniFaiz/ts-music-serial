@@ -61,10 +61,7 @@ fn disconnect(inner: &mut DiscordInner) {
 // Enable/disable Rich Presence. Connects immediately when enabling so errors
 // (e.g. Discord not running) surface to the caller.
 #[tauri::command]
-pub fn discord_set_enabled(
-    state: tauri::State<DiscordState>,
-    enabled: bool,
-) -> Result<(), String> {
+pub fn discord_set_enabled(state: tauri::State<DiscordState>, enabled: bool) -> Result<(), String> {
     let mut inner = state.0.lock();
     inner.enabled = enabled;
 
@@ -107,12 +104,24 @@ pub fn discord_update(
         return;
     }
 
-    let details = if title.trim().is_empty() { "Unknown title".to_string() } else { title };
-    let state_line = if artist.trim().is_empty() { "Unknown artist".to_string() } else { artist };
+    let details = if title.trim().is_empty() {
+        "Unknown title".to_string()
+    } else {
+        title
+    };
+    let state_line = if artist.trim().is_empty() {
+        "Unknown artist".to_string()
+    } else {
+        artist
+    };
 
     // Large image: the track's album art (a public https URL Discord proxies)
     // when we found one, otherwise fall back to the app's uploaded "logo" asset.
-    let large_image = if cover_url.trim().is_empty() { "logo" } else { cover_url.trim() };
+    let large_image = if cover_url.trim().is_empty() {
+        "logo"
+    } else {
+        cover_url.trim()
+    };
     let mut assets = activity::Assets::new().large_image(large_image);
     if !album.trim().is_empty() {
         assets = assets.large_text(album.as_str());
@@ -199,7 +208,12 @@ async fn itunes_cover(client: &reqwest::Client, term: &str, entity: &str) -> Opt
     }
     let resp = client
         .get("https://itunes.apple.com/search")
-        .query(&[("term", term), ("media", "music"), ("entity", entity), ("limit", "1")])
+        .query(&[
+            ("term", term),
+            ("media", "music"),
+            ("entity", entity),
+            ("limit", "1"),
+        ])
         .send()
         .await
         .ok()?;
@@ -226,7 +240,11 @@ async fn deezer_cover(client: &reqwest::Client, q: &str) -> Option<String> {
     let item = v.get("data")?.get(0)?;
     let cover = item
         .get("album")
-        .and_then(|a| a.get("cover_xl").or_else(|| a.get("cover_big")).or_else(|| a.get("cover_medium")))
+        .and_then(|a| {
+            a.get("cover_xl")
+                .or_else(|| a.get("cover_big"))
+                .or_else(|| a.get("cover_medium"))
+        })
         .or_else(|| item.get("cover_xl").or_else(|| item.get("cover_big")));
     Some(cover?.as_str()?.to_string())
 }
@@ -254,7 +272,9 @@ pub async fn discord_cover_art(title: String, artist: String, album: String) -> 
         }
     }
     if !title.is_empty() {
-        if let Some(url) = itunes_cover(&client, &format!("{} {}", artist, title), "musicTrack").await {
+        if let Some(url) =
+            itunes_cover(&client, &format!("{} {}", artist, title), "musicTrack").await
+        {
             return Some(url);
         }
     }
