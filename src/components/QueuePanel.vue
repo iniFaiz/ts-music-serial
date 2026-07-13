@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onUnmounted } from 'vue';
+import { ref, onUnmounted, watch, nextTick } from 'vue';
 import { store } from '../store';
 import { useRouter } from 'vue-router';
 import CoverImage from './CoverImage.vue';
@@ -20,6 +20,20 @@ const keyFor = (item) => {
   }
   return k;
 };
+
+const disableQueueTransition = ref(false);
+
+watch(
+  () => store.queue.length,
+  (newLen, oldLen) => {
+    if (oldLen !== undefined && Math.abs(newLen - oldLen) > 20) {
+      disableQueueTransition.value = true;
+      nextTick(() => {
+        disableQueueTransition.value = false;
+      });
+    }
+  }
+);
 
 // ---- Pointer-event based drag-to-reorder ----
 // HTML5 drag-and-drop is unreliable in Tauri/webview contexts.
@@ -154,7 +168,7 @@ const navigateToArtist = (artistName) => {
           The queue is empty.
         </div>
 
-        <TransitionGroup v-else name="queue" tag="div" class="space-y-1">
+        <TransitionGroup v-else name="queue" :css="!disableQueueTransition" tag="div" class="space-y-1">
           <div
             v-for="(song, index) in store.queue"
             :key="keyFor(song)"
