@@ -117,7 +117,10 @@ onUnmounted(() => {
   <div
     ref="containerRef"
     class="marquee-container overflow-hidden w-full relative"
-    :class="{ 'fade-left-active': isFadedLeft }"
+    :class="{
+      'has-overflow': isOverflowing,
+      'fade-left-active': isFadedLeft,
+    }"
   >
     <div
       class="marquee-content flex whitespace-nowrap"
@@ -153,6 +156,9 @@ onUnmounted(() => {
 .marquee-container {
   position: relative;
   width: 100%;
+}
+
+.marquee-container.has-overflow {
   --mq-left-start: -16px;
   --mq-left-mask: -16px;
 
@@ -180,7 +186,7 @@ onUnmounted(() => {
     --mq-left-mask 0.8s cubic-bezier(0.25, 1, 0.5, 1);
 }
 
-.marquee-container.fade-left-active {
+.marquee-container.has-overflow.fade-left-active {
   --mq-left-start: 0px;
   --mq-left-mask: 16px;
 }
