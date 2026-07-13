@@ -5,6 +5,7 @@ import { getCurrentWindow, LogicalSize } from '@tauri-apps/api/window';
 import { idbGet, idbDelete } from './libraryStore';
 import { newSmartPlaylist } from './smartPlaylists';
 import { EQ_PRESETS, EQ_BAND_COUNT, EQ_MIN_DB, EQ_MAX_DB, matchPreset } from './equalizer';
+import { invalidateCover } from './coverCache';
 
 const appWindow = getCurrentWindow();
 
@@ -76,6 +77,20 @@ export const store = reactive({
   selectedPath: '',
   searchQuery: '',
   useParallelism: true,
+  // Online metadata completion is strictly opt-in. The backend carries the
+  // ts-music AcoustID application key for fingerprint-first matching.
+  onlineMetadataEnabled: false,
+  onlineMetadataRunning: false,
+  onlineMetadataProgress: {
+    processed: 0,
+    total: 0,
+    updated: 0,
+    notFound: 0,
+    failed: 0,
+    done: false,
+    cancelled: false,
+  },
+  onlineMetadataStatus: '',
   scanComplete: false,
   scanDuration: '0',
   scanCount: 0,
@@ -302,6 +317,7 @@ export const store = reactive({
           lyricsOffsetMs: this.lyricsOffsetMs,
           miniAlwaysOnTop: this.miniAlwaysOnTop,
           waveformEnabled: this.waveformEnabled,
+          onlineMetadataEnabled: this.onlineMetadataEnabled,
         },
       });
       await invoke('db_kv_set', {
@@ -443,6 +459,8 @@ export const store = reactive({
       if (typeof s.lyricsOffsetMs === 'number') this.lyricsOffsetMs = s.lyricsOffsetMs;
       if (typeof s.miniAlwaysOnTop === 'boolean') this.miniAlwaysOnTop = s.miniAlwaysOnTop;
       if (typeof s.waveformEnabled === 'boolean') this.waveformEnabled = s.waveformEnabled;
+      if (typeof s.onlineMetadataEnabled === 'boolean')
+        this.onlineMetadataEnabled = s.onlineMetadataEnabled;
 
       // Re-select the saved output device (the audio thread starts on default).
       if (this.outputDevice) {
@@ -600,6 +618,9 @@ export const store = reactive({
       this.scanCount = await invoke('db_count');
       this.scanComplete = true;
       this.bumpLibrary();
+      if (this.onlineMetadataEnabled && added > 0) {
+        this.startOnlineMetadataImport(result.map((track) => track.path));
+      }
     } catch (error) {
       this.statusMessage = `Error: ${error}`;
     } finally {
@@ -649,6 +670,9 @@ export const store = reactive({
       this.scanComplete = true;
       this.bumpLibrary();
       this.statusMessage = `Added ${added} new tracks`;
+      if (this.onlineMetadataEnabled && added > 0) {
+        this.startOnlineMetadataImport(result.map((track) => track.path));
+      }
     } catch (e) {
       this.statusMessage = `Error: ${e}`;
     } finally {
@@ -700,13 +724,16 @@ export const store = reactive({
     if (this.roots.length === 0) return;
     this.loading = true;
     this.statusMessage = 'Refreshing library...';
+    let addedTotal = 0;
+    const scannedPaths = [];
     try {
       for (const root of this.roots) {
         const result = await invoke('scan_music_folder', {
           path: root,
           useParallelism: this.useParallelism,
         });
-        await invoke('db_upsert_tracks', { tracks: result });
+        addedTotal += await invoke('db_upsert_tracks', { tracks: result });
+        scannedPaths.push(...result.map((track) => track.path));
       }
 
       // Prune tracks whose files were deleted; drop them from the queue too.
@@ -720,6 +747,9 @@ export const store = reactive({
       this.scanCount = await invoke('db_count');
       this.scanComplete = true;
       this.bumpLibrary();
+      if (this.onlineMetadataEnabled && addedTotal > 0) {
+        this.startOnlineMetadataImport(scannedPaths);
+      }
       this.statusMessage = `Library refreshed — ${this.scanCount} tracks`;
     } catch (e) {
       this.statusMessage = `Error: ${e}`;
@@ -765,6 +795,78 @@ export const store = reactive({
   // the library auto-updates when files change outside the app.
   watchRoots() {
     invoke('watch_roots', { roots: [...this.roots] }).catch(() => {});
+  },
+
+  // ---- Online metadata ---------------------------------------------------
+
+  setOnlineMetadataEnabled(value) {
+    this.onlineMetadataEnabled = !!value;
+    this.persistState();
+    if (this.onlineMetadataEnabled) {
+      // Enabling is an explicit user action, so immediately inspect the whole
+      // library for missing fields/artwork.
+      this.startOnlineMetadataImport();
+    } else {
+      invoke('cancel_online_metadata').catch(() => {});
+      this.onlineMetadataStatus = this.onlineMetadataRunning
+        ? 'Cancelling online metadata lookup...'
+        : 'Online metadata is off';
+    }
+  },
+
+  handleOnlineMetadataProgress(progress) {
+    if (!progress || typeof progress !== 'object') return;
+    this.onlineMetadataProgress = { ...this.onlineMetadataProgress, ...progress };
+    if (!progress.done) {
+      this.onlineMetadataStatus = progress.total
+        ? `Checking ${progress.processed}/${progress.total} · ${progress.updated} updated`
+        : 'No incomplete tracks found';
+    }
+  },
+
+  async startOnlineMetadataImport(paths = null) {
+    if (!this.onlineMetadataEnabled || this.onlineMetadataRunning) return;
+    this.onlineMetadataRunning = true;
+    this.onlineMetadataProgress = {
+      processed: 0,
+      total: 0,
+      updated: 0,
+      notFound: 0,
+      failed: 0,
+      done: false,
+      cancelled: false,
+    };
+    this.onlineMetadataStatus = 'Finding missing metadata...';
+    try {
+      const summary = await invoke('import_online_metadata', {
+        paths: Array.isArray(paths) ? paths : null,
+      });
+      // Keep every live clone (queue/current song) in sync with SQLite and
+      // invalidate artwork misses so covers appear without restarting the app.
+      for (const track of summary.tracks || []) {
+        for (const queued of this.queue) {
+          if (queued.path === track.path) Object.assign(queued, track);
+        }
+        if (this.currentSong && this.currentSong.path === track.path) {
+          Object.assign(this.currentSong, track);
+        }
+        invalidateCover(track.path);
+      }
+      if ((summary.tracks || []).length) this.bumpLibrary();
+      if (summary.cancelled) {
+        this.onlineMetadataStatus = `Cancelled · ${summary.updated} updated`;
+      } else if (summary.scanned === 0) {
+        this.onlineMetadataStatus = 'All metadata and artwork are already complete';
+      } else {
+        this.onlineMetadataStatus = `${summary.updated} updated · ${summary.notFound} not found${
+          summary.failed ? ` · ${summary.failed} failed` : ''
+        }`;
+      }
+    } catch (error) {
+      this.onlineMetadataStatus = `Online metadata error: ${error}`;
+    } finally {
+      this.onlineMetadataRunning = false;
+    }
   },
 
   // ---- Audio output device ----------------------------------------------

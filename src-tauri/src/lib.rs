@@ -28,6 +28,7 @@ use walkdir::WalkDir;
 mod db;
 mod discord;
 mod lyrics;
+mod online_metadata;
 mod playlist_io;
 mod tray;
 #[cfg(target_os = "windows")]
@@ -93,7 +94,7 @@ pub(crate) fn allow_root(app: &AppHandle, path: &str) {
 // A path may only be touched by file-reading commands if it is an audio file
 // inside one of the directories the user explicitly scanned. This prevents the
 // (untrusted) webview from coercing the backend into reading arbitrary files.
-fn is_allowed_audio(app: &AppHandle, path: &Path) -> bool {
+pub(crate) fn is_allowed_audio(app: &AppHandle, path: &Path) -> bool {
     is_audio_file(path) && app.asset_protocol_scope().is_allowed(path)
 }
 
@@ -3350,6 +3351,8 @@ pub fn run() {
             discord::discord_update,
             discord::discord_clear,
             discord::discord_cover_art,
+            online_metadata::import_online_metadata,
+            online_metadata::cancel_online_metadata,
             db::db_import,
             db::db_upsert_tracks,
             db::db_remove_paths,

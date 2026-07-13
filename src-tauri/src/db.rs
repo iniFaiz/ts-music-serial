@@ -588,6 +588,21 @@ pub(crate) fn reindex_track(db: &Db, t: &MusicTrack, fingerprint: Option<&str>) 
     Ok(())
 }
 
+// Paths available to the opt-in online metadata importer. Keeping this query in
+// the DB module avoids exposing a "load the whole library" command to the
+// webview; the importer still re-checks the real file tags before doing network
+// work, because display fallbacks such as "Unknown Artist" are not real tags.
+pub(crate) fn all_track_paths(db: &Db) -> Result<Vec<String>, String> {
+    let conn = db.0.lock();
+    let mut stmt = conn
+        .prepare("SELECT path FROM tracks ORDER BY path")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| r.get::<_, String>(0))
+        .map_err(|e| e.to_string())?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
 // One-time background backfill for libraries that predate the fingerprint
 // column. Batches keep each lock hold short and the hashing itself runs with
 // the lock released, so the UI never stalls behind it.

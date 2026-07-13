@@ -72,6 +72,62 @@
       </div>
     </Section>
 
+    <!-- Online metadata (strictly opt-in) -->
+    <Section
+      title="Online Metadata"
+      description="Fill missing tags and album artwork from MusicBrainz and the Cover Art Archive. Existing values are never replaced."
+    >
+      <ToggleInt
+        :modelValue="store.onlineMetadataEnabled"
+        @update:modelValue="(v) => store.setOnlineMetadataEnabled(v)"
+        label="Import missing metadata online"
+      />
+      <p class="text-xs text-gray-500 leading-relaxed">
+        Turning this on immediately checks your library. Tracks with metadata but no cover receive
+        only artwork; tracks with artwork but incomplete tags receive only the missing tags.
+      </p>
+
+      <div class="mt-4 pt-4 border-t border-white/5">
+        <div class="flex items-center justify-between gap-3">
+          <p class="text-xs text-gray-500 leading-relaxed">
+            Acoustic fingerprint matching is built in. MusicBrainz completes matched metadata and
+            artwork.
+          </p>
+          <button
+            v-if="store.onlineMetadataEnabled"
+            @click="store.startOnlineMetadataImport()"
+            :disabled="store.onlineMetadataRunning || store.scanCount === 0"
+            class="px-3 py-2 bg-[#3a3a3a] hover:bg-[#444] disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium rounded-md transition-colors shrink-0"
+          >
+            {{ store.onlineMetadataRunning ? 'Searching...' : 'Scan now' }}
+          </button>
+        </div>
+      </div>
+
+      <div v-if="store.onlineMetadataRunning" class="mt-4">
+        <div class="h-1.5 rounded-full bg-white/5 overflow-hidden">
+          <div
+            class="h-full bg-[var(--accent-color)] transition-all duration-300"
+            :style="{
+              width: `${
+                store.onlineMetadataProgress.total
+                  ? (store.onlineMetadataProgress.processed / store.onlineMetadataProgress.total) *
+                    100
+                  : 0
+              }%`,
+            }"
+          />
+        </div>
+      </div>
+      <p
+        v-if="store.onlineMetadataStatus"
+        class="text-xs mt-3"
+        :class="store.onlineMetadataStatus.includes('error') ? 'text-red-400' : 'text-gray-400'"
+      >
+        {{ store.onlineMetadataStatus }}
+      </p>
+    </Section>
+
     <!-- Audio Output -->
     <Section title="Audio Output" description="Choose which device audio is played through.">
       <SelectInt

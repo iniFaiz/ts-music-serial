@@ -39,6 +39,7 @@ image = "0.25" #cover art decoding/downscaling
 rodio = { version = "0.21", features = ["symphonia-all"] } #native audio playback/decoding (all formats incl. FLAC)
 souvlaki = "0.8.3" #OS media controls (Windows SMTC / media keys)
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] } #lyrics HTTP (rustls = no OpenSSL on Windows)
+rusty-chromaprint = "0.3" #pure-Rust AcoustID-compatible audio fingerprints
 notify = "6" #filesystem watching for library auto-update
 ebur128 = "0.1" #EBU R128 loudness analysis for volume normalization (ReplayGain)
 # NetEase eapi request signing (AES-128-ECB + MD5) to fetch word-by-word (yrc)
@@ -82,5 +83,4 @@ opt-level = 3
 
 [patch.crates-io]
 plist = { git = "https://github.com/ebarnard/rust-plist" }
-
 

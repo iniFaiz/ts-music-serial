@@ -187,6 +187,7 @@ let unlistenDrop = null;
 let unlistenLibraryChanged = null;
 let unlistenExclusiveErr = null;
 let unlistenOpenFiles = null;
+let unlistenOnlineMetadata = null;
 let refreshTimer = null;
 
 const scrollContainer = ref(null);
@@ -330,7 +331,9 @@ onMounted(async () => {
     unlistenLibraryChanged = await listen('library-changed', () => {
       if (refreshTimer) clearTimeout(refreshTimer);
       refreshTimer = setTimeout(() => {
-        if (!store.loading) store.refreshLibrary();
+        // The online importer writes and reindexes each file itself. Re-scanning
+        // the roots after every tag write would fight the importer and waste IO.
+        if (!store.loading && !store.onlineMetadataRunning) store.refreshLibrary();
       }, 600);
     });
   } catch {
@@ -360,6 +363,14 @@ onMounted(async () => {
   } catch {
     // best-effort
   }
+
+  try {
+    unlistenOnlineMetadata = await listen('online-metadata-progress', (e) => {
+      store.handleOnlineMetadataProgress(e.payload);
+    });
+  } catch {
+    // progress reporting is best-effort; the command result still updates UI
+  }
 });
 
 onUnmounted(() => {
@@ -372,6 +383,7 @@ onUnmounted(() => {
   if (unlistenLibraryChanged) unlistenLibraryChanged();
   if (unlistenExclusiveErr) unlistenExclusiveErr();
   if (unlistenOpenFiles) unlistenOpenFiles();
+  if (unlistenOnlineMetadata) unlistenOnlineMetadata();
   if (refreshTimer) clearTimeout(refreshTimer);
   // Cleanup sidebar playlist drag
   document.removeEventListener('mousemove', onSidebarPlMouseMove);
