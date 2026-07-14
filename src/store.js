@@ -378,6 +378,12 @@ export const store = reactive({
       // If the app was launched by double-clicking an audio file, play it now —
       // after restoreState so it overrides the restored (paused) session.
       await this.consumePendingOpenFiles();
+
+      // Background scan on startup: automatically detect new/removed files
+      // since the last run. Run asynchronously without blocking startup.
+      if (this.roots.length > 0) {
+        this.refreshLibrary();
+      }
     } catch (e) {
       console.error('Failed to load library', e);
     }
