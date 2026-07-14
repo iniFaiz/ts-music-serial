@@ -588,7 +588,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { store } from '../store';
 import { invoke } from '@tauri-apps/api/core';
 import Section from '../components/settings/Section.vue';
@@ -721,6 +721,13 @@ const confirmReset = () => {
     },
   });
 };
+
+watch(
+  () => store.devicesVersion,
+  () => {
+    loadDevices();
+  }
+);
 
 onMounted(() => {
   loadDevices();

@@ -188,6 +188,7 @@ let unlistenLibraryChanged = null;
 let unlistenExclusiveErr = null;
 let unlistenOpenFiles = null;
 let unlistenOnlineMetadata = null;
+let unlistenAudioDevices = null;
 let refreshTimer = null;
 
 const scrollContainer = ref(null);
@@ -371,6 +372,14 @@ onMounted(async () => {
   } catch {
     // progress reporting is best-effort; the command result still updates UI
   }
+
+  try {
+    unlistenAudioDevices = await listen('audio-devices-changed', () => {
+      store.handleAudioDevicesChanged();
+    });
+  } catch {
+    // best-effort
+  }
 });
 
 onUnmounted(() => {
@@ -384,6 +393,7 @@ onUnmounted(() => {
   if (unlistenExclusiveErr) unlistenExclusiveErr();
   if (unlistenOpenFiles) unlistenOpenFiles();
   if (unlistenOnlineMetadata) unlistenOnlineMetadata();
+  if (unlistenAudioDevices) unlistenAudioDevices();
   if (refreshTimer) clearTimeout(refreshTimer);
   // Cleanup sidebar playlist drag
   document.removeEventListener('mousemove', onSidebarPlMouseMove);

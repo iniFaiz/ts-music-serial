@@ -53,7 +53,7 @@ const runScrollCycle = (textWidth, containerWidth) => {
     // The duplicate text enters the left edge during the last gap-travel duration.
     const gapTime = props.gap / props.speed;
     const fadeOutDelay = Math.max(0, duration - Math.max(0.8, gapTime));
-    
+
     timeoutId = setTimeout(() => {
       isFadedLeft.value = false;
 
@@ -62,9 +62,7 @@ const runScrollCycle = (textWidth, containerWidth) => {
       timeoutId2 = setTimeout(() => {
         runScrollCycle(textWidth, containerWidth);
       }, remainingTime * 1000);
-
     }, fadeOutDelay * 1000);
-
   }, currentDelay);
 };
 

@@ -843,6 +843,59 @@ struct GaplessQueued {
 }
 
 pub(crate) fn spawn_player_ticker(app: AppHandle, player: AudioPlayer) {
+    // Spawn the background audio device hotplug/change detector thread
+    let app_clone = app.clone();
+    std::thread::spawn(move || {
+        use rodio::cpal::traits::{DeviceTrait, HostTrait};
+        
+        let get_default_device_name = || -> Option<String> {
+            let host = rodio::cpal::default_host();
+            host.default_output_device().and_then(|d| d.name().ok())
+        };
+
+        let get_all_device_names = || -> Vec<String> {
+            let host = rodio::cpal::default_host();
+            if let Ok(devices) = host.output_devices() {
+                devices.filter_map(|d| d.name().ok()).collect()
+            } else {
+                Vec::new()
+            }
+        };
+
+        let mut last_default = get_default_device_name();
+        let mut last_devices = get_all_device_names();
+
+        loop {
+            std::thread::sleep(Duration::from_millis(1500));
+            
+            let current_default = get_default_device_name();
+            let current_devices = get_all_device_names();
+
+            let mut changed = false;
+            
+            if current_default != last_default {
+                last_default = current_default.clone();
+                changed = true;
+            }
+            
+            let mut current_sorted = current_devices.clone();
+            current_sorted.sort();
+            let mut last_sorted = last_devices.clone();
+            last_sorted.sort();
+            
+            if current_sorted != last_sorted {
+                last_devices = current_devices;
+                changed = true;
+            }
+
+            if changed {
+                // Emit an event to notify the frontend to refresh the output device list
+                // and potentially switch the default output stream.
+                let _ = app_clone.emit("audio-devices-changed", ());
+            }
+        }
+    });
+
     std::thread::spawn(move || {
         let mut transition_triggered_for_gen = 0;
         // Next track queued onto the live sink for true-gapless playback (None

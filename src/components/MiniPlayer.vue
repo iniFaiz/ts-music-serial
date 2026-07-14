@@ -796,7 +796,13 @@ onUnmounted(() => {
               <div v-if="store.queue.length === 0" class="p-8 text-sm text-center text-gray-600">
                 The queue is empty.
               </div>
-              <TransitionGroup v-else name="queue" :css="!disableQueueTransition" tag="div" class="space-y-1">
+              <TransitionGroup
+                v-else
+                name="queue"
+                :css="!disableQueueTransition"
+                tag="div"
+                class="space-y-1"
+              >
                 <div
                   v-for="(qsong, index) in store.queue"
                   :key="keyFor(qsong)"

@@ -168,7 +168,13 @@ const navigateToArtist = (artistName) => {
           The queue is empty.
         </div>
 
-        <TransitionGroup v-else name="queue" :css="!disableQueueTransition" tag="div" class="space-y-1">
+        <TransitionGroup
+          v-else
+          name="queue"
+          :css="!disableQueueTransition"
+          tag="div"
+          class="space-y-1"
+        >
           <div
             v-for="(song, index) in store.queue"
             :key="keyFor(song)"

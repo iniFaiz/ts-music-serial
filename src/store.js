@@ -213,6 +213,7 @@ export const store = reactive({
   // whether it should auto-play. Used by "resume on launch" (seek + paused).
   pendingSeek: null,
   pendingAutoplay: true,
+  devicesVersion: 0,
   queuePanelOpen: false,
   lyricsPanelOpen: false,
 
@@ -884,6 +885,25 @@ export const store = reactive({
       this.pendingSeek = this.currentTime || 0;
       this.pendingAutoplay = this.isPlaying;
       this.currentSong = { ...this.currentSong };
+    }
+  },
+
+  async handleAudioDevicesChanged() {
+    console.log('Audio devices changed detected by backend. Bumping version...');
+    this.devicesVersion++;
+    // If we are currently set to System Default, we need to force re-open the stream
+    // to pick up the new physical default device, and reload the track.
+    if (this.outputDevice === null) {
+      try {
+        await invoke('set_output_device', { name: null });
+      } catch (e) {
+        console.error('Failed to reset output device on device change', e);
+      }
+      if (this.currentSong) {
+        this.pendingSeek = this.currentTime || 0;
+        this.pendingAutoplay = this.isPlaying;
+        this.currentSong = { ...this.currentSong };
+      }
     }
   },
 
