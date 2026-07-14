@@ -196,6 +196,36 @@ pub fn db_top_genres(db: State<Db>, limit: i64) -> Result<Vec<GenreRow>, String>
     Ok(out)
 }
 
+#[tauri::command]
+pub fn db_genres(db: State<Db>, search: Option<String>) -> Result<Vec<GenreRow>, String> {
+    let conn = db.0.lock();
+    let like = search
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| format!("%{}%", s.trim()));
+    let sql = "SELECT t.genre, COUNT(*) AS n, COALESCE(SUM(s.play_count), 0) AS plays,
+                 (SELECT path FROM tracks t2 WHERE t2.genre = t.genre AND t2.has_cover = 1 LIMIT 1) AS cover
+               FROM tracks t LEFT JOIN stats s ON s.path = t.path
+               WHERE t.genre IS NOT NULL AND t.genre <> '' AND (?1 IS NULL OR t.genre LIKE ?1)
+               GROUP BY t.genre ORDER BY plays DESC, n DESC";
+    let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![like], |r| {
+            Ok(GenreRow {
+                genre: r.get(0)?,
+                track_count: r.get(1)?,
+                plays: r.get(2)?,
+                cover_path: r.get(3)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r.map_err(|e| e.to_string())?);
+    }
+    Ok(out)
+}
+
 #[derive(Serialize)]
 pub struct InsightCounts {
     recently_played: i64,

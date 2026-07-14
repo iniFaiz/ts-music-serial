@@ -773,6 +773,7 @@ pub fn run() {
             db::stats::db_rediscover,
             db::stats::db_top_artists,
             db::stats::db_top_genres,
+            db::stats::db_genres,
             db::stats::db_insight_counts,
             db::playlists::db_favorite_paths,
             db::playlists::db_favorites,

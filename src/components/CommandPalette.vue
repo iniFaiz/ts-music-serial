@@ -4,6 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { useRouter } from 'vue-router';
 import { store } from '../store';
 import CoverImage from './CoverImage.vue';
+import SmartCover from './SmartCover.vue';
 
 // Ctrl+K command palette. Uses the SQLite FTS5 index for instant song search and
 // the GROUP BY album/artist commands, plus the in-memory playlist cache, to jump
@@ -15,6 +16,7 @@ const query = ref('');
 const songs = ref([]);
 const albums = ref([]);
 const artists = ref([]);
+const genres = ref([]);
 const activeIndex = ref(0);
 const inputEl = ref(null);
 const listEl = ref(null);
@@ -32,6 +34,7 @@ const items = computed(() => [
   ...albums.value.map((a) => ({ type: 'album', data: a })),
   ...artists.value.map((a) => ({ type: 'artist', data: a })),
   ...playlists.value.map((p) => ({ type: 'playlist', data: p })),
+  ...genres.value.map((g) => ({ type: 'genre', data: g })),
 ]);
 
 async function runSearch() {
@@ -40,18 +43,21 @@ async function runSearch() {
     songs.value = [];
     albums.value = [];
     artists.value = [];
+    genres.value = [];
     activeIndex.value = 0;
     return;
   }
   try {
-    const [s, al, ar] = await Promise.all([
+    const [s, al, ar, gn] = await Promise.all([
       invoke('db_search', { query: q, limit: 6 }),
       invoke('db_albums', { search: q }),
       invoke('db_artists', { search: q }),
+      invoke('db_genres', { search: q }),
     ]);
     songs.value = s || [];
     albums.value = (al || []).slice(0, 4);
     artists.value = (ar || []).slice(0, 4);
+    genres.value = (gn || []).slice(0, 4);
     activeIndex.value = 0;
     nextTick(() => {
       if (listEl.value) listEl.value.scrollTop = 0;
@@ -74,6 +80,7 @@ watch(
       songs.value = [];
       albums.value = [];
       artists.value = [];
+      genres.value = [];
       activeIndex.value = 0;
       // Capture-phase window listener: arrows/Enter keep working even if focus
       // leaves the input, and App.vue's global volume/seek shortcuts (also on
@@ -121,6 +128,8 @@ function activate(item) {
         ? '/smart/' + item.data.id
         : { name: 'PlaylistDetail', params: { id: item.data.id } }
     );
+  } else if (item.type === 'genre') {
+    store.playStation('genre', item.data.genre);
   }
 }
 
@@ -144,7 +153,13 @@ function onKeydown(e) {
   }
 }
 
-const groupLabel = { song: 'Songs', album: 'Albums', artist: 'Artists', playlist: 'Playlists' };
+const groupLabel = {
+  song: 'Songs',
+  album: 'Albums',
+  artist: 'Artists',
+  playlist: 'Playlists',
+  genre: 'Genre Stations',
+};
 // Whether a flat-list row is the first of its group (to render a header above it).
 function isGroupStart(i) {
   return i === 0 || items.value[i].type !== items.value[i - 1].type;
@@ -182,7 +197,7 @@ function isGroupStart(i) {
               ref="inputEl"
               v-model="query"
               type="text"
-              placeholder="Search songs, albums, artists, playlists…"
+              placeholder="Search songs, albums, artists, playlists, genres…"
               class="flex-1 bg-transparent text-white text-[15px] focus:outline-none placeholder-gray-600"
             />
             <kbd class="text-[10px] text-gray-500 border border-[#3a3a3a] rounded px-1.5 py-0.5"
@@ -223,6 +238,14 @@ function isGroupStart(i) {
                     :path="item.data.cover_path"
                     className="w-9 h-9 rounded-full bg-[#282828] shrink-0"
                   />
+                  <SmartCover
+                    v-else-if="item.type === 'genre'"
+                    :title="item.data.genre"
+                    :color="''"
+                    icon="radio"
+                    :show-title="false"
+                    className="w-9 h-9 rounded bg-[#282828] shrink-0"
+                  />
                   <div
                     v-else
                     class="w-9 h-9 rounded bg-[#282828] shrink-0 flex items-center justify-center text-gray-500"
@@ -251,7 +274,9 @@ function isGroupStart(i) {
                             ? item.data.album
                             : item.type === 'artist'
                               ? item.data.artist
-                              : item.data.name
+                              : item.type === 'genre'
+                                ? item.data.genre
+                                : item.data.name
                       }}
                     </div>
                     <div class="text-xs text-gray-500 truncate">
@@ -262,9 +287,11 @@ function isGroupStart(i) {
                             ? item.data.artist
                             : item.type === 'artist'
                               ? item.data.track_count + ' songs'
-                              : item.data.is_smart
-                                ? 'Smart playlist'
-                                : 'Playlist'
+                              : item.type === 'genre'
+                                ? 'Genre Station • ' + item.data.track_count + ' songs'
+                                : item.data.is_smart
+                                  ? 'Smart playlist'
+                                  : 'Playlist'
                       }}
                     </div>
                   </div>
@@ -272,10 +299,12 @@ function isGroupStart(i) {
                     v-if="i === activeIndex"
                     class="shrink-0 flex items-center gap-1.5 text-[11px] font-medium text-[var(--accent-color)]"
                   >
-                    {{ item.type === 'song' ? 'Play' : 'Open' }}
+                    {{ item.type === 'song' || item.type === 'genre' ? 'Play' : 'Open' }}
                     <kbd class="cmdk-kbd">↵</kbd>
                   </span>
-                  <span v-else-if="item.type === 'song'" class="text-[11px] text-gray-600 shrink-0"
+                  <span
+                    v-else-if="item.type === 'song' || item.type === 'genre'"
+                    class="text-[11px] text-gray-600 shrink-0"
                     >Play</span
                   >
                 </button>
