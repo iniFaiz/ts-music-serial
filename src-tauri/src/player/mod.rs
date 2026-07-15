@@ -847,7 +847,7 @@ pub(crate) fn spawn_player_ticker(app: AppHandle, player: AudioPlayer) {
     let app_clone = app.clone();
     std::thread::spawn(move || {
         use rodio::cpal::traits::{DeviceTrait, HostTrait};
-        
+
         let get_default_device_name = || -> Option<String> {
             let host = rodio::cpal::default_host();
             host.default_output_device().and_then(|d| d.name().ok())
@@ -867,22 +867,22 @@ pub(crate) fn spawn_player_ticker(app: AppHandle, player: AudioPlayer) {
 
         loop {
             std::thread::sleep(Duration::from_millis(1500));
-            
+
             let current_default = get_default_device_name();
             let current_devices = get_all_device_names();
 
             let mut changed = false;
-            
+
             if current_default != last_default {
                 last_default = current_default.clone();
                 changed = true;
             }
-            
+
             let mut current_sorted = current_devices.clone();
             current_sorted.sort();
             let mut last_sorted = last_devices.clone();
             last_sorted.sort();
-            
+
             if current_sorted != last_sorted {
                 last_devices = current_devices;
                 changed = true;

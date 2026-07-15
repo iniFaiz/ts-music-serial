@@ -363,24 +363,49 @@ fn now_ms() -> i64 {
 // rows are refreshed but not counted, matching the old "new tracks" status text).
 #[tauri::command]
 pub fn db_upsert_tracks(db: State<Db>, tracks: Vec<MusicTrack>) -> Result<usize, String> {
+    upsert_tracks(&db, tracks)
+}
+
+// Used by the native scanner so metadata can be indexed without crossing IPC.
+// Memory usage is bounded by the caller's batch size.
+pub(crate) fn upsert_tracks(db: &Db, tracks: Vec<MusicTrack>) -> Result<usize, String> {
+    upsert_tracks_with_options(db, tracks, false)
+}
+
+// Watcher batches are small and represent actual writes/renames, so refresh
+// their fingerprints as well as metadata. Full scans keep existing hashes to
+// avoid another 128 KiB of IO for every unchanged file.
+pub(crate) fn upsert_changed_tracks(db: &Db, tracks: Vec<MusicTrack>) -> Result<usize, String> {
+    upsert_tracks_with_options(db, tracks, true)
+}
+
+fn upsert_tracks_with_options(
+    db: &Db,
+    tracks: Vec<MusicTrack>,
+    refresh_fingerprints: bool,
+) -> Result<usize, String> {
     // Compute content fingerprints for tracks that don't have one yet (new files,
     // plus pre-fingerprint rows getting backfilled on rescan). Hashing reads
     // ~128 KiB per file, so it happens in parallel and OUTSIDE the connection
     // lock — the UI keeps querying while a big import is being hashed.
     let need_fp: Vec<String> = {
         let conn = db.0.lock();
-        let have_fp: HashSet<String> = conn
-            .prepare("SELECT path FROM tracks WHERE fingerprint IS NOT NULL")
-            .map_err(|e| e.to_string())?
-            .query_map([], |r| r.get::<_, String>(0))
-            .map_err(|e| e.to_string())?
-            .filter_map(|r| r.ok())
-            .collect();
-        tracks
-            .iter()
-            .filter(|t| !have_fp.contains(&t.path))
-            .map(|t| t.path.clone())
-            .collect()
+        let mut has_fingerprint = conn
+            .prepare("SELECT fingerprint IS NOT NULL FROM tracks WHERE path = ?1")
+            .map_err(|e| e.to_string())?;
+        let mut paths = Vec::new();
+        for track in &tracks {
+            let already_hashed =
+                match has_fingerprint.query_row(params![track.path], |row| row.get::<_, bool>(0)) {
+                    Ok(value) => value,
+                    Err(rusqlite::Error::QueryReturnedNoRows) => false,
+                    Err(error) => return Err(error.to_string()),
+                };
+            if refresh_fingerprints || !already_hashed {
+                paths.push(track.path.clone());
+            }
+        }
+        paths
     };
     let fps: HashMap<String, String> = need_fp
         .into_par_iter()
@@ -469,7 +494,7 @@ pub fn db_remove_paths(db: State<Db>, paths: Vec<String>) -> Result<(), String> 
 #[tauri::command]
 pub fn db_prune_missing(db: State<Db>) -> Result<Vec<String>, String> {
     let mut conn = db.0.lock();
-    let all: Vec<(String, Option<String>)> = {
+    let gone: Vec<(String, Option<String>)> = {
         let mut stmt = conn
             .prepare("SELECT path, fingerprint FROM tracks")
             .map_err(|e| e.to_string())?;
@@ -478,31 +503,42 @@ pub fn db_prune_missing(db: State<Db>) -> Result<Vec<String>, String> {
                 Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
             })
             .map_err(|e| e.to_string())?;
-        rows.filter_map(|r| r.ok()).collect()
+        rows.filter_map(Result::ok)
+            .filter(|(path, _)| !Path::new(path).exists())
+            .collect()
     };
-    let (gone, alive): (Vec<_>, Vec<_>) =
-        all.into_iter().partition(|(p, _)| !Path::new(p).exists());
+    prune_gone_rows(&mut conn, gone)
+}
+
+fn prune_gone_rows(
+    conn: &mut Connection,
+    gone: Vec<(String, Option<String>)>,
+) -> Result<Vec<String>, String> {
     if gone.is_empty() {
         return Ok(Vec::new());
     }
 
-    // Surviving rows grouped by fingerprint. Vec because duplicate files share a
-    // fingerprint — pop() hands each missing copy a distinct surviving copy.
-    let mut by_fp: HashMap<String, Vec<String>> = HashMap::new();
-    for (p, fp) in alive {
-        if let Some(f) = fp.filter(|f| !f.is_empty()) {
-            by_fp.entry(f).or_default().push(p);
-        }
-    }
-
+    let mut claimed_targets = HashSet::new();
     let tx = conn.transaction().map_err(|e| e.to_string())?;
     for (old_path, fp) in &gone {
-        let target = fp
-            .as_ref()
-            .filter(|f| !f.is_empty())
-            .and_then(|f| by_fp.get_mut(f))
-            .and_then(|v| v.pop());
+        let target = if let Some(fingerprint) = fp.as_ref().filter(|value| !value.is_empty()) {
+            let mut stmt = tx
+                .prepare("SELECT path FROM tracks WHERE fingerprint = ?1 AND path <> ?2")
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map(params![fingerprint, old_path], |row| {
+                    row.get::<_, String>(0)
+                })
+                .map_err(|e| e.to_string())?;
+            let found = rows.filter_map(Result::ok).find(|candidate| {
+                Path::new(candidate).exists() && !claimed_targets.contains(candidate)
+            });
+            found
+        } else {
+            None
+        };
         if let Some(new_path) = target {
+            claimed_targets.insert(new_path.clone());
             // Merge play stats into the new path (fresh rows normally have none,
             // but a pre-existing row is summed rather than clobbered).
             tx.execute(
@@ -551,6 +587,54 @@ pub fn db_prune_missing(db: State<Db>) -> Result<Vec<String>, String> {
     }
     tx.commit().map_err(|e| e.to_string())?;
     Ok(gone.into_iter().map(|(p, _)| p).collect())
+}
+
+// Watcher removals are path-scoped: query only the missing file or subtree
+// named by notify instead of checking every track in the library.
+pub(crate) fn prune_changed_paths(
+    db: &Db,
+    changed: &[std::path::PathBuf],
+) -> Result<Vec<String>, String> {
+    let missing: Vec<String> = changed
+        .iter()
+        .filter(|path| !path.exists())
+        .map(|path| {
+            path.to_string_lossy()
+                .trim_end_matches(|character| character == '/' || character == '\\')
+                .to_string()
+        })
+        .filter(|path| !path.is_empty())
+        .collect();
+    if missing.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut conn = db.0.lock();
+    let gone = {
+        let separator = std::path::MAIN_SEPARATOR.to_string();
+        let mut found: HashMap<String, Option<String>> = HashMap::new();
+        let mut stmt = conn
+            .prepare(
+                "SELECT path, fingerprint FROM tracks
+                 WHERE path = ?1
+                    OR substr(path, 1, length(?1) + 1) = (?1 || ?2)",
+            )
+            .map_err(|e| e.to_string())?;
+        for path in missing {
+            let rows = stmt
+                .query_map(params![path, separator], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+                })
+                .map_err(|e| e.to_string())?;
+            for (candidate, fingerprint) in rows.filter_map(Result::ok) {
+                if !Path::new(&candidate).exists() {
+                    found.insert(candidate, fingerprint);
+                }
+            }
+        }
+        found.into_iter().collect()
+    };
+    prune_gone_rows(&mut conn, gone)
 }
 
 // Overwrite one track row with freshly re-parsed metadata (used after the
@@ -943,4 +1027,96 @@ pub fn db_save_cover_art(db: &Db, album: &str, artist: &str, bytes: &[u8]) -> Re
     )
     .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod indexing_tests {
+    use super::*;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn memory_db() -> Db {
+        let conn = Connection::open_in_memory().expect("open test database");
+        conn.execute_batch(SCHEMA).expect("create test schema");
+        migrate(&conn).expect("migrate test schema");
+        Db(Mutex::new(conn), DbCache::default())
+    }
+
+    fn unique_temp_dir() -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock after epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("ts-music-index-{}-{nonce}", std::process::id()))
+    }
+
+    fn insert_track(db: &Db, path: &Path, fingerprint: &str) {
+        db.0.lock()
+            .execute(
+                "INSERT INTO tracks(path, title, artist, album, fingerprint)
+                 VALUES (?1, 'Song', 'Artist', 'Album', ?2)",
+                params![path.to_string_lossy(), fingerprint],
+            )
+            .expect("insert test track");
+    }
+
+    #[test]
+    fn changed_path_pruning_preserves_stats_across_a_rename() {
+        let db = memory_db();
+        let dir = unique_temp_dir();
+        std::fs::create_dir(&dir).expect("create test directory");
+        let old_path = dir.join("old.flac");
+        let new_path = dir.join("new.flac");
+        std::fs::write(&new_path, b"renamed audio placeholder").expect("create surviving file");
+
+        insert_track(&db, &old_path, "same-fingerprint");
+        insert_track(&db, &new_path, "same-fingerprint");
+        db.0.lock()
+            .execute(
+                "INSERT INTO stats(path, play_count, last_played, skip_count)
+                 VALUES (?1, 7, 42, 2)",
+                params![old_path.to_string_lossy()],
+            )
+            .expect("insert old stats");
+
+        let removed =
+            prune_changed_paths(&db, std::slice::from_ref(&old_path)).expect("prune renamed path");
+        assert_eq!(removed, vec![old_path.to_string_lossy().to_string()]);
+        let migrated: (i64, i64, i64) =
+            db.0.lock()
+                .query_row(
+                    "SELECT play_count, last_played, skip_count FROM stats WHERE path = ?1",
+                    params![new_path.to_string_lossy()],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .expect("stats migrated to new path");
+        assert_eq!(migrated, (7, 42, 2));
+
+        std::fs::remove_file(new_path).expect("remove test file");
+        std::fs::remove_dir(dir).expect("remove test directory");
+    }
+
+    #[test]
+    fn changed_directory_pruning_is_limited_to_that_subtree() {
+        let db = memory_db();
+        let base = unique_temp_dir();
+        let removed_path = base.join("removed").join("song.flac");
+        let unrelated_path = base.join("other").join("keep.flac");
+        insert_track(&db, &removed_path, "removed-fingerprint");
+        insert_track(&db, &unrelated_path, "unrelated-fingerprint");
+
+        let changed_dir = base.join("removed");
+        let removed = prune_changed_paths(&db, std::slice::from_ref(&changed_dir))
+            .expect("prune changed subtree");
+        assert_eq!(removed, vec![removed_path.to_string_lossy().to_string()]);
+        let unrelated_count: i64 =
+            db.0.lock()
+                .query_row(
+                    "SELECT COUNT(*) FROM tracks WHERE path = ?1",
+                    params![unrelated_path.to_string_lossy()],
+                    |row| row.get(0),
+                )
+                .expect("query unrelated row");
+        assert_eq!(unrelated_count, 1);
+    }
 }

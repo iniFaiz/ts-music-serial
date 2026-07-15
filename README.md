@@ -147,20 +147,24 @@ sequenceDiagram
     participant FE as Vue 3 Frontend (JS)
     participant BE as Tauri Backend (Rust)
     participant OS as Operating System / Audio
-    
-    FE->>BE: scan_music_folder(path, parallel)
-    Note over BE: Walks filesystem with jwalk/rayon<br/>Extracts metadata & covers with Lofty
-    BE-->>FE: Returns Vec<MusicTrack>
-    
+
+    FE->>BE: index_library(paths, parallel, prune)
+    Note over BE: One serialized background job<br/>walks, parses, fingerprints, and writes SQLite in bounded batches
+    BE-->>FE: Returns a small IndexSummary
+
+    OS-->>BE: notify(changed paths)
+    Note over BE: Debounces and indexes only each changed file/subtree
+    BE-->>FE: Emits library-changed after SQLite is current
+
     FE->>BE: player_load(path, autoplay)
     Note over BE: Decodes audio<br/>Applies loudness (Sound Check)
     BE->>OS: Directs audio signal to output device
-    
+
     BE->>FE: Emits player_spectrum (FFT frequency bins)
     Note over FE: Renders spectrum Canvas visualizer
 ```
 
-* **Filesystem & Indexing:** `scan_music_folder`, `scan_paths`, `filter_existing`, `watch_roots`.
+* **Filesystem & Indexing:** `index_library` keeps full scans and SQLite indexing in one bounded-memory Rust job; `watch_roots` incrementally indexes only changed paths.
 * **Audio Playback:** `player_load`, `player_prepare_next`, `player_pause`, `player_resume`, `player_seek`, `player_stop`, `player_status`.
 * **Hardware Routing:** `list_output_devices`, `set_output_device`.
 * **DSP & Settings:** `player_set_transition` (crossfade/gapless), `player_set_normalization_settings` (sound check).

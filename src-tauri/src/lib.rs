@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc};
@@ -16,6 +17,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 mod cover_cache;
 mod discord;
 mod library_db;
+mod library_index;
 mod library_scan;
 mod lyrics;
 mod metadata_tags;
@@ -31,10 +33,11 @@ use library_db as db;
 
 pub(crate) use cover_cache::{cover_cache_dir, cover_cache_key};
 use cover_cache::{get_track_cover, get_track_cover_path, get_track_palette};
+use library_index::index_library;
+use library_scan::restore_roots;
 pub(crate) use library_scan::{
     allow_root, compute_fingerprint, is_allowed_audio, is_audio_file, parse_metadata, parse_rg_db,
 };
-use library_scan::{filter_existing, restore_roots, scan_music_folder, scan_paths};
 use metadata_tags::{preview_image, write_track_tags};
 pub(crate) use player::build_decoder;
 use player::{
@@ -302,35 +305,41 @@ fn musixmatch_token_status() -> bool {
 // ---------------------------------------------------------------------------
 // Filesystem watching — library auto-update
 //
-// A single RecommendedWatcher covers all scanned roots. Raw events are funnelled
-// into a coalescing thread that debounces bursts (e.g. a bulk copy) into a
-// single `library-changed` event, which the frontend reacts to with an
-// incremental refresh.
+// A single RecommendedWatcher covers all scanned roots. Raw event paths are
+// debounced, indexed into SQLite by Rust, then reported to the frontend.
 // ---------------------------------------------------------------------------
 
 struct FileWatcher {
     watcher: Mutex<Option<notify::RecommendedWatcher>>,
-    // Notifies the coalescing thread that a relevant change occurred.
-    evt_tx: mpsc::Sender<()>,
+    // Passes relevant paths to the coalescing/indexing thread.
+    evt_tx: mpsc::Sender<Vec<PathBuf>>,
 }
 
-// Drain a burst of filesystem events and emit one `library-changed` per quiet
-// window, so a folder copy doesn't trigger dozens of rescans.
-fn spawn_fs_coalescer(app: AppHandle, rx: mpsc::Receiver<()>) {
+// Drain a burst, index its unique paths, and emit once per quiet window.
+fn spawn_fs_coalescer(app: AppHandle, rx: mpsc::Receiver<Vec<PathBuf>>) {
     std::thread::spawn(move || loop {
         // Block until the first event of a burst.
-        if rx.recv().is_err() {
-            break; // all senders dropped → app shutting down
-        }
+        let Ok(first) = rx.recv() else {
+            break;
+        };
+        let mut paths: HashSet<PathBuf> = first.into_iter().collect();
         // Swallow further events until things go quiet for the debounce window.
         loop {
             match rx.recv_timeout(Duration::from_millis(800)) {
-                Ok(()) => continue,
+                Ok(more) => paths.extend(more),
                 Err(mpsc::RecvTimeoutError::Timeout) => break,
                 Err(mpsc::RecvTimeoutError::Disconnected) => return,
             }
         }
-        let _ = app.emit("library-changed", ());
+        if paths.is_empty() {
+            continue;
+        }
+        match library_index::index_watcher_paths(&app, paths.into_iter().collect()) {
+            Ok(summary) => {
+                let _ = app.emit("library-changed", summary);
+            }
+            Err(error) => eprintln!("Incremental library index failed: {error}"),
+        }
     });
 }
 
@@ -344,16 +353,25 @@ fn watch_roots(state: State<FileWatcher>, roots: Vec<String>) -> Result<(), Stri
     let tx = state.evt_tx.clone();
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         if let Ok(event) = res {
-            // Only structural changes (add / remove / rename) warrant a rescan;
-            // ignore pure content/attribute writes to avoid needless churn.
-            let relevant = matches!(
-                event.kind,
+            // Structural changes may contain a directory; other modifications
+            // are relevant only when they point at a supported audio file.
+            let structural = matches!(
+                &event.kind,
                 EventKind::Create(_)
                     | EventKind::Remove(_)
                     | EventKind::Modify(ModifyKind::Name(_))
             );
-            if relevant {
-                let _ = tx.send(());
+            let content_change = matches!(&event.kind, EventKind::Modify(_));
+            if !structural && !content_change {
+                return;
+            }
+            let relevant_paths: Vec<PathBuf> = event
+                .paths
+                .into_iter()
+                .filter(|path| structural || is_audio_file(path))
+                .collect();
+            if !relevant_paths.is_empty() {
+                let _ = tx.send(relevant_paths);
             }
         }
     })
@@ -590,7 +608,7 @@ fn player_delete_file(app: AppHandle, path: String) -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Channel feeding the filesystem-watch coalescer (spawned in setup).
-    let (fs_tx, fs_rx) = mpsc::channel::<()>();
+    let (fs_tx, fs_rx) = mpsc::channel::<Vec<PathBuf>>();
     let fs_rx = Mutex::new(Some(fs_rx));
 
     let audio = init_audio_player();
@@ -627,6 +645,7 @@ pub fn run() {
             watcher: Mutex::new(None),
             evt_tx: fs_tx,
         })
+        .manage(library_index::LibraryIndexState::new())
         // Close-to-tray: while the setting is enabled, closing the main window
         // hides it instead of quitting; Quit lives in the tray menu.
         .on_window_event(|window, event| {
@@ -665,6 +684,8 @@ pub fn run() {
                 let handle = _app.handle().clone();
                 std::thread::spawn(move || {
                     std::thread::sleep(Duration::from_secs(6));
+                    let state = handle.state::<library_index::LibraryIndexState>();
+                    let _job = state.job.lock();
                     db::backfill_fingerprints(&handle);
                 });
             }
@@ -693,9 +714,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            scan_music_folder,
-            scan_paths,
-            filter_existing,
+            index_library,
             get_track_cover,
             get_track_cover_path,
             get_track_palette,

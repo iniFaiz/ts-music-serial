@@ -600,17 +600,12 @@ export const store = reactive({
     this.scanComplete = false;
     this.statusMessage = 'Scanning...';
 
-    const startTime = performance.now();
-
     try {
-      const result = await invoke('scan_music_folder', {
-        path,
+      const result = await invoke('index_library', {
+        paths: [path],
         useParallelism: this.useParallelism,
+        pruneMissing: false,
       });
-      const endTime = performance.now();
-
-      // Persist scanned tracks straight into SQLite; returns how many were new.
-      const added = await invoke('db_upsert_tracks', { tracks: result });
 
       if (!this.roots.includes(path)) {
         this.roots = [...this.roots, path];
@@ -618,15 +613,15 @@ export const store = reactive({
         this.watchRoots();
       }
 
-      const timeSeconds = ((endTime - startTime) / 1000).toFixed(2);
-      this.statusMessage = `Added ${added} new tracks in ${timeSeconds}s`;
+      const timeSeconds = (result.durationMs / 1000).toFixed(2);
+      this.statusMessage = `Added ${result.added} new tracks in ${timeSeconds}s`;
 
       this.scanDuration = timeSeconds;
-      this.scanCount = await invoke('db_count');
+      this.scanCount = result.total;
       this.scanComplete = true;
       this.bumpLibrary();
-      if (this.onlineMetadataEnabled && added > 0) {
-        this.startOnlineMetadataImport(result.map((track) => track.path));
+      if (this.onlineMetadataEnabled && result.added > 0) {
+        this.startOnlineMetadataImport();
       }
     } catch (error) {
       this.statusMessage = `Error: ${error}`;
@@ -644,23 +639,17 @@ export const store = reactive({
     this.loading = true;
     this.statusMessage = 'Adding dropped items...';
     try {
-      const result = await invoke('scan_paths', { paths: list });
-      const added = await invoke('db_upsert_tracks', { tracks: result });
+      const result = await invoke('index_library', {
+        paths: list,
+        useParallelism: this.useParallelism,
+        pruneMissing: false,
+      });
 
       // Register new roots so the watcher and streaming scope cover them. A
       // dropped path that contains scanned tracks is treated as a folder root;
       // otherwise fall back to each scanned track's containing folder.
       const newRoots = [];
-      for (const p of list) {
-        if (
-          !this.roots.some((r) => isUnderRoot(p, r)) &&
-          !newRoots.includes(p) &&
-          result.some((s) => isUnderRoot(s.path, p))
-        ) {
-          newRoots.push(p);
-        }
-      }
-      for (const d of new Set(result.map((s) => dirName(s.path)))) {
+      for (const d of result.roots || []) {
         if (
           !this.roots.some((r) => isUnderRoot(d, r)) &&
           !newRoots.some((r) => isUnderRoot(d, r))
@@ -673,12 +662,12 @@ export const store = reactive({
         await invoke('db_set_roots', { roots: [...this.roots] });
         this.watchRoots();
       }
-      this.scanCount = await invoke('db_count');
+      this.scanCount = result.total;
       this.scanComplete = true;
       this.bumpLibrary();
-      this.statusMessage = `Added ${added} new tracks`;
-      if (this.onlineMetadataEnabled && added > 0) {
-        this.startOnlineMetadataImport(result.map((track) => track.path));
+      this.statusMessage = `Added ${result.added} new tracks`;
+      if (this.onlineMetadataEnabled && result.added > 0) {
+        this.startOnlineMetadataImport();
       }
     } catch (e) {
       this.statusMessage = `Error: ${e}`;
@@ -731,31 +720,22 @@ export const store = reactive({
     if (this.roots.length === 0) return;
     this.loading = true;
     this.statusMessage = 'Refreshing library...';
-    let addedTotal = 0;
-    const scannedPaths = [];
     try {
-      for (const root of this.roots) {
-        const result = await invoke('scan_music_folder', {
-          path: root,
-          useParallelism: this.useParallelism,
-        });
-        addedTotal += await invoke('db_upsert_tracks', { tracks: result });
-        scannedPaths.push(...result.map((track) => track.path));
-      }
-
-      // Prune tracks whose files were deleted; drop them from the queue too.
-      try {
-        const gone = new Set(await invoke('db_prune_missing'));
-        if (gone.size) this.queue = this.queue.filter((s) => !gone.has(s.path));
-      } catch {
-        /* prune unavailable — keep all */
-      }
-
-      this.scanCount = await invoke('db_count');
+      const result = await invoke('index_library', {
+        paths: [...this.roots],
+        useParallelism: this.useParallelism,
+        pruneMissing: true,
+      });
+      this.scanCount = result.total;
       this.scanComplete = true;
       this.bumpLibrary();
-      if (this.onlineMetadataEnabled && addedTotal > 0) {
-        this.startOnlineMetadataImport(scannedPaths);
+      if (result.removed > 0) {
+        await this.reconcileQueueWithLibrary();
+        await this.refreshFavorites();
+        await this.refreshPlaylists();
+      }
+      if (this.onlineMetadataEnabled && result.added > 0) {
+        this.startOnlineMetadataImport();
       }
       this.statusMessage = `Library refreshed — ${this.scanCount} tracks`;
     } catch (e) {
@@ -771,30 +751,75 @@ export const store = reactive({
     if (this.roots.length === 0) return;
     this.loading = true;
     this.statusMessage = 'Reindexing...';
-    const startTime = performance.now();
     try {
-      for (const root of this.roots) {
-        const result = await invoke('scan_music_folder', {
-          path: root,
-          useParallelism: this.useParallelism,
-        });
-        await invoke('db_upsert_tracks', { tracks: result });
-      }
-      try {
-        const gone = new Set(await invoke('db_prune_missing'));
-        if (gone.size) this.queue = this.queue.filter((s) => !gone.has(s.path));
-      } catch {
-        /* ignore */
-      }
-      const secs = ((performance.now() - startTime) / 1000).toFixed(2);
-      this.scanCount = await invoke('db_count');
+      const result = await invoke('index_library', {
+        paths: [...this.roots],
+        useParallelism: this.useParallelism,
+        pruneMissing: true,
+      });
+      const secs = (result.durationMs / 1000).toFixed(2);
+      this.scanCount = result.total;
       this.scanComplete = true;
       this.bumpLibrary();
+      if (result.removed > 0) {
+        await this.reconcileQueueWithLibrary();
+        await this.refreshFavorites();
+        await this.refreshPlaylists();
+      }
       this.statusMessage = `Reindexed ${this.scanCount} tracks in ${secs}s`;
     } catch (e) {
       this.statusMessage = `Error: ${e}`;
     } finally {
       this.loading = false;
+    }
+  },
+
+  // Refresh only the usually-small playback queue after native indexing. This
+  // keeps renamed/deleted rows and edited tags in sync without loading the
+  // entire library into the webview.
+  async reconcileQueueWithLibrary() {
+    try {
+      const refreshed = [];
+      const paths = this.queue.map((track) => track.path);
+      for (let offset = 0; offset < paths.length; offset += 400) {
+        refreshed.push(
+          ...(await invoke('db_tracks_by_paths', {
+            paths: paths.slice(offset, offset + 400),
+          }))
+        );
+      }
+      this.queue = refreshed;
+
+      if (this.currentSong) {
+        const current = await invoke('db_track', { path: this.currentSong.path });
+        if (current) {
+          Object.assign(this.currentSong, current);
+        } else {
+          this.isPlaying = false;
+          this.currentSong = null;
+          this.currentTime = 0;
+          this.duration = 0;
+          await invoke('player_stop').catch(() => {});
+        }
+      }
+    } catch (error) {
+      console.error('Failed to reconcile playback queue after indexing', error);
+    }
+  },
+
+  // Called after the Rust watcher has already indexed its changed paths. No
+  // root scan is scheduled here.
+  async handleLibraryChanged(summary = {}) {
+    this.scanCount = Number.isFinite(summary.total) ? summary.total : await invoke('db_count');
+    this.scanComplete = true;
+    await this.reconcileQueueWithLibrary();
+    if (summary.removed > 0) {
+      await this.refreshFavorites();
+      await this.refreshPlaylists();
+    }
+    this.bumpLibrary();
+    if (!this.loading && !this.onlineMetadataRunning) {
+      this.statusMessage = `Library updated — ${this.scanCount} tracks`;
     }
   },
 

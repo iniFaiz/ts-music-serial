@@ -189,7 +189,6 @@ let unlistenExclusiveErr = null;
 let unlistenOpenFiles = null;
 let unlistenOnlineMetadata = null;
 let unlistenAudioDevices = null;
-let refreshTimer = null;
 
 const scrollContainer = ref(null);
 const scrollPositions = new Map();
@@ -326,16 +325,10 @@ onMounted(async () => {
     // drag-drop best-effort
   }
 
-  // Auto-refresh the library when watched folders change on disk (debounced
-  // again on the JS side so several backend events collapse into one refresh).
+  // Rust has already indexed the exact changed paths before this event arrives.
   try {
-    unlistenLibraryChanged = await listen('library-changed', () => {
-      if (refreshTimer) clearTimeout(refreshTimer);
-      refreshTimer = setTimeout(() => {
-        // The online importer writes and reindexes each file itself. Re-scanning
-        // the roots after every tag write would fight the importer and waste IO.
-        if (!store.loading && !store.onlineMetadataRunning) store.refreshLibrary();
-      }, 600);
+    unlistenLibraryChanged = await listen('library-changed', (event) => {
+      store.handleLibraryChanged(event.payload);
     });
   } catch {
     // watcher best-effort
@@ -394,7 +387,6 @@ onUnmounted(() => {
   if (unlistenOpenFiles) unlistenOpenFiles();
   if (unlistenOnlineMetadata) unlistenOnlineMetadata();
   if (unlistenAudioDevices) unlistenAudioDevices();
-  if (refreshTimer) clearTimeout(refreshTimer);
   // Cleanup sidebar playlist drag
   document.removeEventListener('mousemove', onSidebarPlMouseMove);
   document.removeEventListener('mouseup', onSidebarPlMouseUp);

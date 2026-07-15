@@ -1,15 +1,13 @@
 //! Music library discovery, metadata parsing, and path authorization.
 
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::time::{Instant, SystemTime};
+use std::path::Path;
+use std::time::SystemTime;
 
 use lofty::prelude::*;
 use lofty::probe::Probe;
 use lofty::tag::ItemKey;
-use rayon::prelude::*;
 use tauri::{AppHandle, Manager};
-use walkdir::WalkDir;
 
 use crate::MusicTrack;
 
@@ -160,71 +158,6 @@ pub(crate) fn parse_metadata(path: &Path) -> Option<MusicTrack> {
     })
 }
 
-// Scan a directory tree for audio files and parse their metadata.
-#[tauri::command]
-pub(crate) async fn scan_music_folder(
-    app: AppHandle,
-    path: String,
-    use_parallelism: bool,
-) -> Result<Vec<MusicTrack>, String> {
-    println!(
-        "Starting scan for: {} (Parallel: {})",
-        path, use_parallelism
-    );
-    let start_time = Instant::now();
-
-    // Grant the frontend streaming access to this directory's audio.
-    allow_root(&app, &path);
-
-    let tracks: Vec<MusicTrack> = if use_parallelism {
-        // jwalk for parallel directory traversal.
-        let entries: Vec<_> = jwalk::WalkDir::new(&path)
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().is_file())
-            .map(|e| e.path())
-            .collect();
-
-        println!(
-            "Found {} files (jwalk). Processing metadata...",
-            entries.len()
-        );
-
-        entries
-            .into_par_iter()
-            .filter(|path| is_audio_file(path))
-            .filter_map(|path| parse_metadata(&path))
-            .collect()
-    } else {
-        // walkdir for sequential traversal.
-        let entries: Vec<_> = WalkDir::new(&path)
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().is_file())
-            .map(|e| e.path().to_owned())
-            .collect();
-
-        println!(
-            "Found {} files (walkdir). Processing metadata...",
-            entries.len()
-        );
-
-        entries
-            .into_iter()
-            .filter(|path| is_audio_file(path))
-            .filter_map(|path| parse_metadata(&path))
-            .collect()
-    };
-
-    println!(
-        "Scanned {} tracks in {:?}",
-        tracks.len(),
-        start_time.elapsed()
-    );
-
-    Ok(tracks)
-}
-
 // Re-grant streaming access to previously scanned roots. The frontend persists
 // the list of scanned folders and calls this on startup, because the asset
 // protocol scope is in-memory and resets each launch.
@@ -233,55 +166,4 @@ pub(crate) fn restore_roots(app: AppHandle, roots: Vec<String>) {
     for root in roots {
         allow_root(&app, &root);
     }
-}
-
-// Scan a heterogeneous list of paths (files and/or folders), e.g. from a
-// drag-and-drop onto the window. Folders are walked recursively; lone audio
-// files are parsed directly. Each touched directory is granted streaming scope.
-#[tauri::command]
-pub(crate) async fn scan_paths(
-    app: AppHandle,
-    paths: Vec<String>,
-) -> Result<Vec<MusicTrack>, String> {
-    let mut tracks: Vec<MusicTrack> = Vec::new();
-    for p in paths {
-        let pb = PathBuf::from(&p);
-        if pb.is_dir() {
-            allow_root(&app, &p);
-            let entries: Vec<_> = jwalk::WalkDir::new(&pb)
-                .into_iter()
-                .filter_map(|e| e.ok())
-                .filter(|e| e.file_type().is_file())
-                .map(|e| e.path())
-                .collect();
-            let mut found: Vec<MusicTrack> = entries
-                .into_par_iter()
-                .filter(|path| is_audio_file(path))
-                .filter_map(|path| parse_metadata(&path))
-                .collect();
-            tracks.append(&mut found);
-        } else if pb.is_file() && is_audio_file(&pb) {
-            if let Some(parent) = pb.parent() {
-                let parent_str = parent.to_string_lossy().to_string();
-                allow_root(&app, &parent_str);
-            }
-            if let Some(t) = parse_metadata(&pb) {
-                tracks.push(t);
-            }
-        }
-    }
-    Ok(tracks)
-}
-
-// Return the subset of `paths` that still exist on disk (and are within an
-// allowed music folder). Used to prune deleted files during a library refresh.
-#[tauri::command]
-pub(crate) fn filter_existing(app: AppHandle, paths: Vec<String>) -> Vec<String> {
-    paths
-        .into_iter()
-        .filter(|p| {
-            let pb = Path::new(p);
-            is_allowed_audio(&app, pb) && pb.exists()
-        })
-        .collect()
 }

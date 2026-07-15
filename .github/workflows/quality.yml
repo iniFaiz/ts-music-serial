@@ -1,0 +1,78 @@
+name: Quality
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Lint, test, build, and Clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      # The project optimizes codec dependencies in dev builds; bounding Cargo
+      # parallelism avoids memory spikes on shared CI runners.
+      CARGO_BUILD_JOBS: 2
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libasound2-dev \
+            libdbus-1-dev
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Frontend lint
+        run: npm run lint
+
+      - name: Frontend tests
+        run: npm test
+
+      - name: Frontend build
+        run: npm run build
+
+      - name: Rust formatting
+        run: cargo fmt --all -- --check
+        working-directory: src-tauri
+
+      - name: Rust tests
+        run: cargo test --locked
+        working-directory: src-tauri
+
+      - name: Clippy
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+        working-directory: src-tauri
+
+      - name: Rust build
+        run: cargo build --locked
+        working-directory: src-tauri
