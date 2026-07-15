@@ -600,7 +600,7 @@ pub(crate) fn prune_changed_paths(
         .filter(|path| !path.exists())
         .map(|path| {
             path.to_string_lossy()
-                .trim_end_matches(|character| character == '/' || character == '\\')
+                .trim_end_matches(['/', '\\'])
                 .to_string()
         })
         .filter(|path| !path.is_empty())
@@ -977,7 +977,7 @@ pub fn db_import(
 }
 
 mod smart_playlists;
-use smart_playlists::smart_eval;
+use smart_playlists::{smart_count, smart_eval};
 
 // Small helper: turn "no rows" into Ok(None) for optional single-row reads.
 trait OptionalString<T> {

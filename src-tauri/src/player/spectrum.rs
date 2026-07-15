@@ -189,13 +189,13 @@ impl<S: Source> SpectrumSource<S> {
         }
 
         // Fast attack, slow decay for a lively-but-stable look.
-        for b in 0..SPECTRUM_BANDS {
-            let coeff = if targets[b] > self.smoothed[b] {
+        for (target, smoothed) in targets.iter().zip(&mut self.smoothed) {
+            let coeff = if target > smoothed {
                 SPECTRUM_ATTACK
             } else {
                 SPECTRUM_DECAY
             };
-            self.smoothed[b] += (targets[b] - self.smoothed[b]) * coeff;
+            *smoothed += (target - *smoothed) * coeff;
         }
         self.shared.store(&self.smoothed);
     }

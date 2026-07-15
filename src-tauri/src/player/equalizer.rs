@@ -203,8 +203,8 @@ impl<S: Source> Iterator for EqualizerSource<S> {
         }
         let mut x = s * self.preamp;
         if let Some(state) = self.states.get_mut(ch) {
-            for b in 0..EQ_BANDS {
-                x = state[b].process(x, &self.coeffs[b]);
+            for (band_state, coefficient) in state.iter_mut().zip(&self.coeffs) {
+                x = band_state.process(x, coefficient);
             }
         }
         Some(x)

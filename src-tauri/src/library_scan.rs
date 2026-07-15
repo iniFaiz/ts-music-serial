@@ -7,7 +7,7 @@ use std::time::SystemTime;
 use lofty::prelude::*;
 use lofty::probe::Probe;
 use lofty::tag::ItemKey;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, Runtime};
 
 use crate::MusicTrack;
 
@@ -34,15 +34,19 @@ pub(crate) fn is_audio_file(path: &Path) -> bool {
 
 // Allow a scanned directory through the asset protocol so the frontend can
 // stream its audio files (and so cover extraction is permitted for them).
-pub(crate) fn allow_root(app: &AppHandle, path: &str) {
+pub(crate) fn allow_root<R: Runtime>(app: &AppHandle<R>, path: &str) {
     let _ = app.asset_protocol_scope().allow_directory(path, true);
 }
 
 // A path may only be touched by file-reading commands if it is an audio file
 // inside one of the directories the user explicitly scanned. This prevents the
 // (untrusted) webview from coercing the backend into reading arbitrary files.
-pub(crate) fn is_allowed_audio(app: &AppHandle, path: &Path) -> bool {
-    is_audio_file(path) && app.asset_protocol_scope().is_allowed(path)
+pub(crate) fn is_allowed_path<R: Runtime>(app: &AppHandle<R>, path: &Path) -> bool {
+    app.asset_protocol_scope().is_allowed(path)
+}
+
+pub(crate) fn is_allowed_audio<R: Runtime>(app: &AppHandle<R>, path: &Path) -> bool {
+    is_audio_file(path) && is_allowed_path(app, path)
 }
 
 // Content fingerprint used to re-identify a track after it is moved or renamed
@@ -128,7 +132,7 @@ pub(crate) fn parse_metadata(path: &Path) -> Option<MusicTrack> {
     let year = tag.and_then(|t| t.year());
     let track_number = tag.and_then(|t| t.track());
     let duration_secs = properties.duration().as_secs();
-    let has_cover = tag.as_ref().map_or(false, |t| !t.pictures().is_empty());
+    let has_cover = tag.as_ref().is_some_and(|t| !t.pictures().is_empty());
 
     let sample_rate = properties.sample_rate();
     let bit_depth = properties.bit_depth();
@@ -165,5 +169,84 @@ pub(crate) fn parse_metadata(path: &Path) -> Option<MusicTrack> {
 pub(crate) fn restore_roots(app: AppHandle, roots: Vec<String>) {
     for root in roots {
         allow_root(&app, &root);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use tauri::Manager;
+
+    struct TestDir(PathBuf);
+
+    impl TestDir {
+        fn new() -> Self {
+            let nonce = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock after epoch")
+                .as_nanos();
+            let path = std::env::temp_dir()
+                .join(format!("ts-music-path-auth-{}-{nonce}", std::process::id()));
+            std::fs::create_dir(&path).expect("create test directory");
+            Self(path)
+        }
+
+        fn join(&self, name: &str) -> PathBuf {
+            self.0.join(name)
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn audio_extension_allowlist_is_case_insensitive() {
+        assert!(is_audio_file(Path::new("track.FLAC")));
+        assert!(is_audio_file(Path::new("track.m4a")));
+        assert!(!is_audio_file(Path::new("cover.png")));
+        assert!(!is_audio_file(Path::new("no-extension")));
+    }
+
+    #[test]
+    fn directory_scope_allows_audio_only_inside_that_root() {
+        let app = tauri::test::mock_app();
+        let dir = TestDir::new();
+        let library = dir.join("library");
+        let outside = dir.join("outside");
+        std::fs::create_dir_all(library.join("nested")).expect("create library");
+        std::fs::create_dir(&outside).expect("create outside directory");
+        let allowed = library.join("nested").join("song.flac");
+        let wrong_type = library.join("nested").join("notes.txt");
+        let denied = outside.join("song.flac");
+        std::fs::write(&allowed, b"audio").expect("write allowed file");
+        std::fs::write(&wrong_type, b"text").expect("write wrong type");
+        std::fs::write(&denied, b"audio").expect("write denied file");
+
+        allow_root(app.handle(), library.to_str().expect("utf-8 path"));
+
+        assert!(is_allowed_audio(app.handle(), &allowed));
+        assert!(!is_allowed_audio(app.handle(), &wrong_type));
+        assert!(!is_allowed_audio(app.handle(), &denied));
+    }
+
+    #[test]
+    fn single_file_scope_does_not_authorize_its_siblings() {
+        let app = tauri::test::mock_app();
+        let dir = TestDir::new();
+        let selected = dir.join("selected.mp3");
+        let sibling = dir.join("private.mp3");
+        std::fs::write(&selected, b"selected").expect("write selected file");
+        std::fs::write(&sibling, b"private").expect("write sibling file");
+        app.asset_protocol_scope()
+            .allow_file(&selected)
+            .expect("allow selected file");
+
+        assert!(is_allowed_audio(app.handle(), &selected));
+        assert!(!is_allowed_audio(app.handle(), &sibling));
     }
 }

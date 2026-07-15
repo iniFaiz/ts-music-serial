@@ -2,7 +2,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{mpsc, Arc};
+use std::sync::mpsc;
+#[cfg(target_os = "windows")]
+use std::sync::Arc;
 use std::time::Duration;
 
 // parking_lot's Mutex never poisons and its guard is returned directly (no
@@ -36,7 +38,8 @@ use cover_cache::{get_track_cover, get_track_cover_path, get_track_palette};
 use library_index::index_library;
 use library_scan::restore_roots;
 pub(crate) use library_scan::{
-    allow_root, compute_fingerprint, is_allowed_audio, is_audio_file, parse_metadata, parse_rg_db,
+    allow_root, compute_fingerprint, is_allowed_audio, is_allowed_path, is_audio_file,
+    parse_metadata, parse_rg_db,
 };
 use metadata_tags::{preview_image, write_track_tags};
 pub(crate) use player::build_decoder;
@@ -109,8 +112,9 @@ async fn probe_files(app: AppHandle, paths: Vec<String>) -> Result<Vec<MusicTrac
         let mut tracks = Vec::new();
         for p in paths {
             let pb = PathBuf::from(&p);
-            if pb.is_file() && is_audio_file(&pb) {
-                let _ = app.asset_protocol_scope().allow_file(&pb);
+            // `take_pending_open_files` grants each OS-provided file explicitly.
+            // Never widen the scope from this webview-callable command itself.
+            if pb.is_file() && is_allowed_audio(&app, &pb) {
                 if let Some(t) = parse_metadata(&pb) {
                     tracks.push(t);
                 }
@@ -120,6 +124,60 @@ async fn probe_files(app: AppHandle, paths: Vec<String>) -> Result<Vec<MusicTrac
     })
     .await
     .map_err(|e| format!("Probe task failed: {e}"))?
+}
+
+#[cfg(test)]
+mod file_argument_tests {
+    use super::collect_audio_args;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct TestDir(PathBuf);
+
+    impl TestDir {
+        fn new() -> Self {
+            let nonce = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock after epoch")
+                .as_nanos();
+            let path = std::env::temp_dir()
+                .join(format!("ts-music-file-args-{}-{nonce}", std::process::id()));
+            std::fs::create_dir(&path).expect("create test directory");
+            Self(path)
+        }
+
+        fn join(&self, name: &str) -> PathBuf {
+            self.0.join(name)
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn command_line_file_collection_accepts_only_existing_audio_files() {
+        let dir = TestDir::new();
+        let audio = dir.join("song.FLAC");
+        let text = dir.join("notes.txt");
+        let missing = dir.join("missing.mp3");
+        let folder = dir.join("folder.mp3");
+        std::fs::write(&audio, b"audio").expect("write audio file");
+        std::fs::write(&text, b"text").expect("write text file");
+        std::fs::create_dir(&folder).expect("create misleading directory");
+
+        let collected = collect_audio_args([
+            "--hidden".to_string(),
+            audio.to_string_lossy().to_string(),
+            text.to_string_lossy().to_string(),
+            missing.to_string_lossy().to_string(),
+            folder.to_string_lossy().to_string(),
+        ]);
+
+        assert_eq!(collected, vec![audio.to_string_lossy().to_string()]);
+    }
 }
 
 // Lyrics — local tag / sidecar .lrc, then NetEase → LRCLIB → Musixmatch
@@ -154,6 +212,7 @@ fn local_lyrics(path: &Path) -> Option<lyrics::Lyrics> {
 // Resolve lyrics through the full pipeline, caching the result (including a
 // "not found" sentinel) on disk. `force` bypasses the cache for a manual retry.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn get_lyrics(
     app: AppHandle,
     path: String,
@@ -317,28 +376,27 @@ struct FileWatcher {
 
 // Drain a burst, index its unique paths, and emit once per quiet window.
 fn spawn_fs_coalescer(app: AppHandle, rx: mpsc::Receiver<Vec<PathBuf>>) {
-    std::thread::spawn(move || loop {
-        // Block until the first event of a burst.
-        let Ok(first) = rx.recv() else {
-            break;
-        };
-        let mut paths: HashSet<PathBuf> = first.into_iter().collect();
-        // Swallow further events until things go quiet for the debounce window.
-        loop {
-            match rx.recv_timeout(Duration::from_millis(800)) {
-                Ok(more) => paths.extend(more),
-                Err(mpsc::RecvTimeoutError::Timeout) => break,
-                Err(mpsc::RecvTimeoutError::Disconnected) => return,
+    std::thread::spawn(move || {
+        while let Ok(first) = rx.recv() {
+            // Block until the first event of a burst.
+            let mut paths: HashSet<PathBuf> = first.into_iter().collect();
+            // Swallow further events until things go quiet for the debounce window.
+            loop {
+                match rx.recv_timeout(Duration::from_millis(800)) {
+                    Ok(more) => paths.extend(more),
+                    Err(mpsc::RecvTimeoutError::Timeout) => break,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                }
             }
-        }
-        if paths.is_empty() {
-            continue;
-        }
-        match library_index::index_watcher_paths(&app, paths.into_iter().collect()) {
-            Ok(summary) => {
-                let _ = app.emit("library-changed", summary);
+            if paths.is_empty() {
+                continue;
             }
-            Err(error) => eprintln!("Incremental library index failed: {error}"),
+            match library_index::index_watcher_paths(&app, paths.into_iter().collect()) {
+                Ok(summary) => {
+                    let _ = app.emit("library-changed", summary);
+                }
+                Err(error) => eprintln!("Incremental library index failed: {error}"),
+            }
         }
     });
 }

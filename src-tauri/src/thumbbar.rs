@@ -92,14 +92,16 @@ impl ThumbbarController {
 
 // ---- glyph rasterization ---------------------------------------------------
 
-fn edge(px: f32, py: f32, ax: f32, ay: f32, bx: f32, by: f32) -> f32 {
+type Point = (f32, f32);
+
+fn edge((px, py): Point, (ax, ay): Point, (bx, by): Point) -> f32 {
     (px - bx) * (ay - by) - (ax - bx) * (py - by)
 }
 
-fn in_tri(px: f32, py: f32, ax: f32, ay: f32, bx: f32, by: f32, cx: f32, cy: f32) -> bool {
-    let d1 = edge(px, py, ax, ay, bx, by);
-    let d2 = edge(px, py, bx, by, cx, cy);
-    let d3 = edge(px, py, cx, cy, ax, ay);
+fn in_tri(point: Point, a: Point, b: Point, c: Point) -> bool {
+    let d1 = edge(point, a, b);
+    let d2 = edge(point, b, c);
+    let d3 = edge(point, c, a);
     let has_neg = d1 < 0.0 || d2 < 0.0 || d3 < 0.0;
     let has_pos = d1 > 0.0 || d2 > 0.0 || d3 > 0.0;
     !(has_neg && has_pos)
@@ -108,19 +110,19 @@ fn in_tri(px: f32, py: f32, ax: f32, ay: f32, bx: f32, by: f32, cx: f32, cy: f32
 // Is the point (x,y) in [0,1]^2 inside the given glyph's shape?
 fn glyph_hit(k: Glyph, x: f32, y: f32) -> bool {
     let p = 0.20; // top/bottom padding
+    let in_vertical_bounds = (p..=1.0 - p).contains(&y);
     match k {
-        Glyph::Play => in_tri(x, y, 0.30, p, 0.30, 1.0 - p, 0.78, 0.5),
+        Glyph::Play => in_tri((x, y), (0.30, p), (0.30, 1.0 - p), (0.78, 0.5)),
         Glyph::Pause => {
-            (x >= 0.30 && x <= 0.44 && y >= p && y <= 1.0 - p)
-                || (x >= 0.56 && x <= 0.70 && y >= p && y <= 1.0 - p)
+            ((0.30..=0.44).contains(&x) || (0.56..=0.70).contains(&x)) && in_vertical_bounds
         }
         Glyph::Prev => {
-            (x >= 0.22 && x <= 0.32 && y >= p && y <= 1.0 - p)
-                || in_tri(x, y, 0.74, p, 0.74, 1.0 - p, 0.36, 0.5)
+            ((0.22..=0.32).contains(&x) && in_vertical_bounds)
+                || in_tri((x, y), (0.74, p), (0.74, 1.0 - p), (0.36, 0.5))
         }
         Glyph::Next => {
-            (x >= 0.68 && x <= 0.78 && y >= p && y <= 1.0 - p)
-                || in_tri(x, y, 0.26, p, 0.26, 1.0 - p, 0.64, 0.5)
+            ((0.68..=0.78).contains(&x) && in_vertical_bounds)
+                || in_tri((x, y), (0.26, p), (0.26, 1.0 - p), (0.64, 0.5))
         }
     }
 }
@@ -179,7 +181,7 @@ unsafe fn make_icon(kind: Glyph, size: i32, color_rgb: u32) -> HICON {
     }
 
     // A zeroed AND mask; ignored in favor of the per-pixel alpha above.
-    let stride_words = ((w as usize + 15) / 16) * 2; // bytes per row, word-aligned
+    let stride_words = (w as usize).div_ceil(16) * 2; // bytes per row, word-aligned
     let mask_bytes = vec![0u8; stride_words * h as usize];
     let hbm_mask = CreateBitmap(w, h, 1, 1, Some(mask_bytes.as_ptr() as *const c_void));
 

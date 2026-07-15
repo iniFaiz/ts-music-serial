@@ -84,3 +84,5 @@ opt-level = 3
 [patch.crates-io]
 plist = { git = "https://github.com/ebarnard/rust-plist" }
 
+[dev-dependencies]
+tauri = { version = "2", features = ["test"] }

@@ -10,9 +10,27 @@
 use std::fs;
 use std::path::PathBuf;
 
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Runtime, State};
 
 use crate::db::Db;
+
+fn authorize_playlist_file<R: Runtime>(
+    app: &AppHandle<R>,
+    path: &std::path::Path,
+) -> Result<(), String> {
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if extension != "m3u" && extension != "m3u8" {
+        return Err("Playlist path must end in .m3u or .m3u8".to_string());
+    }
+    if !crate::is_allowed_path(app, path) {
+        return Err("Playlist path was not authorized by the file picker".to_string());
+    }
+    Ok(())
+}
 
 // Normalise a path for prefix comparison (unify separators, drop trailing slash,
 // lowercase — Windows paths are case-insensitive).
@@ -28,16 +46,14 @@ fn is_under_any(dir_n: &str, roots: &[String]) -> bool {
 }
 
 #[tauri::command]
-pub fn export_m3u(db: State<Db>, dest: String, playlist_id: String) -> Result<usize, String> {
+pub fn export_m3u(
+    app: AppHandle,
+    db: State<Db>,
+    dest: String,
+    playlist_id: String,
+) -> Result<usize, String> {
     let dest_path = PathBuf::from(&dest);
-    let ext = dest_path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_lowercase();
-    if ext != "m3u" && ext != "m3u8" {
-        return Err("Destination must be a .m3u or .m3u8 file".into());
-    }
+    authorize_playlist_file(&app, &dest_path)?;
 
     let tracks = crate::db::playlists::db_playlist_tracks(db, playlist_id)?;
     let mut out = String::from("#EXTM3U\n");
@@ -54,6 +70,7 @@ pub fn export_m3u(db: State<Db>, dest: String, playlist_id: String) -> Result<us
 #[tauri::command]
 pub fn import_m3u(app: AppHandle, db: State<Db>, src: String) -> Result<Vec<String>, String> {
     let src_path = PathBuf::from(&src);
+    authorize_playlist_file(&app, &src_path)?;
     let content = fs::read_to_string(&src_path).map_err(|e| e.to_string())?;
     let base = src_path.parent().map(|p| p.to_path_buf());
 
@@ -103,4 +120,37 @@ pub fn import_m3u(app: AppHandle, db: State<Db>, src: String) -> Result<Vec<Stri
     }
     crate::db::db_upsert_tracks(db, tracks.clone())?;
     Ok(tracks.iter().map(|t| t.path.clone()).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tauri::Manager;
+
+    #[test]
+    fn playlist_file_authorization_is_extension_and_scope_bound() {
+        let app = tauri::test::mock_app();
+        let base =
+            std::env::temp_dir().join(format!("ts-music-playlist-auth-{}", std::process::id()));
+        std::fs::create_dir_all(&base).expect("create test directory");
+        let selected = base.join("selected.m3u8");
+        let sibling = base.join("sibling.m3u8");
+        let disguised = base.join("playlist.m3u8.exe");
+        app.asset_protocol_scope()
+            .allow_file(&selected)
+            .expect("allow selected playlist");
+        app.asset_protocol_scope()
+            .allow_file(&disguised)
+            .expect("allow disguised file");
+
+        assert!(authorize_playlist_file(app.handle(), &selected).is_ok());
+        assert!(authorize_playlist_file(app.handle(), &sibling).is_err());
+        assert_eq!(
+            authorize_playlist_file(app.handle(), &disguised)
+                .expect_err("reject unsupported extension"),
+            "Playlist path must end in .m3u or .m3u8"
+        );
+
+        let _ = std::fs::remove_dir_all(base);
+    }
 }

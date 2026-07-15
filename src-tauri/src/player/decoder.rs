@@ -4,13 +4,15 @@ use std::path::Path;
 
 use rodio::{Decoder, Source};
 
+pub(crate) type AudioDecoder = Decoder<Cursor<Vec<u8>>>;
+
 // Read a file into memory and build a *seekable* decoder. Decoding stays lazy
 // (samples are produced on demand during playback), so playback starts almost
 // immediately instead of waiting for the whole track. Reading into a Cursor
 // keeps the audio callback off the disk, and `[profile.dev.package."*"]
 // opt-level = 3` keeps the codec fast enough to never starve the callback —
 // together that fixes both the slow start and the "bz bz bz" under load.
-pub(crate) fn build_decoder(path: &Path) -> Result<(Decoder<Cursor<Vec<u8>>>, f64), String> {
+pub(crate) fn build_decoder(path: &Path) -> Result<(AudioDecoder, f64), String> {
     let bytes = fs::read(path).map_err(|e| e.to_string())?;
     let byte_len = bytes.len() as u64;
     let decoder = Decoder::builder()

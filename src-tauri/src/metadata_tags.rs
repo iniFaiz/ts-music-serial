@@ -9,10 +9,13 @@ use lofty::picture::MimeType;
 use lofty::prelude::*;
 use lofty::probe::Probe;
 use serde::Deserialize;
+use tauri::Runtime;
 use tauri::{AppHandle, State};
 
 use crate::cover_cache::make_thumbnail;
-use crate::{compute_fingerprint, db, is_allowed_audio, parse_metadata, MusicTrack};
+use crate::{
+    compute_fingerprint, db, is_allowed_audio, is_allowed_path, parse_metadata, MusicTrack,
+};
 
 // ---------------------------------------------------------------------------
 // Tag editor: write metadata (and cover art) back into the audio file with
@@ -58,6 +61,22 @@ fn load_cover_art(path: &Path) -> Result<(Vec<u8>, MimeType), String> {
     }
 }
 
+fn authorize_tag_target<R: Runtime>(app: &AppHandle<R>, path: &Path) -> Result<(), String> {
+    if is_allowed_audio(app, path) {
+        Ok(())
+    } else {
+        Err("Path is not within an allowed music folder".to_string())
+    }
+}
+
+fn authorize_cover_path<R: Runtime>(app: &AppHandle<R>, path: &Path) -> Result<(), String> {
+    if is_allowed_path(app, path) {
+        Ok(())
+    } else {
+        Err("Cover path was not authorized by the file picker".to_string())
+    }
+}
+
 #[tauri::command]
 pub(crate) async fn write_track_tags(
     app: AppHandle,
@@ -72,8 +91,9 @@ pub(crate) async fn write_track_tags(
     use lofty::tag::Tag;
 
     let path_buf = PathBuf::from(&path);
-    if !is_allowed_audio(&app, &path_buf) {
-        return Err("Path is not within an allowed music folder".to_string());
+    authorize_tag_target(&app, &path_buf)?;
+    if let Some(path) = cover_path.as_deref() {
+        authorize_cover_path(&app, Path::new(path))?;
     }
 
     let (track, fingerprint) = tauri::async_runtime::spawn_blocking(
@@ -165,7 +185,8 @@ pub(crate) async fn write_track_tags(
 // cover art, so the edit modal can show it before saving. Same validation as
 // load_cover_art: the bytes must decode as an image.
 #[tauri::command]
-pub(crate) async fn preview_image(path: String) -> Result<String, String> {
+pub(crate) async fn preview_image(app: AppHandle, path: String) -> Result<String, String> {
+    authorize_cover_path(&app, Path::new(&path))?;
     let thumb = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<u8>, String> {
         let (data, _) = load_cover_art(Path::new(&path))?;
         make_thumbnail(&data).ok_or_else(|| "Failed to decode image".to_string())
@@ -176,4 +197,96 @@ pub(crate) async fn preview_image(path: String) -> Result<String, String> {
         "data:image/jpeg;base64,{}",
         general_purpose::STANDARD.encode(thumb)
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use tauri::Manager;
+
+    struct TestDir(PathBuf);
+
+    impl TestDir {
+        fn new() -> Self {
+            let nonce = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock after epoch")
+                .as_nanos();
+            let path = std::env::temp_dir()
+                .join(format!("ts-music-tag-auth-{}-{nonce}", std::process::id()));
+            std::fs::create_dir(&path).expect("create test directory");
+            Self(path)
+        }
+
+        fn join(&self, name: &str) -> PathBuf {
+            self.0.join(name)
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn tag_and_cover_targets_require_their_own_scope_grants() {
+        let app = tauri::test::mock_app();
+        let dir = TestDir::new();
+        let song = dir.join("song.flac");
+        let cover = dir.join("cover.png");
+        let sibling = dir.join("sibling.png");
+        std::fs::write(&song, b"audio").expect("write song");
+        std::fs::write(&cover, b"cover").expect("write cover");
+        std::fs::write(&sibling, b"sibling").expect("write sibling");
+
+        assert!(authorize_tag_target(app.handle(), &song).is_err());
+        assert!(authorize_cover_path(app.handle(), &cover).is_err());
+
+        app.asset_protocol_scope()
+            .allow_file(&song)
+            .expect("allow song");
+        app.asset_protocol_scope()
+            .allow_file(&cover)
+            .expect("allow cover");
+
+        assert!(authorize_tag_target(app.handle(), &song).is_ok());
+        assert!(authorize_cover_path(app.handle(), &cover).is_ok());
+        assert!(authorize_cover_path(app.handle(), &sibling).is_err());
+    }
+
+    #[test]
+    fn cover_loader_accepts_images_and_rejects_non_images() {
+        let dir = TestDir::new();
+        let image_path = dir.join("cover.png");
+        let invalid_path = dir.join("not-an-image.png");
+        image::RgbImage::from_pixel(2, 2, image::Rgb([10, 20, 30]))
+            .save(&image_path)
+            .expect("save test image");
+        std::fs::write(&invalid_path, b"not an image").expect("write invalid image");
+
+        let (bytes, mime) = load_cover_art(&image_path).expect("load valid cover");
+        assert!(!bytes.is_empty());
+        assert_eq!(mime, MimeType::Png);
+        assert_eq!(
+            load_cover_art(&invalid_path).expect_err("reject invalid image"),
+            "Not a valid image file"
+        );
+    }
+
+    #[test]
+    fn cover_loader_rejects_files_over_twenty_megabytes_before_reading() {
+        let dir = TestDir::new();
+        let path = dir.join("huge.png");
+        let file = std::fs::File::create(&path).expect("create sparse file");
+        file.set_len(20 * 1024 * 1024 + 1)
+            .expect("resize sparse file");
+
+        assert_eq!(
+            load_cover_art(&path).expect_err("reject oversized cover"),
+            "Cover image is too large (max 20 MB)"
+        );
+    }
 }

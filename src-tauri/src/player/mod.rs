@@ -36,6 +36,7 @@ enum AudioCommand {
     // The reply channel is signalled once the device is open.
     OpenDevice(Option<String>, mpsc::Sender<()>),
     CreateSink(mpsc::Sender<Result<Arc<Sink>, String>>),
+    #[cfg(target_os = "windows")]
     CloseStream(mpsc::Sender<()>),
 }
 
@@ -178,6 +179,7 @@ pub(crate) struct PlaybackInfo {
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn player_load(
     app: AppHandle,
     player: State<'_, AudioPlayer>,
@@ -481,6 +483,9 @@ pub(crate) async fn player_prepare_next(
 
 #[tauri::command]
 pub(crate) fn player_pause(app: AppHandle, player: State<AudioPlayer>) {
+    #[cfg(not(target_os = "windows"))]
+    let _ = app;
+
     #[cfg(target_os = "windows")]
     if player.exclusive_enabled.load(Ordering::SeqCst) {
         if let Some(ex) = app.try_state::<Arc<exclusive::ExclusivePlayer>>() {
@@ -502,6 +507,9 @@ pub(crate) fn player_pause(app: AppHandle, player: State<AudioPlayer>) {
 
 #[tauri::command]
 pub(crate) fn player_resume(app: AppHandle, player: State<AudioPlayer>) {
+    #[cfg(not(target_os = "windows"))]
+    let _ = app;
+
     #[cfg(target_os = "windows")]
     if player.exclusive_enabled.load(Ordering::SeqCst) {
         if let Some(ex) = app.try_state::<Arc<exclusive::ExclusivePlayer>>() {
@@ -541,6 +549,9 @@ pub(crate) fn player_seek(
     player: State<AudioPlayer>,
     position: f64,
 ) -> Result<(), String> {
+    #[cfg(not(target_os = "windows"))]
+    let _ = app;
+
     #[cfg(target_os = "windows")]
     if player.exclusive_enabled.load(Ordering::SeqCst) {
         if let Some(ex) = app.try_state::<Arc<exclusive::ExclusivePlayer>>() {
@@ -573,6 +584,9 @@ pub(crate) fn player_seek(
 
 #[tauri::command]
 pub(crate) fn player_stop(app: AppHandle, player: State<AudioPlayer>) {
+    #[cfg(not(target_os = "windows"))]
+    let _ = app;
+
     #[cfg(target_os = "windows")]
     if let Some(ex) = app.try_state::<Arc<exclusive::ExclusivePlayer>>() {
         if ex.is_active() {
@@ -594,6 +608,9 @@ pub(crate) fn player_stop(app: AppHandle, player: State<AudioPlayer>) {
 
 #[tauri::command]
 pub(crate) fn player_status(app: AppHandle, player: State<AudioPlayer>) -> PlayerStatus {
+    #[cfg(not(target_os = "windows"))]
+    let _ = app;
+
     #[cfg(target_os = "windows")]
     if player.exclusive_enabled.load(Ordering::SeqCst) {
         if let Some(ex) = app.try_state::<Arc<exclusive::ExclusivePlayer>>() {
@@ -784,6 +801,7 @@ pub(crate) fn init_audio_player() -> AudioPlayer {
                     };
                     let _ = reply.send(res);
                 }
+                #[cfg(target_os = "windows")]
                 AudioCommand::CloseStream(reply) => {
                     {
                         let mut guard = slot_t.lock();

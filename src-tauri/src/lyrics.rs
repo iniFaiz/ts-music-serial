@@ -910,7 +910,7 @@ fn generate_token_guid() -> String {
         seed
     };
 
-    let parts = vec![
+    let parts = [
         format!("{:08x}", (next_random() as u32)),
         format!("{:04x}", ((next_random() >> 16) as u16)),
         format!("{:04x}", ((next_random() >> 16) as u16)),

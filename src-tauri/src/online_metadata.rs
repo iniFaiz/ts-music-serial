@@ -182,7 +182,7 @@ fn inspect_file(path: &Path) -> Result<FileInfo, String> {
         genre: genre.is_none(),
         year: tag.and_then(|t| t.year()).is_none(),
         track_number: tag.and_then(|t| t.track()).is_none(),
-        cover: tag.map_or(true, |t| t.pictures().is_empty()),
+        cover: tag.is_none_or(|t| t.pictures().is_empty()),
     };
     Ok(FileInfo {
         missing,
@@ -519,10 +519,9 @@ async fn musicbrainz_recording(
 async fn download_cover(client: &Client, matched: &Match) -> Option<Vec<u8>> {
     let url = if let Some(id) = matched.release_id.as_deref() {
         format!("https://coverartarchive.org/release/{id}/front-500")
-    } else if let Some(id) = matched.release_group_id.as_deref() {
-        format!("https://coverartarchive.org/release-group/{id}/front-500")
     } else {
-        return None;
+        let id = matched.release_group_id.as_deref()?;
+        format!("https://coverartarchive.org/release-group/{id}/front-500")
     };
     let response = client.get(url).send().await.ok()?.error_for_status().ok()?;
     if response

@@ -78,6 +78,7 @@ pub fn discord_set_enabled(state: tauri::State<DiscordState>, enabled: bool) -> 
 // When paused the presence is cleared entirely (the status disappears) rather
 // than left frozen on the last track.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn discord_update(
     state: tauri::State<DiscordState>,
     title: String,

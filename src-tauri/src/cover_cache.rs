@@ -119,7 +119,7 @@ fn extract_palette_from_image(img: &image::DynamicImage) -> Vec<String> {
         }
     }
 
-    pxs.sort_by(|a, b| b.sat.cmp(&a.sat));
+    pxs.sort_by_key(|pixel| std::cmp::Reverse(pixel.sat));
 
     let mut chosen: Vec<usize> = Vec::new();
     for (i, p) in pxs.iter().enumerate() {
@@ -216,7 +216,7 @@ pub(crate) async fn get_track_cover(
         if let Some(ref b64_str) = result {
             if let Some(comma_idx) = b64_str.find(',') {
                 if let Ok(bytes) = general_purpose::STANDARD.decode(&b64_str[comma_idx + 1..]) {
-                    if let Some(tagged_file) = lofty::read_from_path(&path_buf).ok() {
+                    if let Ok(tagged_file) = lofty::read_from_path(&path_buf) {
                         if let Some(tag) = tagged_file
                             .primary_tag()
                             .or_else(|| tagged_file.first_tag())
@@ -306,7 +306,7 @@ pub(crate) async fn get_track_cover_path(
         // 3. Since we generated the thumbnail/cover, save it to the DB if we can find its album/artist
         if let Some(ref thumb_path_str) = result {
             if let Ok(thumb_bytes) = fs::read(thumb_path_str) {
-                if let Some(tagged_file) = lofty::read_from_path(&path_buf).ok() {
+                if let Ok(tagged_file) = lofty::read_from_path(&path_buf) {
                     if let Some(tag) = tagged_file
                         .primary_tag()
                         .or_else(|| tagged_file.first_tag())

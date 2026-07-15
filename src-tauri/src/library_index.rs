@@ -20,6 +20,7 @@ use crate::{allow_root, is_audio_file, parse_metadata, MusicTrack};
 // Metadata objects (and their tag-reader allocations) are released after every
 // transaction rather than accumulating for the entire library.
 const INDEX_BATCH_SIZE: usize = 96;
+const _: () = assert!(INDEX_BATCH_SIZE > 0 && INDEX_BATCH_SIZE <= 256);
 
 pub(crate) struct LibraryIndexState {
     pub(crate) job: Mutex<()>,
@@ -264,13 +265,7 @@ pub(crate) fn index_watcher_paths(
 mod tests {
     use std::path::PathBuf;
 
-    use super::{compact_changed_paths, INDEX_BATCH_SIZE};
-
-    #[test]
-    fn indexing_uses_a_bounded_nonzero_batch() {
-        assert!(INDEX_BATCH_SIZE > 0);
-        assert!(INDEX_BATCH_SIZE <= 256);
-    }
+    use super::compact_changed_paths;
 
     #[test]
     fn watcher_paths_collapse_children_under_a_changed_directory() {

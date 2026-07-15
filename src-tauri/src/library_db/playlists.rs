@@ -7,9 +7,17 @@ use tauri::State;
 use crate::MusicTrack;
 
 use super::{
-    collect_tracks, library_fingerprint, now_ms, smart_eval, Db, OptionalString, PlaylistRow,
-    RecentRow, TRACK_COLS_T,
+    collect_tracks, library_fingerprint, now_ms, smart_count, smart_eval, Db, OptionalString,
+    PlaylistRow, RecentRow, TRACK_COLS_T,
 };
+
+type SmartPlaylistDefinition = (
+    i64,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<i64>,
+);
 
 // ---- Favorites --------------------------------------------------------------
 
@@ -158,14 +166,7 @@ pub fn db_playlists(db: State<Db>) -> Result<Vec<PlaylistRow>, String> {
                 continue;
             }
         }
-        let n = smart_eval(
-            &conn,
-            rules,
-            pl.sort_by.as_deref().unwrap_or("none"),
-            pl.sort_order.as_deref().unwrap_or("asc"),
-            pl.limit_n.unwrap_or(0),
-        )?
-        .len() as i64;
+        let n = smart_count(&conn, rules, pl.limit_n.unwrap_or(0))?;
         cache.insert(pl.id.clone(), (fp, rules_json, n));
         pl.track_count = n;
     }
@@ -176,13 +177,7 @@ pub fn db_playlists(db: State<Db>) -> Result<Vec<PlaylistRow>, String> {
 #[tauri::command]
 pub fn db_playlist_tracks(db: State<Db>, id: String) -> Result<Vec<MusicTrack>, String> {
     let conn = db.0.lock();
-    let smart: Option<(
-        i64,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<i64>,
-    )> = conn
+    let smart: Option<SmartPlaylistDefinition> = conn
         .query_row(
             "SELECT is_smart, rules, sort_by, sort_order, limit_n FROM playlists WHERE id = ?1",
             params![id],
