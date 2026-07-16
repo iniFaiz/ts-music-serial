@@ -1,31 +1,22 @@
 <script setup>
 import { ref, computed, watch } from 'vue';
 import { store } from '../store';
-import { invoke } from '@tauri-apps/api/core';
 import { useRouter } from 'vue-router';
 import CoverImage from '../components/CoverImage.vue';
 import LibraryGridSkeleton from '../components/LibraryGridSkeleton.vue';
 import { navigateWithTransition } from '../viewTransition';
 import { useQuery } from '../useLibraryData';
+import { fetchArtists, fetchArtistTracks } from '../libraryQueries';
 
 defineOptions({ name: 'ArtistsView' });
 
 const router = useRouter();
 
 // Artists grouped in SQLite (GROUP BY), mapped to the card shape the template uses.
-const { data: artists, loading } = useQuery(
-  async () => {
-    const rows = await invoke('db_artists', { search: null });
-    return rows.map((r) => ({
-      name: r.artist,
-      count: r.track_count,
-      albums: r.album_count,
-      coverPath: r.cover_path,
-      lastPlayed: r.last_played,
-    }));
-  },
-  { initial: [] }
-);
+const { data: artists, loading } = useQuery(fetchArtists, {
+  initial: [],
+  cacheKey: 'artists',
+});
 
 const searchQuery = ref('');
 const sortBy = ref('name');
@@ -76,7 +67,7 @@ function openArtist(artistName, event) {
 }
 
 async function playArtist(artistName) {
-  const songs = await invoke('db_artist_tracks', { artist: artistName });
+  const songs = await fetchArtistTracks(artistName);
   if (songs.length > 0) {
     store.recordRecent('artist', artistName);
     store.playSong(songs[0], songs);

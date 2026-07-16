@@ -1,32 +1,22 @@
 <script setup>
 import { ref, computed, watch } from 'vue';
 import { store } from '../store';
-import { invoke } from '@tauri-apps/api/core';
 import { useRouter } from 'vue-router';
 import CoverImage from '../components/CoverImage.vue';
 import LibraryGridSkeleton from '../components/LibraryGridSkeleton.vue';
 import { navigateWithTransition } from '../viewTransition';
 import { useQuery } from '../useLibraryData';
+import { fetchAlbums, fetchAlbumTracks } from '../libraryQueries';
 
 defineOptions({ name: 'AlbumsView' });
 
 const router = useRouter();
 
 // Albums grouped in SQLite (GROUP BY), mapped to the card shape the template uses.
-const { data: albums, loading } = useQuery(
-  async () => {
-    const rows = await invoke('db_albums', { search: null });
-    return rows.map((r) => ({
-      name: r.album,
-      artist: r.artist,
-      count: r.track_count,
-      coverPath: r.cover_path,
-      lastPlayed: r.last_played,
-      allArtists: r.all_artists,
-    }));
-  },
-  { initial: [] }
-);
+const { data: albums, loading } = useQuery(fetchAlbums, {
+  initial: [],
+  cacheKey: 'albums',
+});
 
 const searchQuery = ref('');
 const sortBy = ref('name');
@@ -84,7 +74,7 @@ function openAlbum(albumName, event) {
 
 async function playAlbum(albumName) {
   store.selectedAlbum = albumName;
-  const songs = await invoke('db_album_tracks', { album: albumName });
+  const songs = await fetchAlbumTracks(albumName);
   if (songs.length > 0) {
     store.recordRecent('album', albumName);
     store.playSong(songs[0], songs);

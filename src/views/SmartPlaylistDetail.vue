@@ -1,26 +1,26 @@
 <script setup>
 import { computed, ref, onMounted, onUnmounted } from 'vue';
-import { invoke } from '@tauri-apps/api/core';
 import { useRoute, useRouter } from 'vue-router';
 import { store } from '../store';
 import SongList from '../components/SongList.vue';
 import PlaylistCover from '../components/PlaylistCover.vue';
 import { useQuery } from '../useLibraryData';
+import { fetchPlaylistTracks } from '../libraryQueries';
 
 const route = useRoute();
 const router = useRouter();
 
+defineOptions({ name: 'SmartPlaylistDetail' });
+
 const smartId = computed(() => route.params.id);
 const sp = computed(() => store.getSmartPlaylist(smartId.value));
 // Evaluated matches, fetched from the DB; re-runs on library/stats changes.
-const { data: songs, loading } = useQuery(
-  () => invoke('db_playlist_tracks', { id: smartId.value }),
-  {
-    deps: [() => smartId.value],
-    watchStats: true,
-    initial: [],
-  }
-);
+const { data: songs, loading } = useQuery(() => fetchPlaylistTracks(smartId.value), {
+  deps: [() => store.playlistsVersion, () => smartId.value],
+  watchStats: true,
+  initial: [],
+  cacheKey: () => `playlist:${smartId.value}`,
+});
 
 const playAll = () => {
   if (songs.value.length > 0) {

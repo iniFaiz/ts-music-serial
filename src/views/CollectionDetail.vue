@@ -10,6 +10,8 @@ import SmartCover from '../components/SmartCover.vue';
 
 const route = useRoute();
 
+defineOptions({ name: 'CollectionDetail' });
+
 // Only carry the shared-element cover name when this page was opened from a cover
 // card (Top Picks / recent card). Header "see all" links clear the morph key, so
 // those opens/closes just cross-fade instead of morphing into an unrelated card.
@@ -21,7 +23,12 @@ const collection = computed(() => getCollection(route.params.key));
 // Fetch the collection's live tracks from the DB; refetch on library/stats change.
 const { data: songs, loading } = useQuery(
   () => (collection.value ? collection.value.fetch(store) : Promise.resolve([])),
-  { deps: [() => route.params.key], watchStats: true, initial: [] }
+  {
+    deps: [() => route.params.key],
+    watchStats: true,
+    initial: [],
+    cacheKey: () => `collection:${route.params.key}`,
+  }
 );
 
 const playAll = () => {

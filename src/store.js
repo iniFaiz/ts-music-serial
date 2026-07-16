@@ -64,10 +64,11 @@ function isUnderRoot(filePath, root) {
 export const store = reactive({
   // Query-driven library: the full track list lives in SQLite (Rust), not here.
   // Views fetch what they render via db_* commands and re-run whenever these
-  // counters bump. `libraryVersion` = structural changes (tracks / favorites /
-  // playlists); `statsVersion` = play-count / last-played updates (so Home
-  // insights refresh without forcing every list to reload).
+  // counters bump. Track, favorite, playlist and statistics changes have
+  // separate versions so an unrelated mutation does not reload every view.
   libraryVersion: 0,
+  favoritesVersion: 0,
+  playlistsVersion: 0,
   statsVersion: 0,
   libraryReady: false,
   roots: [],
@@ -219,10 +220,17 @@ export const store = reactive({
 
   // ---- Query-driven library helpers --------------------------------------
 
-  // Bump the structural version so every useQuery view refetches. Call after any
-  // change to tracks / favorites / playlists.
+  // Track-library changes can affect every query (including favorites and smart
+  // playlists), while like/playlist-only changes use narrower counters so the
+  // Songs, Albums and Artists tabs are not needlessly queried again.
   bumpLibrary() {
     this.libraryVersion++;
+  },
+  bumpFavorites() {
+    this.favoritesVersion++;
+  },
+  bumpPlaylists() {
+    this.playlistsVersion++;
   },
   // Bump the stats version (Home insights) so play/skip accounting doesn't force
   // every track list in the app to reload. Debounced: a burst of plays/skips
@@ -348,8 +356,9 @@ export const store = reactive({
         await this.migrateFromIndexedDb();
       }
 
-      this.roots = await invoke('db_roots');
-      this.scanCount = await invoke('db_count');
+      const [roots, count] = await Promise.all([invoke('db_roots'), invoke('db_count')]);
+      this.roots = roots;
+      this.scanCount = count;
 
       if (this.roots.length > 0) {
         try {
@@ -368,9 +377,7 @@ export const store = reactive({
 
       // Load the small synchronous caches (favorite paths, playlist metadata,
       // recents), then restore settings + the last playback session.
-      await this.refreshFavorites();
-      await this.refreshPlaylists();
-      await this.refreshRecents();
+      await Promise.all([this.refreshFavorites(), this.refreshPlaylists(), this.refreshRecents()]);
       this.refreshMusixmatchStatus();
       this.libraryReady = true;
       this.bumpLibrary();
@@ -1538,7 +1545,7 @@ export const store = reactive({
     } catch (e) {
       console.error('Failed to toggle favorite', e);
     }
-    this.bumpLibrary();
+    this.bumpFavorites();
   },
 
   async moveInFavorites(from, to) {
@@ -1552,7 +1559,7 @@ export const store = reactive({
     } catch (e) {
       console.error('Failed to reorder favorites', e);
     }
-    this.bumpLibrary();
+    this.bumpFavorites();
   },
 
   // ---- Playlists --------------------------------------------------------
@@ -1592,7 +1599,7 @@ export const store = reactive({
       rules: null,
     });
     await this.refreshPlaylists();
-    this.bumpLibrary();
+    this.bumpPlaylists();
     return this.getPlaylist(id);
   },
 
@@ -1648,7 +1655,7 @@ export const store = reactive({
       console.error('Failed to delete playlist', e);
     }
     await this.refreshPlaylists();
-    this.bumpLibrary();
+    this.bumpPlaylists();
   },
 
   async renamePlaylist(id, name) {
@@ -1656,7 +1663,7 @@ export const store = reactive({
     if (pl && name && name.trim()) {
       pl.name = name.trim();
       await this._savePlaylist(pl);
-      this.bumpLibrary();
+      this.bumpPlaylists();
     }
   },
 
@@ -1667,7 +1674,7 @@ export const store = reactive({
     pl.description = (description || '').trim();
     if (cover !== undefined) pl.cover = cover;
     await this._savePlaylist(pl);
-    this.bumpLibrary();
+    this.bumpPlaylists();
   },
 
   getPlaylist(id) {
@@ -1695,7 +1702,7 @@ export const store = reactive({
       console.error('Failed to add to playlist', e);
     }
     await this.refreshPlaylists();
-    this.bumpLibrary();
+    this.bumpPlaylists();
   },
 
   async removeFromPlaylist(id, path) {
@@ -1705,7 +1712,7 @@ export const store = reactive({
       console.error('Failed to remove from playlist', e);
     }
     await this.refreshPlaylists();
-    this.bumpLibrary();
+    this.bumpPlaylists();
   },
 
   async moveInPlaylist(id, from, to) {
@@ -1715,7 +1722,7 @@ export const store = reactive({
     } catch (e) {
       console.error('Failed to reorder playlist', e);
     }
-    this.bumpLibrary();
+    this.bumpPlaylists();
   },
 
   async deleteSong(path) {
@@ -2028,7 +2035,7 @@ export const store = reactive({
       live_update: sp.liveUpdate,
     });
     await this.refreshPlaylists();
-    this.bumpLibrary();
+    this.bumpPlaylists();
     return this.getPlaylist(sp.id);
   },
 
@@ -2049,7 +2056,7 @@ export const store = reactive({
       live_update: data.liveUpdate ?? pl.live_update,
     });
     await this.refreshPlaylists();
-    this.bumpLibrary();
+    this.bumpPlaylists();
   },
 
   async deleteSmartPlaylist(id) {
@@ -2059,7 +2066,7 @@ export const store = reactive({
       console.error('Failed to delete smart playlist', e);
     }
     await this.refreshPlaylists();
-    this.bumpLibrary();
+    this.bumpPlaylists();
   },
 
   openSmartModal(mode = 'create', smartId = null) {

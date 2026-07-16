@@ -1,8 +1,9 @@
 <script setup>
 import { ref, watch } from 'vue';
 import { store } from '../store';
-import { invoke } from '@tauri-apps/api/core';
 import SongList from '../components/SongList.vue';
+import { getCachedQuery, prefetchQuery } from '../useLibraryData';
+import { TRACK_PAGE_SIZE, fetchTracksPage, tracksPageCacheKey } from '../libraryQueries';
 
 defineOptions({ name: 'SongsView' });
 
@@ -10,7 +11,7 @@ defineOptions({ name: 'SongsView' });
 // FTS-filtered server-side) and append as the user scrolls, instead of loading
 // the entire library into memory. SongList runs in `server-sort` mode so its
 // column headers refetch rather than sorting the partial array.
-const PAGE = 300;
+const PAGE = TRACK_PAGE_SIZE;
 const songs = ref([]);
 const total = ref(0);
 const loading = ref(false);
@@ -50,15 +51,30 @@ async function loadPage(reset = false) {
   }
   const fetchOffset = reset ? 0 : offset.value;
   const myToken = reset ? ++reqToken : reqToken;
-  loading.value = true;
+  const params = {
+    sortBy: sortBy.value,
+    order: order.value,
+    search: search.value,
+    offset: fetchOffset,
+    limit: PAGE,
+  };
+  const cacheKey = reset ? tracksPageCacheKey(params) : null;
+  const cached = cacheKey ? getCachedQuery(cacheKey) : undefined;
+
+  // Route prefetching normally places the first page here before this component
+  // mounts. Adopt it synchronously, so the first render already contains songs.
+  if (reset && cached !== undefined) {
+    total.value = cached.total;
+    songs.value = cached.tracks;
+    offset.value = cached.tracks.length;
+    loading.value = false;
+  } else {
+    loading.value = true;
+  }
   try {
-    const page = await invoke('db_tracks_page', {
-      sortBy: sortBy.value,
-      order: order.value,
-      search: search.value || null,
-      offset: fetchOffset,
-      limit: PAGE,
-    });
+    const page = reset
+      ? await prefetchQuery(() => fetchTracksPage(params), { cacheKey })
+      : await fetchTracksPage(params);
     // A newer reset superseded this request — drop its (stale) results. Crucially,
     // we only ever swap in the new list *after* it arrives, so the previous
     // results stay on screen (no flash of the "No songs found" empty state).

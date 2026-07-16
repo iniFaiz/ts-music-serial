@@ -16,6 +16,18 @@ import FullScreenPlayer from './components/FullScreenPlayer.vue';
 import MiniPlayer from './components/MiniPlayer.vue';
 import LyricsPanel from './components/LyricsPanel.vue';
 import { navigateWithTransition, smartBack, goForwardWithTransition } from './viewTransition';
+import { prefetchQuery } from './useLibraryData';
+import {
+  fetchAlbums,
+  fetchAlbumTracks,
+  fetchArtists,
+  fetchArtistTracks,
+  fetchFavorites,
+  fetchPlaylistTracks,
+  fetchTracksPage,
+  tracksPageCacheKey,
+} from './libraryQueries';
+import { getCollection } from './collections';
 
 const router = useRouter();
 
@@ -194,6 +206,39 @@ const scrollContainer = ref(null);
 const scrollPositions = new Map();
 const horizontalScrollPositions = new Map();
 
+function firstTracksPage() {
+  const params = {
+    sortBy: 'title',
+    order: 'asc',
+    search: store.searchQuery || '',
+    offset: 0,
+  };
+  return prefetchQuery(() => fetchTracksPage(params), {
+    cacheKey: tracksPageCacheKey(params),
+  });
+}
+
+// Start the common local SQLite reads as soon as startup state is available.
+// In normal use these finish while Home is visible, before the user clicks a
+// library tab. Promise sharing in useLibraryData also prevents duplicate reads
+// if navigation happens at the same time.
+watch(
+  () => store.libraryReady,
+  (ready) => {
+    if (!ready) return;
+    Promise.allSettled([
+      firstTracksPage(),
+      prefetchQuery(fetchAlbums, { cacheKey: 'albums' }),
+      prefetchQuery(fetchArtists, { cacheKey: 'artists' }),
+      prefetchQuery(fetchFavorites, {
+        cacheKey: 'favorites',
+        deps: [store.favoritesVersion],
+      }),
+    ]);
+  },
+  { immediate: true }
+);
+
 router.beforeEach((to, from) => {
   if (scrollContainer.value) {
     const container =
@@ -214,6 +259,59 @@ router.beforeEach((to, from) => {
     });
     horizontalScrollPositions.set(from.fullPath, horizPos);
   }
+});
+
+// A route can still be clicked before the background warm-up finishes. Wait for
+// that route's small local query before swapping the page, so users see the
+// completed list instead of a loading screen. Errors are left to the view's
+// normal query handling rather than cancelling navigation.
+router.beforeResolve(async (to) => {
+  if (!store.libraryReady) return;
+  let request = null;
+
+  if (to.path === '/songs') {
+    request = firstTracksPage();
+  } else if (to.path === '/albums') {
+    request = prefetchQuery(fetchAlbums, { cacheKey: 'albums' });
+  } else if (to.path === '/artists') {
+    request = prefetchQuery(fetchArtists, { cacheKey: 'artists' });
+  } else if (to.name === 'Favorites') {
+    request = prefetchQuery(fetchFavorites, {
+      cacheKey: 'favorites',
+      deps: [store.favoritesVersion],
+    });
+  } else if (to.name === 'AlbumDetail') {
+    const name = String(to.params.name || '');
+    request = prefetchQuery(() => fetchAlbumTracks(name), { cacheKey: `album:${name}` });
+  } else if (to.name === 'ArtistDetail') {
+    const name = String(to.params.name || '');
+    request = prefetchQuery(() => fetchArtistTracks(name), { cacheKey: `artist:${name}` });
+  } else if (to.name === 'PlaylistDetail') {
+    const id = String(to.params.id || '');
+    request = prefetchQuery(() => fetchPlaylistTracks(id), {
+      cacheKey: `playlist:${id}`,
+      deps: [store.playlistsVersion, id],
+    });
+  } else if (to.name === 'SmartPlaylistDetail') {
+    const id = String(to.params.id || '');
+    request = prefetchQuery(() => fetchPlaylistTracks(id), {
+      cacheKey: `playlist:${id}`,
+      deps: [store.playlistsVersion, id],
+      watchStats: true,
+    });
+  } else if (to.name === 'CollectionDetail') {
+    const key = String(to.params.key || '');
+    const collection = getCollection(key);
+    if (collection) {
+      request = prefetchQuery(() => collection.fetch(store), {
+        cacheKey: `collection:${key}`,
+        deps: [key],
+        watchStats: true,
+      });
+    }
+  }
+
+  if (request) await request.catch(() => {});
 });
 
 router.afterEach((to) => {
@@ -913,7 +1011,16 @@ const navigatePlaylist = (pl, event) => {
             "
           >
             <router-view v-slot="{ Component }">
-              <keep-alive :include="['HomeView', 'SongsView', 'AlbumsView', 'ArtistsView']">
+              <keep-alive
+                :include="[
+                  'HomeView',
+                  'SongsView',
+                  'AlbumsView',
+                  'ArtistsView',
+                  'PlaylistsView',
+                  'FavoritesView',
+                ]"
+              >
                 <component :is="Component" :key="$route.fullPath" />
               </keep-alive>
             </router-view>

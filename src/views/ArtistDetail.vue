@@ -1,22 +1,21 @@
 <script setup>
 import { computed } from 'vue';
-import { invoke } from '@tauri-apps/api/core';
 import { useRoute } from 'vue-router';
 import { store } from '../store';
 import SongList from '../components/SongList.vue';
 import CoverImage from '../components/CoverImage.vue';
 import { useQuery } from '../useLibraryData';
+import { fetchArtistTracks } from '../libraryQueries';
 
 const route = useRoute();
+defineOptions({ name: 'ArtistDetail' });
 const artistName = route.params.name;
 
 // Artist tracks, ordered by album then track number in SQL.
-const { data: artistSongs, loading } = useQuery(
-  () => invoke('db_artist_tracks', { artist: artistName }),
-  {
-    initial: [],
-  }
-);
+const { data: artistSongs, loading } = useQuery(() => fetchArtistTracks(artistName), {
+  initial: [],
+  cacheKey: `artist:${artistName}`,
+});
 
 const representativePath = computed(() => {
   const withCover = artistSongs.value.find((s) => s.has_cover);

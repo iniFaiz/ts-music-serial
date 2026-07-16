@@ -7,21 +7,22 @@ import SongList from '../components/SongList.vue';
 import PlaylistCover from '../components/PlaylistCover.vue';
 import CoverImage from '../components/CoverImage.vue';
 import { useQuery } from '../useLibraryData';
+import { fetchPlaylistTracks } from '../libraryQueries';
 
 const route = useRoute();
 const router = useRouter();
+
+defineOptions({ name: 'PlaylistDetail' });
 
 const playlistId = computed(() => route.params.id);
 const playlist = computed(() => store.getPlaylist(playlistId.value));
 // Playlist tracks (in order) fetched from the DB; re-runs on library changes or
 // when the route id changes.
-const { data: songs, loading } = useQuery(
-  () => invoke('db_playlist_tracks', { id: playlistId.value }),
-  {
-    deps: [() => playlistId.value],
-    initial: [],
-  }
-);
+const { data: songs, loading } = useQuery(() => fetchPlaylistTracks(playlistId.value), {
+  deps: [() => store.playlistsVersion, () => playlistId.value],
+  initial: [],
+  cacheKey: () => `playlist:${playlistId.value}`,
+});
 
 const suggestedSongs = ref([]);
 

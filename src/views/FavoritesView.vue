@@ -1,12 +1,17 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue';
-import { invoke } from '@tauri-apps/api/core';
 import { store } from '../store';
 import SongList from '../components/SongList.vue';
 import { useQuery } from '../useLibraryData';
+import { fetchFavorites } from '../libraryQueries';
 
 // Liked songs, in saved order, fetched from the DB (re-runs when favorites change).
-const { data: songs, loading } = useQuery(() => invoke('db_favorites'), { initial: [] });
+defineOptions({ name: 'FavoritesView' });
+const { data: songs, loading } = useQuery(fetchFavorites, {
+  initial: [],
+  cacheKey: 'favorites',
+  deps: [() => store.favoritesVersion],
+});
 
 const playAll = () => {
   if (songs.value.length > 0) store.playSong(songs.value[0], songs.value);
