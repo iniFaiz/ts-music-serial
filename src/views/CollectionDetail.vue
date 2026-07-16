@@ -19,7 +19,7 @@ const morphable = ref(getMorphCollectionKey() === route.params.key);
 
 const collection = computed(() => getCollection(route.params.key));
 // Fetch the collection's live tracks from the DB; refetch on library/stats change.
-const { data: songs } = useQuery(
+const { data: songs, loading } = useQuery(
   () => (collection.value ? collection.value.fetch(store) : Promise.resolve([])),
   { deps: [() => route.params.key], watchStats: true, initial: [] }
 );
@@ -60,13 +60,13 @@ const shuffleAll = () => {
         <h1 class="text-4xl font-bold tracking-tight text-white">{{ collection.title }}</h1>
         <p class="text-sm text-[var(--text-secondary)] mt-2">{{ collection.subtitle }}</p>
         <p class="text-xs text-[var(--text-secondary)] font-medium mt-2">
-          {{ songs.length }} songs
+          {{ loading ? 'Loading songs…' : `${songs.length} songs` }}
         </p>
 
         <div class="flex flex-wrap gap-3 mt-6 items-center">
           <button
             @click="playAll"
-            :disabled="songs.length === 0"
+            :disabled="loading || songs.length === 0"
             class="bg-[var(--accent-color)] text-white px-8 py-2 rounded-[4px] text-sm font-semibold hover:bg-red-500 transition flex items-center gap-2 shadow-lg disabled:opacity-40"
           >
             <svg
@@ -83,7 +83,7 @@ const shuffleAll = () => {
           </button>
           <button
             @click="shuffleAll"
-            :disabled="songs.length === 0"
+            :disabled="loading || songs.length === 0"
             class="bg-[#3a3a3a] text-[var(--accent-color)] px-8 py-2 rounded-[4px] text-sm font-semibold hover:bg-[#444] transition flex items-center gap-2 shadow-lg disabled:opacity-40"
           >
             <svg
@@ -106,7 +106,7 @@ const shuffleAll = () => {
     </div>
 
     <div class="px-2 pb-12">
-      <SongList v-if="songs.length > 0" :songs="songs" />
+      <SongList v-if="loading || songs.length > 0" :songs="songs" :loading="loading" />
       <div v-else class="py-16 px-6 text-center text-gray-500">
         <div class="text-4xl mb-3 opacity-20">♫</div>
         <p class="text-sm font-medium text-white/80">Nothing here yet.</p>

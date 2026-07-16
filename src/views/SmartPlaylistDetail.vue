@@ -13,11 +13,14 @@ const router = useRouter();
 const smartId = computed(() => route.params.id);
 const sp = computed(() => store.getSmartPlaylist(smartId.value));
 // Evaluated matches, fetched from the DB; re-runs on library/stats changes.
-const { data: songs } = useQuery(() => invoke('db_playlist_tracks', { id: smartId.value }), {
-  deps: [() => smartId.value],
-  watchStats: true,
-  initial: [],
-});
+const { data: songs, loading } = useQuery(
+  () => invoke('db_playlist_tracks', { id: smartId.value }),
+  {
+    deps: [() => smartId.value],
+    watchStats: true,
+    initial: [],
+  }
+);
 
 const playAll = () => {
   if (songs.value.length > 0) {
@@ -62,7 +65,15 @@ onUnmounted(() => window.removeEventListener('click', closeMenu));
 </script>
 
 <template>
-  <div v-if="sp" class="flex flex-col h-full overflow-auto">
+  <div
+    v-if="!store.libraryReady"
+    class="h-full flex items-center justify-center text-sm text-gray-500"
+    role="status"
+  >
+    <span class="animate-pulse">Loading playlist…</span>
+  </div>
+
+  <div v-else-if="sp" class="flex flex-col h-full overflow-auto">
     <!-- Header -->
     <div class="p-8 flex gap-8 items-end bg-gradient-to-b from-[#2a2a2a] to-[var(--app-bg)]">
       <PlaylistCover
@@ -97,13 +108,13 @@ onUnmounted(() => window.removeEventListener('click', closeMenu));
           {{ sp.description }}
         </p>
         <p class="text-xs text-[var(--text-secondary)] font-medium mt-2">
-          {{ songs.length }} songs
+          {{ loading ? 'Loading songs…' : `${songs.length} songs` }}
         </p>
 
         <div class="flex gap-3 mt-6 items-center">
           <button
             @click="playAll"
-            :disabled="songs.length === 0"
+            :disabled="loading || songs.length === 0"
             class="bg-[var(--accent-color)] text-white px-8 py-2 rounded-[4px] text-sm font-semibold hover:bg-red-500 transition flex items-center gap-2 shadow-lg disabled:opacity-40"
           >
             <svg
@@ -120,7 +131,7 @@ onUnmounted(() => window.removeEventListener('click', closeMenu));
           </button>
           <button
             @click="shuffleAll"
-            :disabled="songs.length === 0"
+            :disabled="loading || songs.length === 0"
             class="bg-[#3a3a3a] text-[var(--accent-color)] px-8 py-2 rounded-[4px] text-sm font-semibold hover:bg-[#444] transition flex items-center gap-2 shadow-lg disabled:opacity-40"
           >
             <svg
@@ -173,14 +184,14 @@ onUnmounted(() => window.removeEventListener('click', closeMenu));
           </button>
           <button
             @click="playNext"
-            :disabled="songs.length === 0"
+            :disabled="loading || songs.length === 0"
             class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors disabled:opacity-40"
           >
             Play next
           </button>
           <button
             @click="playLast"
-            :disabled="songs.length === 0"
+            :disabled="loading || songs.length === 0"
             class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors disabled:opacity-40"
           >
             Play last
@@ -197,7 +208,7 @@ onUnmounted(() => window.removeEventListener('click', closeMenu));
     </div>
 
     <div class="px-2 pb-12">
-      <SongList v-if="songs.length > 0" :songs="songs" />
+      <SongList v-if="loading || songs.length > 0" :songs="songs" :loading="loading" />
       <div v-else class="py-16 px-6 text-center text-gray-500">
         <div class="text-4xl mb-3 opacity-20">⚡</div>
         <p class="text-sm font-medium text-white/80">No songs match these rules yet.</p>

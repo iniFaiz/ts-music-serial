@@ -40,6 +40,10 @@ watch(
 let reqToken = 0;
 
 async function loadPage(reset = false) {
+  if (!store.libraryReady) {
+    loading.value = true;
+    return;
+  }
   if (!reset && loading.value) return;
   if (!reset && total.value > 0 && songs.value.length >= total.value) {
     return; // everything loaded
@@ -74,9 +78,13 @@ async function loadPage(reset = false) {
 }
 
 // Reset + reload when the library, search, or sort changes.
-watch([() => store.libraryVersion, search, sortBy, order], () => loadPage(true), {
-  immediate: true,
-});
+watch(
+  [() => store.libraryReady, () => store.libraryVersion, search, sortBy, order],
+  () => loadPage(true),
+  {
+    immediate: true,
+  }
+);
 
 function onScroll() {
   const el = scrollEl.value;

@@ -1006,7 +1006,31 @@ onUnmounted(() => {
       </div>
     </component>
 
-    <div v-if="songs.length === 0 && !loading" class="p-20 text-center text-gray-600">
+    <div
+      v-if="songs.length === 0 && loading"
+      class="space-y-0.5"
+      role="status"
+      aria-live="polite"
+      aria-label="Loading songs"
+    >
+      <div
+        v-for="index in 6"
+        :key="index"
+        class="grid gap-4 py-2 px-2 items-center animate-pulse grid-cols-[20px_3fr_2fr_2fr_120px] 2xl:grid-cols-[30px_4fr_3fr_3fr_120px]"
+      >
+        <div class="h-3 w-3 rounded bg-[#282828] mx-auto"></div>
+        <div class="flex items-center gap-3">
+          <div class="h-10 w-10 2xl:h-9 2xl:w-9 rounded-[4px] bg-[#303030] shrink-0"></div>
+          <div class="h-3 w-2/3 rounded bg-[#303030]"></div>
+        </div>
+        <div class="h-3 w-1/2 rounded bg-[#282828]"></div>
+        <div class="h-3 w-1/2 rounded bg-[#282828]"></div>
+        <div class="h-3 w-10 rounded bg-[#282828] ml-auto"></div>
+      </div>
+      <span class="sr-only">Loading songs…</span>
+    </div>
+
+    <div v-else-if="songs.length === 0" class="p-20 text-center text-gray-600">
       <div class="text-4xl mb-4 opacity-20">♫</div>
       <p>No songs found.</p>
     </div>

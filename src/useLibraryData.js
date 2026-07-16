@@ -13,28 +13,54 @@ import { store } from './store';
 //   deps     – extra reactive getters to watch (e.g. () => route.params.name)
 //   initial  – value held until the first fetch resolves
 //   watchStats – also reload when play stats change (Home insights)
-export function useQuery(fetcher, { deps = [], initial = null, watchStats = false } = {}) {
+//   waitForReady – defer the first query until the SQLite library is initialized
+export function useQuery(
+  fetcher,
+  { deps = [], initial = null, watchStats = false, waitForReady = true } = {}
+) {
   const data = ref(initial);
   const loading = ref(true);
+  const error = ref(null);
   let token = 0;
+  let hasResolved = false;
 
   async function run() {
+    // Views are mounted while store.loadLibrary() is still restoring/migrating
+    // the SQLite library. Querying during that window can legitimately return an
+    // empty result, which used to be rendered as a real empty library before the
+    // libraryVersion bump triggered a second query.
+    if (waitForReady && !store.libraryReady) {
+      token++;
+      loading.value = true;
+      return;
+    }
+
     const mine = ++token;
     loading.value = true;
+    error.value = null;
     try {
       const result = await fetcher();
-      if (mine === token) data.value = result;
+      if (mine === token) {
+        data.value = result;
+        hasResolved = true;
+      }
     } catch (e) {
       console.error('Library query failed', e);
-      if (mine === token) data.value = initial;
+      if (mine === token) {
+        error.value = e;
+        // Keep a previously successful result visible when a background refresh
+        // fails instead of briefly replacing the page with an empty state.
+        if (!hasResolved) data.value = initial;
+      }
     } finally {
       if (mine === token) loading.value = false;
     }
   }
 
   const sources = [() => store.libraryVersion, ...deps];
+  if (waitForReady) sources.unshift(() => store.libraryReady);
   if (watchStats) sources.push(() => store.statsVersion);
   watch(sources, run, { immediate: true });
 
-  return { data, loading, refresh: run };
+  return { data, loading, error, refresh: run };
 }

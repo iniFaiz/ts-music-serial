@@ -6,7 +6,7 @@ import SongList from '../components/SongList.vue';
 import { useQuery } from '../useLibraryData';
 
 // Liked songs, in saved order, fetched from the DB (re-runs when favorites change).
-const { data: songs } = useQuery(() => invoke('db_favorites'), { initial: [] });
+const { data: songs, loading } = useQuery(() => invoke('db_favorites'), { initial: [] });
 
 const playAll = () => {
   if (songs.value.length > 0) store.playSong(songs.value[0], songs.value);
@@ -77,13 +77,13 @@ const playLastFavorites = () => {
         </h4>
         <h1 class="text-5xl font-bold tracking-tight text-white">Liked Songs</h1>
         <p class="text-xs text-[var(--text-secondary)] font-medium mt-2">
-          {{ songs.length }} songs
+          {{ loading ? 'Loading songs…' : `${songs.length} songs` }}
         </p>
 
         <div class="flex gap-3 mt-6 items-center">
           <button
             @click="playAll"
-            :disabled="songs.length === 0"
+            :disabled="loading || songs.length === 0"
             class="bg-[var(--accent-color)] text-white px-8 py-2 rounded-[4px] text-sm font-semibold hover:bg-red-500 transition flex items-center gap-2 shadow-lg disabled:opacity-40"
           >
             <svg
@@ -101,7 +101,7 @@ const playLastFavorites = () => {
 
           <button
             @click="shuffleFavorites"
-            :disabled="songs.length === 0"
+            :disabled="loading || songs.length === 0"
             class="bg-[#3a3a3a] text-[var(--accent-color)] px-8 py-2 rounded-[4px] text-sm font-semibold hover:bg-[#444] transition flex items-center gap-2 shadow-lg disabled:opacity-40"
           >
             <svg
@@ -150,28 +150,28 @@ const playLastFavorites = () => {
         >
           <button
             @click="playAll"
-            :disabled="songs.length === 0"
+            :disabled="loading || songs.length === 0"
             class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors disabled:opacity-40"
           >
             Play "Liked Songs"
           </button>
           <button
             @click="shuffleFavorites"
-            :disabled="songs.length === 0"
+            :disabled="loading || songs.length === 0"
             class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors disabled:opacity-40"
           >
             Shuffle "Liked Songs"
           </button>
           <button
             @click="playNextFavorites"
-            :disabled="songs.length === 0"
+            :disabled="loading || songs.length === 0"
             class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors disabled:opacity-40"
           >
             Play next
           </button>
           <button
             @click="playLastFavorites"
-            :disabled="songs.length === 0"
+            :disabled="loading || songs.length === 0"
             class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors disabled:opacity-40"
           >
             Play last
@@ -181,7 +181,7 @@ const playLastFavorites = () => {
     </div>
 
     <div class="px-2 pb-12">
-      <SongList :songs="songs" :is-favorites="true" />
+      <SongList :songs="songs" :is-favorites="true" :loading="loading" />
     </div>
   </div>
 </template>

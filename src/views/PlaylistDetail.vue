@@ -15,10 +15,13 @@ const playlistId = computed(() => route.params.id);
 const playlist = computed(() => store.getPlaylist(playlistId.value));
 // Playlist tracks (in order) fetched from the DB; re-runs on library changes or
 // when the route id changes.
-const { data: songs } = useQuery(() => invoke('db_playlist_tracks', { id: playlistId.value }), {
-  deps: [() => playlistId.value],
-  initial: [],
-});
+const { data: songs, loading } = useQuery(
+  () => invoke('db_playlist_tracks', { id: playlistId.value }),
+  {
+    deps: [() => playlistId.value],
+    initial: [],
+  }
+);
 
 const suggestedSongs = ref([]);
 
@@ -99,9 +102,11 @@ const getSuggestions = async () => {
 };
 
 watch(
-  [songs, () => playlistId.value],
+  [songs, () => playlistId.value, loading],
   () => {
-    getSuggestions();
+    // Waiting for the playlist query avoids a burst of random-track queries
+    // competing with the initial load and prevents suggesting existing tracks.
+    if (!loading.value) getSuggestions();
   },
   { immediate: true }
 );
@@ -122,7 +127,15 @@ const addAndRemoveFromSuggestions = (songPath) => {
 </script>
 
 <template>
-  <div v-if="playlist" class="flex flex-col h-full overflow-auto">
+  <div
+    v-if="!store.libraryReady"
+    class="h-full flex items-center justify-center text-sm text-gray-500"
+    role="status"
+  >
+    <span class="animate-pulse">Loading playlist…</span>
+  </div>
+
+  <div v-else-if="playlist" class="flex flex-col h-full overflow-auto">
     <!-- Header -->
     <div class="p-8 flex gap-8 items-end bg-gradient-to-b from-[#2a2a2a] to-[var(--app-bg)]">
       <PlaylistCover
@@ -149,13 +162,13 @@ const addAndRemoveFromSuggestions = (songPath) => {
           {{ playlist.description }}
         </p>
         <p class="text-xs text-[var(--text-secondary)] font-medium mt-2">
-          {{ songs.length }} songs
+          {{ loading ? 'Loading songs…' : `${songs.length} songs` }}
         </p>
 
         <div class="flex gap-3 mt-6 items-center">
           <button
             @click="playAll"
-            :disabled="songs.length === 0"
+            :disabled="loading || songs.length === 0"
             class="bg-[var(--accent-color)] text-white px-8 py-2 rounded-[4px] text-sm font-semibold hover:bg-red-500 transition flex items-center gap-2 shadow-lg disabled:opacity-40"
           >
             <svg
@@ -172,7 +185,7 @@ const addAndRemoveFromSuggestions = (songPath) => {
           </button>
           <button
             @click="shufflePlaylist"
-            :disabled="songs.length === 0"
+            :disabled="loading || songs.length === 0"
             class="bg-[#3a3a3a] text-[var(--accent-color)] px-8 py-2 rounded-[4px] text-sm font-semibold hover:bg-[#444] transition flex items-center gap-2 shadow-lg disabled:opacity-40"
           >
             <svg
@@ -227,28 +240,28 @@ const addAndRemoveFromSuggestions = (songPath) => {
           </button>
           <button
             @click="playAll"
-            :disabled="songs.length === 0"
+            :disabled="loading || songs.length === 0"
             class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors disabled:opacity-40"
           >
             Play "{{ playlist.name }}"
           </button>
           <button
             @click="shufflePlaylist"
-            :disabled="songs.length === 0"
+            :disabled="loading || songs.length === 0"
             class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors disabled:opacity-40"
           >
             Shuffle "{{ playlist.name }}"
           </button>
           <button
             @click="playNextPlaylist"
-            :disabled="songs.length === 0"
+            :disabled="loading || songs.length === 0"
             class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors disabled:opacity-40"
           >
             Play next
           </button>
           <button
             @click="playLastPlaylist"
-            :disabled="songs.length === 0"
+            :disabled="loading || songs.length === 0"
             class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors disabled:opacity-40"
           >
             Play last
@@ -256,7 +269,7 @@ const addAndRemoveFromSuggestions = (songPath) => {
           <div class="border-t border-[#3a3a3a] my-1"></div>
           <button
             @click="exportM3u"
-            :disabled="songs.length === 0"
+            :disabled="loading || songs.length === 0"
             class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors disabled:opacity-40"
           >
             Export as M3U…
@@ -273,7 +286,12 @@ const addAndRemoveFromSuggestions = (songPath) => {
     </div>
 
     <div class="px-2 pb-12">
-      <SongList v-if="songs.length > 0" :songs="songs" :playlist-id="playlist.id" />
+      <SongList
+        v-if="loading || songs.length > 0"
+        :songs="songs"
+        :playlist-id="playlist.id"
+        :loading="loading"
+      />
       <div v-else class="py-12 px-6 text-center text-gray-500">
         <div class="text-4xl mb-3 opacity-20">♫</div>
         <p class="text-sm font-medium text-white/80">This playlist is empty.</p>
@@ -284,7 +302,7 @@ const addAndRemoveFromSuggestions = (songPath) => {
 
       <!-- Suggested Songs Widget -->
       <div
-        v-if="songs.length < 6 && !suggestionsClosed"
+        v-if="!loading && songs.length < 6 && !suggestionsClosed"
         class="mt-10 max-w-lg mx-auto text-left bg-[#1d1d1f] border border-[#2d2d2f] rounded-xl p-5 shadow-2xl relative"
       >
         <div class="flex items-center justify-between mb-4 border-b border-[#2d2d2f] pb-3">

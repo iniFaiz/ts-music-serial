@@ -3,6 +3,7 @@ import { computed, ref, onUnmounted } from 'vue';
 import { store } from '../store';
 import { useRouter } from 'vue-router';
 import PlaylistCover from '../components/PlaylistCover.vue';
+import LibraryGridSkeleton from '../components/LibraryGridSkeleton.vue';
 import { navigateWithTransition } from '../viewTransition';
 
 defineOptions({ name: 'PlaylistsView' });
@@ -10,6 +11,7 @@ defineOptions({ name: 'PlaylistsView' });
 const router = useRouter();
 
 const playlists = computed(() => store.playlists);
+const loading = computed(() => !store.libraryReady);
 // db_playlists returns a live track_count for every row (item count for normal
 // playlists, evaluated-rule count for smart ones).
 const cardCount = (pl) => pl.track_count || 0;
@@ -179,8 +181,10 @@ onUnmounted(() => {
       </div>
     </div>
 
+    <LibraryGridSkeleton v-if="loading" label="Loading playlists" />
+
     <TransitionGroup
-      v-if="playlists.length > 0"
+      v-else-if="playlists.length > 0"
       ref="gridContainer"
       name="plgrid"
       tag="div"
@@ -254,7 +258,7 @@ onUnmounted(() => {
       </div>
     </TransitionGroup>
 
-    <div v-if="playlists.length === 0" class="p-20 text-center text-gray-600">
+    <div v-else class="p-20 text-center text-gray-600">
       <div class="text-4xl mb-4 opacity-20">♪</div>
       <p>No playlists created yet.</p>
       <p class="text-xs mt-2">Click "New Playlist" or "New Smart Playlist" above to get started.</p>

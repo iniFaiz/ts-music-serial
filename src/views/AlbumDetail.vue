@@ -30,9 +30,12 @@ onUnmounted(() => {
 });
 
 // Album tracks, ordered by track number in SQL.
-const { data: albumSongs } = useQuery(() => invoke('db_album_tracks', { album: albumName }), {
-  initial: [],
-});
+const { data: albumSongs, loading } = useQuery(
+  () => invoke('db_album_tracks', { album: albumName }),
+  {
+    initial: [],
+  }
+);
 
 const albumInfo = computed(() => {
   if (albumSongs.value.length === 0) return {};
@@ -248,9 +251,9 @@ const goToArtist = () => {
     </div>
 
     <div class="px-2 pb-12">
-      <SongList :songs="albumSongs" />
+      <SongList :songs="albumSongs" :loading="loading" />
       <div class="px-8 py-4 text-xs text-[var(--text-secondary)]">
-        {{ albumInfo.count }} Songs, {{ albumInfo.totalTime }}
+        {{ loading ? 'Loading album…' : `${albumInfo.count} Songs, ${albumInfo.totalTime}` }}
       </div>
     </div>
   </div>

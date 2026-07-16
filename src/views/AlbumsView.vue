@@ -4,6 +4,7 @@ import { store } from '../store';
 import { invoke } from '@tauri-apps/api/core';
 import { useRouter } from 'vue-router';
 import CoverImage from '../components/CoverImage.vue';
+import LibraryGridSkeleton from '../components/LibraryGridSkeleton.vue';
 import { navigateWithTransition } from '../viewTransition';
 import { useQuery } from '../useLibraryData';
 
@@ -12,7 +13,7 @@ defineOptions({ name: 'AlbumsView' });
 const router = useRouter();
 
 // Albums grouped in SQLite (GROUP BY), mapped to the card shape the template uses.
-const { data: albums } = useQuery(
+const { data: albums, loading } = useQuery(
   async () => {
     const rows = await invoke('db_albums', { search: null });
     return rows.map((r) => ({
@@ -229,7 +230,10 @@ function goToArtist(artistName, event = null) {
     </div>
 
     <!-- Grid List -->
+    <LibraryGridSkeleton v-if="loading" label="Loading albums" />
+
     <TransitionGroup
+      v-else
       name="grid"
       tag="div"
       class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-x-6 gap-y-10"
@@ -286,7 +290,7 @@ function goToArtist(artistName, event = null) {
 
     <!-- Empty State -->
     <div
-      v-if="filteredAndSortedAlbums.length === 0"
+      v-if="!loading && filteredAndSortedAlbums.length === 0"
       class="py-20 text-center text-gray-500 animate-fade-in flex flex-col items-center"
     >
       <svg

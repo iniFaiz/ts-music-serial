@@ -11,9 +11,12 @@ const route = useRoute();
 const artistName = route.params.name;
 
 // Artist tracks, ordered by album then track number in SQL.
-const { data: artistSongs } = useQuery(() => invoke('db_artist_tracks', { artist: artistName }), {
-  initial: [],
-});
+const { data: artistSongs, loading } = useQuery(
+  () => invoke('db_artist_tracks', { artist: artistName }),
+  {
+    initial: [],
+  }
+);
 
 const representativePath = computed(() => {
   const withCover = artistSongs.value.find((s) => s.has_cover);
@@ -105,7 +108,7 @@ const shuffleArtist = () => {
 
     <div class="px-2 py-6">
       <h2 class="px-6 text-xl font-bold text-white mb-4">Popular Songs</h2>
-      <SongList :songs="artistSongs" />
+      <SongList :songs="artistSongs" :loading="loading" />
     </div>
   </div>
 </template>

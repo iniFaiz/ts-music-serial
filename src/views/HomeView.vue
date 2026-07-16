@@ -275,8 +275,16 @@ const goToArtist = (artist, event) => {
       <h1 class="text-4xl font-bold tracking-tight text-white">Home</h1>
     </div>
 
+    <div
+      v-if="!store.libraryReady"
+      class="px-8 py-20 text-center text-sm text-gray-500 animate-pulse"
+      role="status"
+    >
+      Loading library…
+    </div>
+
     <!-- Empty library state -->
-    <div v-if="!hasSongs" class="px-8 py-20 text-center">
+    <div v-else-if="!hasSongs" class="px-8 py-20 text-center">
       <div
         class="mx-auto w-20 h-20 rounded-2xl bg-gradient-to-br from-[var(--accent-color)] to-[#7a1020] flex items-center justify-center mb-5 shadow-xl"
       >
