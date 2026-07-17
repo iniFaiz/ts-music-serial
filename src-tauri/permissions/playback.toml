@@ -1,0 +1,42 @@
+[[permission]]
+identifier = "playback"
+description = "Audio playback, queue-session intents, device controls, and play accounting."
+commands.allow = [
+  "player_load",
+  "player_prepare_next",
+  "player_pause",
+  "player_resume",
+  "player_set_volume",
+  "player_seek",
+  "player_stop",
+  "player_status",
+  "playback_session_snapshot",
+  "playback_session_intent",
+  "player_spectrum",
+  "player_set_spectrum_enabled",
+  "player_set_equalizer",
+  "list_output_devices",
+  "set_output_device",
+  "player_set_normalization",
+  "compute_track_gain",
+  "player_set_transition",
+  "player_set_normalization_settings",
+  "set_wasapi_exclusive",
+  "smtc_set_metadata",
+  "smtc_set_playback",
+  "player_show_in_folder",
+  "db_record_play_start",
+  "db_record_play",
+  "db_record_skip",
+]
+
+[[permission]]
+identifier = "vinyl-playback"
+description = "Minimal playback controls exposed to the dedicated vinyl-scratch webview."
+commands.allow = [
+  "player_pause",
+  "player_resume",
+  "player_seek",
+  "player_status",
+]
+

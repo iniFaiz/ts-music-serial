@@ -14,7 +14,7 @@ use tauri::{AppHandle, State};
 
 use crate::cover_cache::make_thumbnail;
 use crate::{
-    compute_fingerprint, db, is_allowed_audio, is_allowed_path, parse_metadata, MusicTrack,
+    compute_fingerprint, db, is_allowed_path, parse_metadata, resolve_allowed_audio, MusicTrack,
 };
 
 // ---------------------------------------------------------------------------
@@ -61,12 +61,8 @@ fn load_cover_art(path: &Path) -> Result<(Vec<u8>, MimeType), String> {
     }
 }
 
-fn authorize_tag_target<R: Runtime>(app: &AppHandle<R>, path: &Path) -> Result<(), String> {
-    if is_allowed_audio(app, path) {
-        Ok(())
-    } else {
-        Err("Path is not within an allowed music folder".to_string())
-    }
+fn authorize_tag_target<R: Runtime>(app: &AppHandle<R>, path: &Path) -> Result<PathBuf, String> {
+    resolve_allowed_audio(app, path)
 }
 
 fn authorize_cover_path<R: Runtime>(app: &AppHandle<R>, path: &Path) -> Result<(), String> {
@@ -90,8 +86,11 @@ pub(crate) async fn write_track_tags(
     use lofty::picture::{Picture, PictureType};
     use lofty::tag::Tag;
 
-    let path_buf = PathBuf::from(&path);
-    authorize_tag_target(&app, &path_buf)?;
+    let path_buf = authorize_tag_target(&app, Path::new(&path))?;
+    let canonical = path_buf.to_string_lossy().to_string();
+    if db::tracks::db_track(db.clone(), canonical)?.is_none() {
+        return Err("File is not an indexed library track".to_string());
+    }
     if let Some(path) = cover_path.as_deref() {
         authorize_cover_path(&app, Path::new(path))?;
     }
@@ -234,6 +233,7 @@ mod tests {
     #[test]
     fn tag_and_cover_targets_require_their_own_scope_grants() {
         let app = tauri::test::mock_app();
+        app.manage(crate::library_scan::LibraryAccessState::new());
         let dir = TestDir::new();
         let song = dir.join("song.flac");
         let cover = dir.join("cover.png");
@@ -252,6 +252,10 @@ mod tests {
             .allow_file(&cover)
             .expect("allow cover");
 
+        // Dialog/asset scope alone is not write authority for audio files.
+        assert!(authorize_tag_target(app.handle(), &song).is_err());
+        crate::library_scan::grant_session_audio(app.handle(), &song)
+            .expect("grant exact session audio");
         assert!(authorize_tag_target(app.handle(), &song).is_ok());
         assert!(authorize_cover_path(app.handle(), &cover).is_ok());
         assert!(authorize_cover_path(app.handle(), &sibling).is_err());

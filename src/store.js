@@ -5,7 +5,7 @@ import { getCurrentWindow, LogicalSize } from '@tauri-apps/api/window';
 import { idbGet, idbDelete } from './libraryStore';
 import { newSmartPlaylist } from './smartPlaylists';
 import { EQ_PRESETS, EQ_BAND_COUNT, EQ_MIN_DB, EQ_MAX_DB, matchPreset } from './equalizer';
-import { invalidateCover } from './coverCache';
+import { invalidateCover, retryMissingCovers } from './coverCache';
 
 const appWindow = getCurrentWindow();
 
@@ -33,8 +33,6 @@ let savedWindowSize = null; // PhysicalSize from outerSize()
 // play/pause often fire together) coalesce into a single deep-clone + IDB write.
 let persistStateTimer = null;
 let savedWindowMaximized = false;
-// Active sleep-timer timeout handle (module scope so it's never serialized).
-let sleepTimerHandle = null;
 // Debounce for statsVersion bumps — coalesces rapid plays/skips so Home insight
 // shelves refetch at most once per window instead of on every accounting event.
 let statsVersionTimer = null;
@@ -43,22 +41,6 @@ let statsVersionTimer = null;
 function dirName(path) {
   const idx = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
   return idx > 0 ? path.slice(0, idx) : path;
-}
-
-// Normalize a path for prefix comparison: unify separators and lowercase (paths
-// are case-insensitive on Windows). Strips a trailing separator.
-function normPath(path) {
-  return String(path || '')
-    .replace(/\\/g, '/')
-    .replace(/\/+$/, '')
-    .toLowerCase();
-}
-
-// True when `filePath` lives inside the directory `root` (or equals it).
-function isUnderRoot(filePath, root) {
-  const f = normPath(filePath);
-  const r = normPath(root);
-  return f === r || f.startsWith(r + '/');
 }
 
 export const store = reactive({
@@ -100,6 +82,10 @@ export const store = reactive({
 
   currentSong: null,
   preselectedNextSong: null,
+  // Compatibility latch for a decoder transition already performed in Rust.
+  // Declared up-front so Vue tracks it predictably; this can disappear once
+  // PlayerControls consumes PlaybackSession effects directly.
+  skipNextLoad: false,
   currentSampleRate: null,
   currentBitDepth: null,
   isPlaying: false,
@@ -122,6 +108,7 @@ export const store = reactive({
   // player and lyric-click seeks suppress the poll too. Not persisted.
   lastSeekAt: 0,
   queue: [],
+  playbackSessionSnapshot: null,
   loopMode: 0,
   shuffleMode: false,
   // Unlimited queue (autoplay): when the queue is exhausted, keep playing by
@@ -234,6 +221,7 @@ export const store = reactive({
   // Songs, Albums and Artists tabs are not needlessly queried again.
   bumpLibrary() {
     this.libraryVersion++;
+    retryMissingCovers();
   },
   bumpFavorites() {
     this.favoritesVersion++;
@@ -342,7 +330,10 @@ export const store = reactive({
         key: 'playback',
         value: {
           songPath: this.currentSong ? this.currentSong.path : null,
+          currentEntryId: this.currentSong ? this.currentSong.queueId || null : null,
           positionSecs: this.currentTime || 0,
+          queueEntries: this.queue.map((s) => ({ id: s.queueId || null, path: s.path })),
+          // Kept for backward compatibility with older persisted sessions.
           queuePaths: this.queue.map((s) => s.path),
           volume: this.volume,
           isMuted: this.isMuted,
@@ -371,7 +362,7 @@ export const store = reactive({
 
       if (this.roots.length > 0) {
         try {
-          await invoke('restore_roots', { roots: this.roots });
+          this.roots = await invoke('restore_roots');
         } catch (e) {
           console.error('Failed to restore roots', e);
         }
@@ -521,14 +512,30 @@ export const store = reactive({
     if (typeof pb.visualizerEnabled === 'boolean') this.visualizerEnabled = pb.visualizerEnabled;
     this.syncVisualizer();
 
-    // Rehydrate the saved queue from the DB (order preserved by db_tracks_by_paths).
-    if (Array.isArray(pb.queuePaths) && pb.queuePaths.length) {
+    // Rehydrate the saved queue from the DB while retaining each occurrence's
+    // stable ID. Legacy sessions only contain queuePaths and get IDs once.
+    const savedEntries = Array.isArray(pb.queueEntries)
+      ? pb.queueEntries.filter((entry) => entry && typeof entry.path === 'string')
+      : Array.isArray(pb.queuePaths)
+        ? pb.queuePaths.map((path) => ({ id: null, path }))
+        : [];
+    if (savedEntries.length) {
       try {
-        const tracks = await invoke('db_tracks_by_paths', { paths: pb.queuePaths });
-        this.queue = tracks.map((s) => ({
-          ...s,
-          queueId: Math.random().toString(36).substring(2, 9),
-        }));
+        const tracks = await invoke('db_tracks_by_paths', {
+          paths: savedEntries.map((entry) => entry.path),
+        });
+        let trackIndex = 0;
+        this.queue = savedEntries.flatMap((entry) => {
+          const track = tracks[trackIndex];
+          if (!track || track.path !== entry.path) return [];
+          trackIndex++;
+          return [
+            {
+              ...track,
+              queueId: entry.id || Math.random().toString(36).substring(2, 9),
+            },
+          ];
+        });
       } catch {
         this.queue = [];
       }
@@ -543,7 +550,10 @@ export const store = reactive({
         this.pendingAutoplay = false;
         this.currentTime = pb.positionSecs || 0;
         this.isPlaying = false;
-        const qIdx = this.queue.findIndex((s) => s.path === song.path);
+        let qIdx = pb.currentEntryId
+          ? this.queue.findIndex((entry) => entry.queueId === pb.currentEntryId)
+          : -1;
+        if (qIdx === -1) qIdx = this.queue.findIndex((s) => s.path === song.path);
         if (qIdx !== -1) {
           this.currentSong = { ...this.queue[qIdx] };
         } else {
@@ -594,40 +604,43 @@ export const store = reactive({
   },
 
   async selectAndScan() {
+    this.loading = true;
+    this.scanComplete = false;
+    this.statusMessage = 'Choose a music folder...';
     try {
-      const selected = await open({
-        directory: true,
-        multiple: false,
-        recursive: true,
+      const result = await invoke('add_library_root', {
+        useParallelism: this.useParallelism,
       });
-
-      if (selected) {
-        this.selectedPath = selected;
-        await this.scanMusic(selected);
+      if (!result) return;
+      this.roots = await invoke('db_roots');
+      const timeSeconds = (result.durationMs / 1000).toFixed(2);
+      this.statusMessage = `Added ${result.added} new tracks in ${timeSeconds}s`;
+      this.scanDuration = timeSeconds;
+      this.scanCount = result.total;
+      this.scanComplete = true;
+      this.bumpLibrary();
+      if (this.onlineMetadataEnabled && result.added > 0) {
+        this.startOnlineMetadataImport();
       }
     } catch (err) {
       console.error(err);
-      this.statusMessage = 'Error opening dialog';
+      this.statusMessage = `Error: ${err}`;
+    } finally {
+      this.loading = false;
     }
   },
 
-  async scanMusic(path) {
+  async scanMusic() {
     this.loading = true;
     this.scanComplete = false;
     this.statusMessage = 'Scanning...';
 
     try {
       const result = await invoke('index_library', {
-        paths: [path],
         useParallelism: this.useParallelism,
         pruneMissing: false,
+        dndGrant: null,
       });
-
-      if (!this.roots.includes(path)) {
-        this.roots = [...this.roots, path];
-        await invoke('db_set_roots', { roots: [...this.roots] });
-        this.watchRoots();
-      }
 
       const timeSeconds = (result.durationMs / 1000).toFixed(2);
       this.statusMessage = `Added ${result.added} new tracks in ${timeSeconds}s`;
@@ -646,38 +659,19 @@ export const store = reactive({
     }
   },
 
-  // Add audio from arbitrary dropped paths (files and/or folders). Folders are
-  // registered as roots so their audio can be streamed; lone files register
-  // their containing folder. Mirrors scanMusic's incremental merge.
-  async addPaths(paths) {
-    const list = (Array.isArray(paths) ? paths : [paths]).filter(Boolean);
-    if (list.length === 0) return;
+  // Consume a short-lived grant created by the native drag/drop event. The
+  // webview never sends filesystem paths to the indexer.
+  async addPaths(dndGrant) {
+    if (!dndGrant) return;
     this.loading = true;
     this.statusMessage = 'Adding dropped items...';
     try {
       const result = await invoke('index_library', {
-        paths: list,
         useParallelism: this.useParallelism,
         pruneMissing: false,
+        dndGrant,
       });
-
-      // Register new roots so the watcher and streaming scope cover them. A
-      // dropped path that contains scanned tracks is treated as a folder root;
-      // otherwise fall back to each scanned track's containing folder.
-      const newRoots = [];
-      for (const d of result.roots || []) {
-        if (
-          !this.roots.some((r) => isUnderRoot(d, r)) &&
-          !newRoots.some((r) => isUnderRoot(d, r))
-        ) {
-          newRoots.push(d);
-        }
-      }
-      if (newRoots.length) {
-        this.roots = [...this.roots, ...newRoots];
-        await invoke('db_set_roots', { roots: [...this.roots] });
-        this.watchRoots();
-      }
+      this.roots = await invoke('db_roots');
       this.scanCount = result.total;
       this.scanComplete = true;
       this.bumpLibrary();
@@ -696,14 +690,14 @@ export const store = reactive({
 
   // Remove a scanned folder and every track that lives inside it.
   async removeRoot(root) {
-    this.roots = this.roots.filter((r) => normPath(r) !== normPath(root));
-    await invoke('db_set_roots', { roots: [...this.roots] });
-
     let removed = [];
     try {
-      removed = await invoke('db_remove_under_root', { root });
+      removed = await invoke('remove_library_root', { root });
+      this.roots = await invoke('db_roots');
     } catch (e) {
       console.error('Failed to remove folder tracks', e);
+      this.statusMessage = `Failed to remove folder: ${e}`;
+      return;
     }
     if (removed.length) {
       const removedSet = new Set(removed);
@@ -738,9 +732,9 @@ export const store = reactive({
     this.statusMessage = 'Refreshing library...';
     try {
       const result = await invoke('index_library', {
-        paths: [...this.roots],
         useParallelism: this.useParallelism,
         pruneMissing: true,
+        dndGrant: null,
       });
       this.scanCount = result.total;
       this.scanComplete = true;
@@ -769,9 +763,9 @@ export const store = reactive({
     this.statusMessage = 'Reindexing...';
     try {
       const result = await invoke('index_library', {
-        paths: [...this.roots],
         useParallelism: this.useParallelism,
         pruneMissing: true,
+        dndGrant: null,
       });
       const secs = (result.durationMs / 1000).toFixed(2);
       this.scanCount = result.total;
@@ -842,7 +836,7 @@ export const store = reactive({
   // (Re)configure the native filesystem watcher to cover the current roots so
   // the library auto-updates when files change outside the app.
   watchRoots() {
-    invoke('watch_roots', { roots: [...this.roots] }).catch(() => {});
+    invoke('watch_roots').catch(() => {});
   },
 
   // ---- Online metadata ---------------------------------------------------
@@ -2106,130 +2100,111 @@ export const store = reactive({
     this.persistState();
   },
 
-  async nextSong(userTriggered = false) {
-    if (!this.currentSong || this.queue.length === 0) return;
+  nativeSleepMode() {
+    if (this.sleepTimerMode === 'end') return { mode: 'end_track' };
+    if (this.sleepTimerMode === 'end-queue') return { mode: 'end_queue' };
+    if (typeof this.sleepTimerMode === 'number' && this.sleepTimerDeadline > 0) {
+      return { mode: 'deadline', deadlineMs: this.sleepTimerDeadline };
+    }
+    return { mode: 'off' };
+  },
 
-    // Sleep timer "stop after current track": end playback instead of advancing.
-    if (!userTriggered && this.sleepTimerMode === 'end') {
-      this.sleepTimerMode = 'off';
-      this.sleepTimerDeadline = 0;
+  async syncPlaybackSession() {
+    const update = await invoke('playback_session_intent', {
+      intent: {
+        type: 'sync_legacy',
+        entries: this.queue.map((song) => ({
+          id: song.queueId || '',
+          path: song.path,
+          durationHint: song.duration_secs || 0,
+        })),
+        currentEntryId: this.currentSong ? this.currentSong.queueId || null : null,
+        shuffle: !!this.shuffleMode,
+        repeat: ['off', 'all', 'one'][this.loopMode] || 'off',
+        autoplay: !!this.autoplayMode,
+        playing: !!this.isPlaying,
+        sleep: this.nativeSleepMode(),
+      },
+    });
+    this.playbackSessionSnapshot = update.snapshot;
+    return update;
+  },
+
+  applyPlaybackSessionUpdate(update) {
+    if (!update) return;
+    if (update.snapshot) this.playbackSessionSnapshot = update.snapshot;
+    const effect = update.effect;
+    if (!effect) return;
+
+    if (effect.type === 'load' && effect.entry) {
+      const entry = this.queue.find((song) => song.queueId === effect.entry.id);
+      if (!entry) return;
+      this.preselectedNextSong = null;
+      this.pendingSeek = effect.startAt ?? null;
+      this.pendingAutoplay = effect.autoplay !== false;
+      this.currentSong = { ...entry };
+      this.isPlaying = effect.autoplay !== false;
+      this.playbackFinished = false;
+    } else if (effect.type === 'set_playing') {
+      this.isPlaying = !!effect.playing;
+    } else if (effect.type === 'stop') {
       this.isPlaying = false;
       this.playbackFinished = true;
-      return;
-    }
-
-    if (this.loopMode === 2 && !userTriggered) {
-      return;
-    }
-
-    let nextIndex;
-    const currentIndex = this.currentQueueIndex();
-
-    if (this.preselectedNextSong) {
-      let idx = -1;
-      if (this.preselectedNextSong.queueId) {
-        idx = this.queue.findIndex((s) => s.queueId === this.preselectedNextSong.queueId);
-      }
-      if (idx === -1) {
-        idx = this.queue.findIndex((s) => s.path === this.preselectedNextSong.path);
-      }
-      if (idx >= 0) {
-        nextIndex = idx;
-      } else if (this.autoplayMode) {
-        if (!this.preselectedNextSong.queueId) {
-          this.preselectedNextSong.queueId = Math.random().toString(36).substring(2, 9);
-        }
-        this.queue.push(this.preselectedNextSong);
-        nextIndex = this.queue.length - 1;
-      }
-      this.preselectedNextSong = null; // consume
-    }
-
-    if (nextIndex === undefined) {
-      if (this.shuffleMode) {
-        nextIndex = Math.floor(Math.random() * this.queue.length);
-      } else {
-        nextIndex = currentIndex + 1;
-      }
-    }
-
-    if (nextIndex >= this.queue.length) {
-      // Sleep timer "stop at end of queue": stop here even if loop/autoplay would
-      // otherwise keep going.
-      if (!userTriggered && this.sleepTimerMode === 'end-queue') {
+      if (String(effect.reason || '').startsWith('sleep_')) {
         this.sleepTimerMode = 'off';
         this.sleepTimerDeadline = 0;
-        this.isPlaying = false;
-        this.playbackFinished = true;
-        return;
       }
-      if (this.loopMode === 1) {
-        nextIndex = 0;
-      } else if (this.autoplayMode) {
-        // Unlimited queue: append a random track and continue into it.
+    }
+    this.persistState();
+  },
+
+  async nextSong(userTriggered = false) {
+    if (!this.currentSong || this.queue.length === 0) return;
+    try {
+      await this.syncPlaybackSession();
+      let update = await invoke('playback_session_intent', {
+        intent: { type: 'next', userTriggered: !!userTriggered },
+      });
+
+      if (update.effect?.type === 'request_autoplay') {
         const song = await this.pickRandomSong();
         if (!song) {
-          this.isPlaying = false;
-          return;
-        }
-        const entry = { ...song, queueId: Math.random().toString(36).substring(2, 9) };
-        this.queue.push(entry);
-        nextIndex = this.queue.length - 1;
-      } else {
-        if (userTriggered) {
-          nextIndex = 0;
-        } else {
           this.isPlaying = false;
           this.playbackFinished = true;
           return;
         }
+        const entry = { ...song, queueId: Math.random().toString(36).substring(2, 9) };
+        this.queue.push(entry);
+        update = await invoke('playback_session_intent', {
+          intent: {
+            type: 'append_autoplay',
+            entry: {
+              id: entry.queueId,
+              path: entry.path,
+              durationHint: entry.duration_secs || 0,
+            },
+            playNow: true,
+          },
+        });
       }
-    }
 
-    this.pendingSeek = null;
-    this.pendingAutoplay = true;
-    this.currentSong = { ...this.queue[nextIndex] };
-    this.isPlaying = true;
-    this.playbackFinished = false;
-    this.persistState();
+      this.applyPlaybackSessionUpdate(update);
+    } catch (error) {
+      console.error('Failed to advance native playback session', error);
+    }
   },
 
-  prevSong() {
+  async prevSong() {
     if (!this.currentSong || this.queue.length === 0) return;
-    this.preselectedNextSong = null;
-
-    if (this.currentTime > 3) {
-      this.pendingSeek = 0;
-      this.pendingAutoplay = true;
-      this.currentSong = { ...this.currentSong };
-      this.isPlaying = true;
-      this.playbackFinished = false;
-      return;
+    try {
+      await this.syncPlaybackSession();
+      const update = await invoke('playback_session_intent', {
+        intent: { type: 'previous', position: this.currentTime || 0 },
+      });
+      this.applyPlaybackSessionUpdate(update);
+    } catch (error) {
+      console.error('Failed to rewind native playback session', error);
     }
-
-    let prevIndex;
-    const currentIndex = this.currentQueueIndex();
-
-    if (this.shuffleMode) {
-      prevIndex = Math.floor(Math.random() * this.queue.length);
-    } else {
-      prevIndex = currentIndex - 1;
-    }
-
-    if (prevIndex < 0) {
-      if (this.loopMode === 1) {
-        prevIndex = this.queue.length - 1;
-      } else {
-        prevIndex = 0;
-      }
-    }
-
-    this.pendingSeek = null;
-    this.pendingAutoplay = true;
-    this.currentSong = { ...this.queue[prevIndex] };
-    this.isPlaying = true;
-    this.playbackFinished = false;
-    this.persistState();
   },
 
   // Seek the current track to `time` seconds. Shared by the player bar, the
@@ -2309,10 +2284,6 @@ export const store = reactive({
   // mode: 'off' | 'end' (stop after the current track) | 'end-queue' (stop when
   // the queue finishes) | number of minutes (incl. custom values).
   setSleepTimer(mode) {
-    if (sleepTimerHandle) {
-      clearTimeout(sleepTimerHandle);
-      sleepTimerHandle = null;
-    }
     if (mode === 'off' || mode === null || mode === undefined) {
       this.sleepTimerMode = 'off';
       this.sleepTimerDeadline = 0;
@@ -2332,12 +2303,6 @@ export const store = reactive({
     const minutes = Math.min(1440, Math.max(1, Math.round(raw))); // clamp 1min–24h
     this.sleepTimerMode = minutes;
     this.sleepTimerDeadline = Date.now() + minutes * 60000;
-    sleepTimerHandle = setTimeout(() => {
-      sleepTimerHandle = null;
-      this.isPlaying = false;
-      this.sleepTimerMode = 'off';
-      this.sleepTimerDeadline = 0;
-    }, minutes * 60000);
   },
 
   // ---- Command palette (Ctrl+K) -----------------------------------------
@@ -2453,32 +2418,26 @@ export const store = reactive({
           try {
             const res = await invoke('db_import_backup', { src });
 
-            // Ask to relocate any missing roots
-            const missingRoots = res.roots.filter((r) => !r.exists);
-            for (const root of missingRoots) {
-              const relocate = await ask(
-                `The music folder "${root.path}" was not found on this PC. Would you like to select its new location to preserve your statistics and playlists?`,
+            // Backup paths are data, not filesystem authority. Every restored
+            // root must be confirmed through the Rust-side native picker,
+            // including a folder that still exists at the original location.
+            for (const root of res.roots) {
+              const action = root.exists ? 're-authorize' : 'locate';
+              const confirmRoot = await ask(
+                root.exists
+                  ? `The backup contains "${root.path}". Re-authorize this music folder before restoring access?`
+                  : `The music folder "${root.path}" was not found. Select its new location to preserve statistics and playlists?`,
                 {
-                  title: 'Relocate Music Folder',
+                  title: root.exists ? 'Authorize Music Folder' : 'Relocate Music Folder',
                   kind: 'warning',
-                  okLabel: 'Select Folder',
+                  okLabel: root.exists ? 'Authorize Folder' : 'Select Folder',
                   cancelLabel: 'Skip',
                 }
               );
 
-              if (relocate) {
-                const selected = await open({
-                  directory: true,
-                  multiple: false,
-                  recursive: true,
-                });
-                if (selected) {
-                  this.statusMessage = `Relocating paths for ${root.path}...`;
-                  await invoke('db_relocate_root', {
-                    oldRoot: root.path,
-                    newRoot: selected,
-                  });
-                }
+              if (confirmRoot) {
+                this.statusMessage = `${action === 'locate' ? 'Relocating' : 'Authorizing'} ${root.path}...`;
+                await invoke('db_relocate_root', { oldRoot: root.path });
               }
             }
 
@@ -2524,21 +2483,23 @@ export const store = reactive({
     }
   },
 
-  // Path of the track that will play next under the current queue/loop settings,
-  // or null when it's unpredictable (shuffle / autoplay-random). Used to
-  // pre-decode the next track for gapless playback. For the autoplay-random case
-  // the pick needs a DB round-trip, so it kicks off an async prefetch that sets
-  // `preselectedNextSong` and returns null this tick; the caller's watcher re-runs
-  // when that reactive field lands and then sees the resolved path.
-  nextUpPath() {
+  // Exact queue occurrence which will play next. Returning the entry (rather
+  // than only its path) lets Rust distinguish the same file queued twice.
+  // Autoplay-random still resolves asynchronously through `preselectedNextSong`.
+  nextUpEntry() {
     if (!this.currentSong || this.queue.length === 0) return null;
     // Sleep timer "stop after current track": never pre-decode a next track, or
     // gapless/crossfade would advance past the point we mean to stop at.
     if (this.sleepTimerMode === 'end') return null;
-    if (this.loopMode === 2) return this.currentSong.path; // repeat-one
+    const nativeNextId = this.playbackSessionSnapshot?.nextEntryId;
+    if (nativeNextId) {
+      const nativeNext = this.queue.find((entry) => entry.queueId === nativeNextId);
+      if (nativeNext) return nativeNext;
+    }
+    if (this.loopMode === 2) return this.currentSong; // repeat-one
 
     if (this.preselectedNextSong) {
-      return this.preselectedNextSong.path;
+      return this.preselectedNextSong;
     }
 
     if (this.shuffleMode) {
@@ -2553,7 +2514,7 @@ export const store = reactive({
         nextIndex = 0;
       }
       this.preselectedNextSong = this.queue[nextIndex];
-      return this.preselectedNextSong.path;
+      return this.preselectedNextSong;
     }
 
     const i = this.currentQueueIndex();
@@ -2570,11 +2531,15 @@ export const store = reactive({
           this._prefetchingRandom = true;
           this.pickRandomSong()
             .then((song) => {
-              if (song)
-                this.preselectedNextSong = {
+              if (song) {
+                const entry = {
                   ...song,
                   queueId: Math.random().toString(36).substring(2, 9),
                 };
+                this.queue.push(entry);
+                this.preselectedNextSong = entry;
+                this.syncPlaybackSession().catch(() => null);
+              }
             })
             .finally(() => {
               this._prefetchingRandom = false;
@@ -2585,7 +2550,13 @@ export const store = reactive({
         return null;
       }
     }
-    return this.queue[n] ? this.queue[n].path : null;
+    return this.queue[n] || null;
+  },
+
+  // Kept for callers which only need display/path compatibility.
+  nextUpPath() {
+    const entry = this.nextUpEntry();
+    return entry ? entry.path : null;
   },
 });
 

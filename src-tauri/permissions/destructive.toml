@@ -1,0 +1,15 @@
+[[permission]]
+identifier = "destructive"
+description = "Explicitly destructive file, tag, root, reset, migration, and database restore operations."
+commands.allow = [
+  "remove_library_root",
+  "player_delete_file",
+  "write_track_tags",
+  "import_online_metadata",
+  "db_import",
+  "db_remove_paths",
+  "db_reset",
+  "db_import_backup",
+  "db_relocate_root",
+  "db_prune_and_get_missing",
+]

@@ -17,11 +17,12 @@
 // and managed as Tauri state.
 
 use std::collections::{HashMap, HashSet};
+use std::ops::{Deref, DerefMut};
 use std::path::Path;
 
 use parking_lot::Mutex;
 use rayon::prelude::*;
-use rusqlite::{params, Connection, Row};
+use rusqlite::{params, Connection, Row, Transaction};
 use serde::Serialize;
 use serde_json::Value;
 use tauri::{AppHandle, Manager, State};
@@ -38,7 +39,65 @@ pub struct DbCache {
     smart_counts: Mutex<HashMap<String, (i64, String, i64)>>,
 }
 
-pub struct Db(pub Mutex<Connection>, pub DbCache);
+// The connection normally contains `Some`.  Restore briefly takes ownership
+// while holding the mutex so the on-disk file can be replaced on Windows.  An
+// explicit empty slot avoids ever installing an unrelated in-memory database;
+// no other command can observe the temporary state because the mutex remains
+// locked for the whole swap.
+pub struct ConnectionSlot(Option<Connection>);
+
+impl ConnectionSlot {
+    fn new(connection: Connection) -> Self {
+        Self(Some(connection))
+    }
+
+    pub(crate) fn take(&mut self) -> Result<Connection, String> {
+        self.0
+            .take()
+            .ok_or_else(|| "Database connection is unavailable".to_string())
+    }
+
+    pub(crate) fn install(&mut self, connection: Connection) {
+        self.0 = Some(connection);
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.0.is_none()
+    }
+}
+
+impl Deref for ConnectionSlot {
+    type Target = Connection;
+
+    fn deref(&self) -> &Self::Target {
+        self.0
+            .as_ref()
+            .expect("database connection slot is only empty while exclusively locked")
+    }
+}
+
+impl DerefMut for ConnectionSlot {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.0
+            .as_mut()
+            .expect("database connection slot is only empty while exclusively locked")
+    }
+}
+
+pub struct Db(pub Mutex<ConnectionSlot>, pub DbCache);
+
+#[cfg(test)]
+impl Db {
+    pub(crate) fn from_connection(connection: Connection) -> Self {
+        Self(
+            Mutex::new(ConnectionSlot::new(connection)),
+            DbCache::default(),
+        )
+    }
+}
+
+pub(crate) const APPLICATION_ID: i32 = 0x5453_4D31; // "TSM1"
+pub(crate) const SCHEMA_VERSION: i32 = 2;
 
 // Cheap signature that changes whenever the tracks / stats / favorites that a
 // smart playlist can match change (track added/removed, played, skipped, or
@@ -89,16 +148,202 @@ pub fn init(app: &AppHandle) -> Result<Db, String> {
         .app_data_dir()
         .map_err(|e| format!("no app data dir: {e}"))?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let conn = Connection::open(dir.join("library.db")).map_err(|e| e.to_string())?;
+    let mut conn = Connection::open(dir.join("library.db")).map_err(|e| e.to_string())?;
     conn.execute_batch(SCHEMA).map_err(|e| e.to_string())?;
-    migrate(&conn)?;
-    Ok(Db(Mutex::new(conn), DbCache::default()))
+    migrate(&mut conn)?;
+    Ok(Db(
+        Mutex::new(ConnectionSlot::new(conn)),
+        DbCache::default(),
+    ))
 }
 
 // Additive schema migrations for databases created before a column existed.
 // (CREATE TABLE IF NOT EXISTS never alters an existing table.)
-fn migrate(conn: &Connection) -> Result<(), String> {
-    let has_fingerprint: bool = conn
+fn strip_windows_verbatim_path(path: &str) -> Option<String> {
+    if let Some(relative) = path.strip_prefix(r"\\?\UNC\") {
+        Some(format!(r"\\{relative}"))
+    } else {
+        path.strip_prefix(r"\\?\").map(str::to_string)
+    }
+}
+
+fn normalize_json_paths(value: &mut Value) -> bool {
+    match value {
+        Value::String(path) => {
+            let Some(normalized) = strip_windows_verbatim_path(path) else {
+                return false;
+            };
+            *path = normalized;
+            true
+        }
+        Value::Array(values) => {
+            let mut changed = false;
+            for value in values {
+                changed |= normalize_json_paths(value);
+            }
+            changed
+        }
+        Value::Object(values) => {
+            let mut changed = false;
+            for value in values.values_mut() {
+                changed |= normalize_json_paths(value);
+            }
+            changed
+        }
+        _ => false,
+    }
+}
+
+/// Schema v2 repairs the Windows path identity regression where canonicalized
+/// paths (`\\?\D:\...`) and legacy paths (`D:\...`) represented the same file
+/// as two SQLite rows. Related state is merged before the duplicate track is
+/// removed so plays, skips, favorites, and playlist membership survive.
+fn normalize_verbatim_paths(tx: &Transaction<'_>) -> Result<(), String> {
+    let paths = {
+        let mut statement = tx
+            .prepare(
+                "SELECT path FROM tracks
+                 UNION SELECT path FROM stats
+                 UNION SELECT path FROM favorites
+                 UNION SELECT path FROM playlist_items
+                 UNION SELECT path FROM roots
+                 UNION SELECT path FROM pending_roots",
+            )
+            .map_err(|error| error.to_string())?;
+        let collected = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        collected
+    };
+
+    for source in paths {
+        let Some(target) = strip_windows_verbatim_path(&source) else {
+            continue;
+        };
+
+        tx.execute(
+            "INSERT INTO stats(path, play_count, last_played, skip_count)
+             SELECT ?2, play_count, last_played, skip_count FROM stats WHERE path = ?1
+             ON CONFLICT(path) DO UPDATE SET
+               play_count = stats.play_count + excluded.play_count,
+               last_played = MAX(stats.last_played, excluded.last_played),
+               skip_count = stats.skip_count + excluded.skip_count",
+            params![source, target],
+        )
+        .map_err(|error| error.to_string())?;
+        tx.execute("DELETE FROM stats WHERE path = ?1", params![source])
+            .map_err(|error| error.to_string())?;
+
+        tx.execute(
+            "INSERT INTO favorites(path, position)
+             SELECT ?2, position FROM favorites WHERE path = ?1
+             ON CONFLICT(path) DO UPDATE SET position = MIN(favorites.position, excluded.position)",
+            params![source, target],
+        )
+        .map_err(|error| error.to_string())?;
+        tx.execute("DELETE FROM favorites WHERE path = ?1", params![source])
+            .map_err(|error| error.to_string())?;
+
+        tx.execute(
+            "INSERT INTO playlist_items(playlist_id, path, position)
+             SELECT playlist_id, ?2, position FROM playlist_items WHERE path = ?1
+             ON CONFLICT(playlist_id, path) DO UPDATE SET
+               position = MIN(playlist_items.position, excluded.position)",
+            params![source, target],
+        )
+        .map_err(|error| error.to_string())?;
+        tx.execute(
+            "DELETE FROM playlist_items WHERE path = ?1",
+            params![source],
+        )
+        .map_err(|error| error.to_string())?;
+
+        let target_exists = tx
+            .prepare("SELECT 1 FROM tracks WHERE path = ?1")
+            .and_then(|mut statement| statement.exists(params![target]))
+            .map_err(|error| error.to_string())?;
+        if target_exists {
+            tx.execute(
+                "UPDATE tracks SET fingerprint = COALESCE(
+                    fingerprint,
+                    (SELECT fingerprint FROM tracks WHERE path = ?2)
+                 ) WHERE path = ?1",
+                params![target, source],
+            )
+            .map_err(|error| error.to_string())?;
+            tx.execute("DELETE FROM tracks WHERE path = ?1", params![source])
+                .map_err(|error| error.to_string())?;
+        } else {
+            tx.execute(
+                "UPDATE tracks SET path = ?2 WHERE path = ?1",
+                params![source, target],
+            )
+            .map_err(|error| error.to_string())?;
+        }
+
+        for table in ["roots", "pending_roots"] {
+            let insert = format!(
+                "INSERT OR IGNORE INTO {table}(path) SELECT ?2 WHERE EXISTS(
+                    SELECT 1 FROM {table} WHERE path = ?1
+                 )"
+            );
+            let delete = format!("DELETE FROM {table} WHERE path = ?1");
+            tx.execute(&insert, params![source, target])
+                .map_err(|error| error.to_string())?;
+            tx.execute(&delete, params![source])
+                .map_err(|error| error.to_string())?;
+        }
+    }
+
+    let kv_rows = {
+        let mut statement = tx
+            .prepare("SELECT k, v FROM kv")
+            .map_err(|error| error.to_string())?;
+        let collected = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        collected
+    };
+    for (key, encoded) in kv_rows {
+        let Ok(mut value) = serde_json::from_str::<Value>(&encoded) else {
+            continue;
+        };
+        if normalize_json_paths(&mut value) {
+            tx.execute(
+                "UPDATE kv SET v = ?2 WHERE k = ?1",
+                params![key, value.to_string()],
+            )
+            .map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+fn migrate(conn: &mut Connection) -> Result<(), String> {
+    let application_id: i32 = conn
+        .pragma_query_value(None, "application_id", |row| row.get(0))
+        .map_err(|e| format!("Failed to read database application id: {e}"))?;
+    if application_id != 0 && application_id != APPLICATION_ID {
+        return Err("Database belongs to a different application".to_string());
+    }
+
+    let version: i32 = conn
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .map_err(|e| format!("Failed to read database schema version: {e}"))?;
+    if version > SCHEMA_VERSION {
+        return Err(format!(
+            "Database schema version {version} is newer than supported version {SCHEMA_VERSION}"
+        ));
+    }
+
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    let has_fingerprint: bool = tx
         .prepare("SELECT 1 FROM pragma_table_info('tracks') WHERE name = 'fingerprint'")
         .and_then(|mut s| s.exists([]))
         .map_err(|e| e.to_string())?;
@@ -107,13 +352,23 @@ fn migrate(conn: &Connection) -> Result<(), String> {
         // used to re-identify a track after its file is moved/renamed so its
         // stats/favorites/playlist memberships survive. '' = hashing failed
         // (unreadable file) — tried, don't retry; NULL = not yet computed.
-        conn.execute_batch(
+        tx.execute_batch(
             "ALTER TABLE tracks ADD COLUMN fingerprint TEXT;
              CREATE INDEX IF NOT EXISTS idx_tracks_fp ON tracks(fingerprint);",
         )
         .map_err(|e| e.to_string())?;
+    } else {
+        tx.execute_batch("CREATE INDEX IF NOT EXISTS idx_tracks_fp ON tracks(fingerprint);")
+            .map_err(|e| e.to_string())?;
     }
-    Ok(())
+    if version < 2 {
+        normalize_verbatim_paths(&tx)?;
+    }
+    tx.pragma_update(None, "application_id", APPLICATION_ID)
+        .map_err(|e| format!("Failed to set database application id: {e}"))?;
+    tx.pragma_update(None, "user_version", SCHEMA_VERSION)
+        .map_err(|e| format!("Failed to set database schema version: {e}"))?;
+    tx.commit().map_err(|e| e.to_string())
 }
 
 const SCHEMA: &str = r#"
@@ -179,6 +434,9 @@ CREATE TABLE IF NOT EXISTS favorites (
 );
 
 CREATE TABLE IF NOT EXISTS roots (path TEXT PRIMARY KEY);
+-- Roots restored from a backup are data, not filesystem authority. They remain
+-- pending until the user confirms a replacement through the native picker.
+CREATE TABLE IF NOT EXISTS pending_roots (path TEXT PRIMARY KEY);
 
 CREATE TABLE IF NOT EXISTS playlists (
   id          TEXT PRIMARY KEY,
@@ -740,7 +998,7 @@ pub(crate) fn backfill_fingerprints(app: &AppHandle) {
 // playlist items so nothing dangles.
 #[tauri::command]
 pub fn db_remove_under_root(db: State<Db>, root: String) -> Result<Vec<String>, String> {
-    let conn = db.0.lock();
+    let mut conn = db.0.lock();
     let all: Vec<String> = {
         let mut stmt = conn
             .prepare("SELECT path FROM tracks")
@@ -760,16 +1018,22 @@ pub fn db_remove_under_root(db: State<Db>, root: String) -> Result<Vec<String>, 
             pn == root_n || pn.starts_with(&root_prefix)
         })
         .collect();
+    let transaction = conn.transaction().map_err(|e| e.to_string())?;
     for p in &removed {
-        conn.execute("DELETE FROM tracks WHERE path = ?1", params![p])
+        transaction
+            .execute("DELETE FROM tracks WHERE path = ?1", params![p])
             .map_err(|e| e.to_string())?;
-        conn.execute("DELETE FROM stats WHERE path = ?1", params![p])
+        transaction
+            .execute("DELETE FROM stats WHERE path = ?1", params![p])
             .map_err(|e| e.to_string())?;
-        conn.execute("DELETE FROM favorites WHERE path = ?1", params![p])
+        transaction
+            .execute("DELETE FROM favorites WHERE path = ?1", params![p])
             .map_err(|e| e.to_string())?;
-        conn.execute("DELETE FROM playlist_items WHERE path = ?1", params![p])
+        transaction
+            .execute("DELETE FROM playlist_items WHERE path = ?1", params![p])
             .map_err(|e| e.to_string())?;
     }
+    transaction.commit().map_err(|e| e.to_string())?;
     Ok(removed)
 }
 
@@ -788,7 +1052,7 @@ pub fn db_reset(db: State<Db>) -> Result<(), String> {
     conn.execute_batch(
         "DELETE FROM tracks; DELETE FROM stats; DELETE FROM favorites;
          DELETE FROM playlist_items; DELETE FROM playlists; DELETE FROM roots;
-         DELETE FROM recents;",
+         DELETE FROM pending_roots; DELETE FROM recents;",
     )
     .map_err(|e| e.to_string())
 }
@@ -797,9 +1061,16 @@ pub fn db_reset(db: State<Db>) -> Result<(), String> {
 
 #[tauri::command]
 pub fn db_roots(db: State<Db>) -> Result<Vec<String>, String> {
+    roots(db.inner())
+}
+
+/// Read the persisted library roots from trusted Rust code.  Mutating this
+/// table is deliberately not exposed as a raw IPC command: a webview must not
+/// be able to turn an arbitrary path into an authorised library root.
+pub(crate) fn roots(db: &Db) -> Result<Vec<String>, String> {
     let conn = db.0.lock();
     let mut stmt = conn
-        .prepare("SELECT path FROM roots")
+        .prepare("SELECT path FROM roots ORDER BY path")
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |r| r.get::<_, String>(0))
@@ -807,18 +1078,38 @@ pub fn db_roots(db: State<Db>) -> Result<Vec<String>, String> {
     Ok(rows.filter_map(|r| r.ok()).collect())
 }
 
-#[tauri::command]
-pub fn db_set_roots(db: State<Db>, roots: Vec<String>) -> Result<(), String> {
+pub(crate) fn replace_roots(db: &Db, roots: &[String]) -> Result<(), String> {
     let mut conn = db.0.lock();
     let tx = conn.transaction().map_err(|e| e.to_string())?;
     tx.execute("DELETE FROM roots", [])
         .map_err(|e| e.to_string())?;
-    for r in &roots {
+    for r in roots {
         tx.execute("INSERT OR IGNORE INTO roots(path) VALUES (?1)", params![r])
             .map_err(|e| e.to_string())?;
     }
     tx.commit().map_err(|e| e.to_string())?;
     Ok(())
+}
+
+pub(crate) fn insert_roots(db: &Db, roots: &[String]) -> Result<(), String> {
+    let mut conn = db.0.lock();
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    for root in roots {
+        tx.execute(
+            "INSERT OR IGNORE INTO roots(path) VALUES (?1)",
+            params![root],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    tx.commit().map_err(|e| e.to_string())
+}
+
+pub(crate) fn delete_root(db: &Db, root: &str) -> Result<bool, String> {
+    let conn = db.0.lock();
+    let changed = conn
+        .execute("DELETE FROM roots WHERE path = ?1", params![root])
+        .map_err(|e| e.to_string())?;
+    Ok(changed == 1)
 }
 
 pub(crate) mod tracks;
@@ -860,12 +1151,13 @@ pub(crate) mod backup;
 pub fn db_import(
     db: State<Db>,
     tracks: Vec<MusicTrack>,
-    roots: Vec<String>,
+    _roots: Vec<String>,
     state: Value,
 ) -> Result<(), String> {
-    // Tracks + roots first (upsert_tracks/set_roots take their own lock).
+    // Legacy roots came from webview-controlled IndexedDB/localStorage.  They
+    // are intentionally not restored as filesystem authority; the user can
+    // re-authorise those folders once through the native folder picker.
     db_upsert_tracks(db.clone(), tracks)?;
-    db_set_roots(db.clone(), roots)?;
 
     let mut conn = db.0.lock();
     let tx = conn.transaction().map_err(|e| e.to_string())?;
@@ -1036,10 +1328,10 @@ mod indexing_tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn memory_db() -> Db {
-        let conn = Connection::open_in_memory().expect("open test database");
+        let mut conn = Connection::open_in_memory().expect("open test database");
         conn.execute_batch(SCHEMA).expect("create test schema");
-        migrate(&conn).expect("migrate test schema");
-        Db(Mutex::new(conn), DbCache::default())
+        migrate(&mut conn).expect("migrate test schema");
+        Db(Mutex::new(ConnectionSlot::new(conn)), DbCache::default())
     }
 
     fn unique_temp_dir() -> PathBuf {
@@ -1058,6 +1350,120 @@ mod indexing_tests {
                 params![path.to_string_lossy(), fingerprint],
             )
             .expect("insert test track");
+    }
+
+    #[test]
+    fn migration_merges_windows_verbatim_path_duplicates() {
+        let mut connection = Connection::open_in_memory().expect("open migration database");
+        connection
+            .execute_batch(SCHEMA)
+            .expect("create test schema");
+        connection
+            .pragma_update(None, "user_version", 1)
+            .expect("mark schema v1");
+        let legacy = r"D:\Music\song.flac";
+        let verbatim = r"\\?\D:\Music\song.flac";
+        let legacy_root = r"D:\Music";
+        let verbatim_root = r"\\?\D:\Music";
+
+        for (path, title) in [(legacy, "Legacy"), (verbatim, "Canonical")] {
+            connection
+                .execute(
+                    "INSERT INTO tracks(path, title, artist, album) VALUES (?1, ?2, 'Artist', 'Album')",
+                    params![path, title],
+                )
+                .expect("insert duplicate track spelling");
+        }
+        for (path, plays, last, skips) in [(legacy, 2, 10, 1), (verbatim, 5, 20, 2)] {
+            connection
+                .execute(
+                    "INSERT INTO stats(path, play_count, last_played, skip_count) VALUES (?1, ?2, ?3, ?4)",
+                    params![path, plays, last, skips],
+                )
+                .expect("insert duplicate stats");
+        }
+        connection
+            .execute(
+                "INSERT INTO favorites(path, position) VALUES (?1, 7), (?2, 2)",
+                params![legacy, verbatim],
+            )
+            .expect("insert duplicate favorites");
+        connection
+            .execute(
+                "INSERT INTO playlists(id, name) VALUES ('playlist', 'Playlist')",
+                [],
+            )
+            .expect("insert playlist");
+        connection
+            .execute(
+                "INSERT INTO playlist_items(playlist_id, path, position)
+                 VALUES ('playlist', ?1, 4), ('playlist', ?2, 1)",
+                params![legacy, verbatim],
+            )
+            .expect("insert duplicate playlist entries");
+        connection
+            .execute(
+                "INSERT INTO roots(path) VALUES (?1)",
+                params![verbatim_root],
+            )
+            .expect("insert verbatim root");
+        connection
+            .execute(
+                "INSERT INTO kv(k, v) VALUES ('playback', ?1)",
+                params![serde_json::json!({
+                    "songPath": verbatim,
+                    "queuePaths": [verbatim]
+                })
+                .to_string()],
+            )
+            .expect("insert playback state");
+
+        migrate(&mut connection).expect("run v2 migration");
+
+        let track_count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM tracks", [], |row| row.get(0))
+            .expect("count merged tracks");
+        let stats: (i64, i64, i64) = connection
+            .query_row(
+                "SELECT play_count, last_played, skip_count FROM stats WHERE path = ?1",
+                params![legacy],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("read merged stats");
+        let favorite_position: i64 = connection
+            .query_row(
+                "SELECT position FROM favorites WHERE path = ?1",
+                params![legacy],
+                |row| row.get(0),
+            )
+            .expect("read merged favorite");
+        let playlist_position: i64 = connection
+            .query_row(
+                "SELECT position FROM playlist_items WHERE playlist_id = 'playlist' AND path = ?1",
+                params![legacy],
+                |row| row.get(0),
+            )
+            .expect("read merged playlist item");
+        let root_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM roots WHERE path = ?1",
+                params![legacy_root],
+                |row| row.get(0),
+            )
+            .expect("read normalized root");
+        let playback: String = connection
+            .query_row("SELECT v FROM kv WHERE k = 'playback'", [], |row| {
+                row.get(0)
+            })
+            .expect("read normalized playback state");
+
+        assert_eq!(track_count, 1);
+        assert_eq!(stats, (7, 20, 3));
+        assert_eq!(favorite_position, 2);
+        assert_eq!(playlist_position, 1);
+        assert_eq!(root_count, 1);
+        assert!(!playback.contains(r"\\?\"));
+        assert!(playback.contains(r"D:\Music\song.flac"));
     }
 
     #[test]

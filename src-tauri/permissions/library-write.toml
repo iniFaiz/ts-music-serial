@@ -1,0 +1,28 @@
+[[permission]]
+identifier = "library-write"
+description = "Non-destructive library management, settings, playlists, and integrations."
+commands.allow = [
+  "add_library_root",
+  "index_library",
+  "restore_roots",
+  "watch_roots",
+  "export_m3u",
+  "import_m3u",
+  "set_musixmatch_token",
+  "set_close_to_tray",
+  "discord_set_enabled",
+  "discord_update",
+  "discord_clear",
+  "cancel_online_metadata",
+  "db_toggle_favorite",
+  "db_move_favorite",
+  "db_upsert_playlist",
+  "db_delete_playlist",
+  "db_move_playlist_order",
+  "db_playlist_add",
+  "db_playlist_remove",
+  "db_playlist_move_item",
+  "db_record_recent",
+  "db_kv_set",
+]
+

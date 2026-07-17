@@ -36,19 +36,20 @@ use library_db as db;
 pub(crate) use cover_cache::{cover_cache_dir, cover_cache_key};
 use cover_cache::{get_track_cover, get_track_cover_path, get_track_palette};
 use library_index::index_library;
-use library_scan::restore_roots;
+use library_scan::{add_library_root, remove_library_root, restore_roots};
 pub(crate) use library_scan::{
-    allow_root, compute_fingerprint, is_allowed_audio, is_allowed_path, is_audio_file,
-    parse_metadata, parse_rg_db,
+    compute_fingerprint, is_allowed_audio, is_allowed_path, is_audio_file, parse_metadata,
+    parse_rg_db, resolve_allowed_audio,
 };
 use metadata_tags::{preview_image, write_track_tags};
 pub(crate) use player::build_decoder;
 use player::{
-    compute_track_gain, init_audio_player, list_output_devices, player_load, player_pause,
-    player_prepare_next, player_resume, player_seek, player_set_equalizer,
-    player_set_normalization, player_set_normalization_settings, player_set_spectrum_enabled,
-    player_set_transition, player_set_volume, player_spectrum, player_status, player_stop,
-    set_output_device, set_wasapi_exclusive, spawn_player_ticker, AudioPlayer,
+    compute_track_gain, init_audio_player, list_output_devices, playback_session_intent,
+    playback_session_snapshot, player_load, player_pause, player_prepare_next, player_resume,
+    player_seek, player_set_equalizer, player_set_normalization, player_set_normalization_settings,
+    player_set_spectrum_enabled, player_set_transition, player_set_volume, player_spectrum,
+    player_status, player_stop, set_output_device, set_wasapi_exclusive, spawn_player_ticker,
+    AudioPlayer,
 };
 use waveform::get_waveform;
 
@@ -94,11 +95,15 @@ fn collect_audio_args<I: IntoIterator<Item = String>>(args: I) -> Vec<String> {
 
 #[tauri::command]
 fn take_pending_open_files(app: AppHandle, state: State<PendingOpenFiles>) -> Vec<String> {
-    let files: Vec<String> = state.0.lock().drain(..).collect();
-    for f in &files {
+    let pending: Vec<String> = state.0.lock().drain(..).collect();
+    let mut files = Vec::with_capacity(pending.len());
+    for f in pending {
         // Grant streaming/cover access to each file individually — opening a
         // song from Explorer must not widen the scope to its whole folder.
-        let _ = app.asset_protocol_scope().allow_file(Path::new(f));
+        if let Ok(canonical) = library_scan::grant_session_audio(&app, Path::new(&f)) {
+            let _ = app.asset_protocol_scope().allow_file(&canonical);
+            files.push(canonical.to_string_lossy().to_string());
+        }
     }
     files
 }
@@ -114,9 +119,9 @@ async fn probe_files(app: AppHandle, paths: Vec<String>) -> Result<Vec<MusicTrac
             let pb = PathBuf::from(&p);
             // `take_pending_open_files` grants each OS-provided file explicitly.
             // Never widen the scope from this webview-callable command itself.
-            if pb.is_file() && is_allowed_audio(&app, &pb) {
-                if let Some(t) = parse_metadata(&pb) {
-                    tracks.push(t);
+            if let Ok(canonical) = resolve_allowed_audio(&app, &pb) {
+                if let Some(track) = parse_metadata(&canonical) {
+                    tracks.push(track);
                 }
             }
         }
@@ -223,10 +228,7 @@ async fn get_lyrics(
     lyrics_source: String,
     force: bool,
 ) -> Option<lyrics::Lyrics> {
-    let path_buf = PathBuf::from(&path);
-    if !is_allowed_audio(&app, &path_buf) {
-        return None;
-    }
+    let path_buf = resolve_allowed_audio(&app, Path::new(&path)).ok()?;
 
     if lyrics_source == "none" {
         return None;
@@ -401,13 +403,14 @@ fn spawn_fs_coalescer(app: AppHandle, rx: mpsc::Receiver<Vec<PathBuf>>) {
     });
 }
 
-// (Re)configure the watcher to cover exactly the given roots. Replacing the
-// watcher drops the previous one, unwatching the old set.
-#[tauri::command]
-fn watch_roots(state: State<FileWatcher>, roots: Vec<String>) -> Result<(), String> {
+// (Re)configure the watcher from the persisted root table. Replacing the
+// watcher drops the previous one, unwatching the old set. No IPC caller can
+// widen this set by supplying paths.
+pub(crate) fn reconfigure_watcher(app: &AppHandle) -> Result<(), String> {
     use notify::event::{EventKind, ModifyKind};
     use notify::{RecursiveMode, Watcher};
 
+    let state = app.state::<FileWatcher>();
     let tx = state.evt_tx.clone();
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         if let Ok(event) = res {
@@ -435,13 +438,24 @@ fn watch_roots(state: State<FileWatcher>, roots: Vec<String>) -> Result<(), Stri
     })
     .map_err(|e| e.to_string())?;
 
-    for root in &roots {
-        // Best-effort: a missing/again-removed folder shouldn't abort the rest.
-        let _ = watcher.watch(Path::new(root), RecursiveMode::Recursive);
+    for root in db::roots(app.state::<db::Db>().inner())? {
+        // Missing/offline removable roots remain persisted but cannot be scoped
+        // or watched until they exist again.
+        let Ok(canonical) = library_scan::canonicalize_directory(Path::new(&root)) else {
+            continue;
+        };
+        watcher
+            .watch(&canonical, RecursiveMode::Recursive)
+            .map_err(|error| format!("Failed to watch '{}': {error}", canonical.display()))?;
     }
 
     *state.watcher.lock() = Some(watcher);
     Ok(())
+}
+
+#[tauri::command]
+fn watch_roots(app: AppHandle) -> Result<(), String> {
+    reconfigure_watcher(&app)
 }
 
 // ---------------------------------------------------------------------------
@@ -602,18 +616,13 @@ fn smtc_set_playback(_playing: bool, _position: f64) {}
 #[tauri::command]
 fn player_show_in_folder(app: AppHandle, path: String) -> Result<(), String> {
     use std::process::Command;
-    let path_buf = Path::new(&path);
-    if !is_allowed_audio(&app, path_buf) {
-        return Err("Path is not within an allowed music folder".to_string());
-    }
-    if !path_buf.exists() {
-        return Err("File does not exist".to_string());
-    }
+    let path_buf = resolve_allowed_audio(&app, Path::new(&path))?;
+    let canonical_path = path_buf.to_string_lossy().to_string();
 
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
-        let mut path_win = path.replace('/', "\\");
+        let mut path_win = canonical_path.replace('/', "\\");
         if path_win.starts_with(r"\\?\UNC\") {
             path_win = format!(r"\\{}", &path_win[8..]);
         } else if path_win.starts_with(r"\\?\") {
@@ -629,7 +638,7 @@ fn player_show_in_folder(app: AppHandle, path: String) -> Result<(), String> {
     {
         Command::new("open")
             .arg("-R")
-            .arg(&path)
+            .arg(&path_buf)
             .spawn()
             .map_err(|e| e.to_string())?;
     }
@@ -650,17 +659,13 @@ fn player_show_in_folder(app: AppHandle, path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn player_delete_file(app: AppHandle, path: String) -> Result<(), String> {
-    let path_buf = Path::new(&path);
-    if !is_allowed_audio(&app, path_buf) {
-        return Err("Path is not within an allowed music folder".to_string());
+fn player_delete_file(app: AppHandle, db: State<db::Db>, path: String) -> Result<(), String> {
+    let path_buf = resolve_allowed_audio(&app, Path::new(&path))?;
+    let canonical = path_buf.to_string_lossy().to_string();
+    if db::tracks::db_track(db, canonical)?.is_none() {
+        return Err("File is not an indexed library track".to_string());
     }
-    if path_buf.exists() {
-        fs::remove_file(path_buf).map_err(|e| e.to_string())?;
-        Ok(())
-    } else {
-        Err("File not found".to_string())
-    }
+    fs::remove_file(&path_buf).map_err(|e| e.to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -704,19 +709,26 @@ pub fn run() {
             evt_tx: fs_tx,
         })
         .manage(library_index::LibraryIndexState::new())
+        .manage(library_scan::LibraryAccessState::new())
         // Close-to-tray: while the setting is enabled, closing the main window
         // hides it instead of quitting; Quit lives in the tray menu.
-        .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                if window.label() == "main" {
-                    if let Some(st) = window.app_handle().try_state::<tray::TrayState>() {
-                        if st.close_to_tray() {
-                            api.prevent_close();
-                            let _ = window.hide();
-                        }
+        .on_window_event(|window, event| match event {
+            tauri::WindowEvent::CloseRequested { api, .. } if window.label() == "main" => {
+                if let Some(st) = window.app_handle().try_state::<tray::TrayState>() {
+                    if st.close_to_tray() {
+                        api.prevent_close();
+                        let _ = window.hide();
                     }
                 }
             }
+            tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. })
+                if window.label() == "main" =>
+            {
+                if let Some(grant) = library_scan::record_native_drop(window.app_handle(), paths) {
+                    let _ = window.emit("library-drop-grant", grant);
+                }
+            }
+            _ => {}
         });
 
     #[cfg(target_os = "windows")]
@@ -765,6 +777,10 @@ pub fn run() {
                 spawn_fs_coalescer(_app.handle().clone(), rx);
             }
 
+            // Rebuild filesystem authority only from SQLite. The frontend does
+            // not provide roots during startup or watcher configuration.
+            restore_roots(_app.handle().clone())?;
+
             // Spawn the audio player tick thread for crossfade/gapless transitions
             let player = _app.state::<AudioPlayer>().inner().clone();
             spawn_player_ticker(_app.handle().clone(), player);
@@ -772,6 +788,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            add_library_root,
+            remove_library_root,
             index_library,
             get_track_cover,
             get_track_cover_path,
@@ -786,6 +804,8 @@ pub fn run() {
             player_seek,
             player_stop,
             player_status,
+            playback_session_snapshot,
+            playback_session_intent,
             player_spectrum,
             player_set_spectrum_enabled,
             player_set_equalizer,
@@ -818,14 +838,10 @@ pub fn run() {
             online_metadata::import_online_metadata,
             online_metadata::cancel_online_metadata,
             db::db_import,
-            db::db_upsert_tracks,
             db::db_remove_paths,
-            db::db_remove_under_root,
-            db::db_prune_missing,
             db::db_count,
             db::db_reset,
             db::db_roots,
-            db::db_set_roots,
             db::tracks::db_tracks_page,
             db::tracks::db_search,
             db::tracks::db_tracks_by_paths,

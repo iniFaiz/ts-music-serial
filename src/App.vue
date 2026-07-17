@@ -343,6 +343,7 @@ const handleKeydown = (e) => {
 
 // ---- Drag & drop folders/files onto the window ----
 let unlistenDrop = null;
+let unlistenDropGrant = null;
 // ---- Filesystem watcher → debounced library refresh ----
 let unlistenLibraryChanged = null;
 let unlistenExclusiveErr = null;
@@ -555,7 +556,18 @@ onMounted(async () => {
   window.addEventListener('auxclick', handleAuxClick);
   window.addEventListener('keydown', handleKeydown);
 
-  // Drag & drop: highlight while hovering, add the dropped paths on release.
+  // Only the native window event can mint an indexing grant. The webview event
+  // is presentation-only and never forwards filesystem paths into IPC.
+  try {
+    unlistenDropGrant = await listen('library-drop-grant', (event) => {
+      const grantId = event.payload && event.payload.grantId;
+      if (grantId) store.addPaths(grantId);
+    });
+  } catch {
+    // drag-drop indexing is best-effort
+  }
+
+  // Drag & drop: highlight while hovering; Rust handles the actual drop.
   try {
     unlistenDrop = await getCurrentWebview().onDragDropEvent((event) => {
       const t = event.payload.type;
@@ -565,9 +577,6 @@ onMounted(async () => {
         store.dragActive = false;
       } else if (t === 'drop') {
         store.dragActive = false;
-        if (event.payload.paths && event.payload.paths.length) {
-          store.addPaths(event.payload.paths);
-        }
       }
     });
   } catch {
@@ -667,6 +676,7 @@ onUnmounted(() => {
   window.removeEventListener('auxclick', handleAuxClick);
   window.removeEventListener('keydown', handleKeydown);
   if (unlistenDrop) unlistenDrop();
+  if (unlistenDropGrant) unlistenDropGrant();
   if (unlistenLibraryChanged) unlistenLibraryChanged();
   if (unlistenExclusiveErr) unlistenExclusiveErr();
   if (unlistenOpenFiles) unlistenOpenFiles();

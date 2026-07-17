@@ -4,6 +4,7 @@
 //! real tags immediately before writing and never replaces title, artist,
 //! album, genre, year, track number, or artwork that the user already has.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -21,7 +22,9 @@ use serde::Serialize;
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, State};
 
-use crate::{build_decoder, compute_fingerprint, db, is_allowed_audio, parse_metadata, MusicTrack};
+use crate::{
+    build_decoder, compute_fingerprint, db, parse_metadata, resolve_allowed_audio, MusicTrack,
+};
 
 static RUN_ID: AtomicU64 = AtomicU64::new(0);
 const USER_AGENT: &str = "ts-music/0.1.0 (https://github.com/iniFaiz/ts-music-serial)";
@@ -683,11 +686,14 @@ pub async fn import_online_metadata(
     paths: Option<Vec<String>>,
 ) -> Result<ImportSummary, String> {
     let run_id = RUN_ID.fetch_add(1, Ordering::SeqCst) + 1;
-    let requested = paths.unwrap_or(db::all_track_paths(&db)?);
+    let indexed_paths: HashSet<String> = db::all_track_paths(&db)?.into_iter().collect();
+    let requested = paths.unwrap_or_else(|| indexed_paths.iter().cloned().collect());
     let mut inspect_paths = Vec::new();
     for value in requested {
-        let path = PathBuf::from(&value);
-        if !is_allowed_audio(&app, &path) || !path.exists() {
+        let Ok(path) = resolve_allowed_audio(&app, Path::new(&value)) else {
+            continue;
+        };
+        if !indexed_paths.contains(path.to_string_lossy().as_ref()) {
             continue;
         }
         inspect_paths.push(path);

@@ -1,6 +1,13 @@
 <script setup>
 import { ref, watch } from 'vue';
-import { loadCover, getCachedCover, hasCachedCover, coverVersion } from '../coverCache';
+import {
+  loadCover,
+  loadCoverDataUrl,
+  evictCover,
+  getCachedCover,
+  hasCachedCover,
+  coverVersion,
+} from '../coverCache';
 
 const props = defineProps({
   path: { type: String, required: true },
@@ -13,6 +20,7 @@ const props = defineProps({
 // Hydrate synchronously from the shared cache so a previously seen cover renders
 // immediately (no flash) when the component is recreated on page navigation.
 const imageData = ref(hasCachedCover(props.path) ? getCachedCover(props.path) : null);
+const fallbackAttempted = ref(false);
 
 async function resolveCover(path) {
   if (!path) {
@@ -30,10 +38,34 @@ async function resolveCover(path) {
   }
 }
 
-watch(() => props.path, resolveCover, { immediate: true });
+async function handleImageError() {
+  const path = props.path;
+  if (!path || fallbackAttempted.value) {
+    imageData.value = null;
+    return;
+  }
+
+  fallbackAttempted.value = true;
+  evictCover(path);
+  imageData.value = null;
+  const fallback = await loadCoverDataUrl(path);
+  if (props.path === path) imageData.value = fallback;
+}
+
+watch(
+  () => props.path,
+  (path) => {
+    fallbackAttempted.value = false;
+    resolveCover(path);
+  },
+  { immediate: true }
+);
 // Re-resolve after a cover invalidation (tag editor changed the embedded art)
 // — the path prop stays the same, so the watcher above wouldn't refire.
-watch(coverVersion, () => resolveCover(props.path));
+watch(coverVersion, () => {
+  if (!imageData.value) fallbackAttempted.value = false;
+  resolveCover(props.path);
+});
 </script>
 
 <template>
@@ -51,6 +83,7 @@ watch(coverVersion, () => resolveCover(props.path));
       alt=""
       loading="lazy"
       draggable="false"
+      @error="handleImageError"
     />
     <div
       v-else

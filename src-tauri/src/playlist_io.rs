@@ -3,9 +3,10 @@
 // Export writes a plain #EXTM3U file (with #EXTINF metadata and absolute paths)
 // from a playlist's current tracks. Import reads an M3U, resolves its entries
 // (relative paths are resolved against the file's own directory), parses the
-// metadata of the audio files that actually exist, registers their folders so
-// the tracks are streamable, upserts them into the library and returns the
-// resolved paths so the frontend can build a playlist from them.
+// metadata of audio files already covered by a trusted root or exact transient
+// grant, upserts them into the library and returns the resolved paths so the
+// frontend can build a playlist from them. Playlist contents never grant root
+// authority.
 
 use std::fs;
 use std::path::PathBuf;
@@ -34,17 +35,6 @@ fn authorize_playlist_file<R: Runtime>(
 
 // Normalise a path for prefix comparison (unify separators, drop trailing slash,
 // lowercase — Windows paths are case-insensitive).
-fn norm(s: &str) -> String {
-    s.replace('\\', "/").trim_end_matches('/').to_lowercase()
-}
-
-fn is_under_any(dir_n: &str, roots: &[String]) -> bool {
-    roots.iter().any(|r| {
-        let rn = norm(r);
-        dir_n == rn || dir_n.starts_with(&format!("{rn}/"))
-    })
-}
-
 #[tauri::command]
 pub fn export_m3u(
     app: AppHandle,
@@ -75,9 +65,6 @@ pub fn import_m3u(app: AppHandle, db: State<Db>, src: String) -> Result<Vec<Stri
     let base = src_path.parent().map(|p| p.to_path_buf());
 
     let mut tracks: Vec<crate::MusicTrack> = Vec::new();
-    let mut roots = crate::db::db_roots(db.clone())?;
-    let mut added_dirs: Vec<String> = Vec::new();
-
     for line in content.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -92,31 +79,18 @@ pub fn import_m3u(app: AppHandle, db: State<Db>, src: String) -> Result<Vec<Stri
             raw
         };
 
-        if !crate::is_audio_file(&resolved) || !resolved.exists() {
+        // Playlist contents are data, not authority. Entries must already be
+        // covered by a persisted library root or an exact OS session grant.
+        let Ok(canonical) = crate::resolve_allowed_audio(&app, &resolved) else {
             continue;
-        }
-        // Authorize the containing folder so the track streams and its cover can
-        // be read (mirrors what a normal scan does).
-        if let Some(dir) = resolved.parent() {
-            let dir_s = dir.to_string_lossy().to_string();
-            crate::allow_root(&app, &dir_s);
-            let dn = norm(&dir_s);
-            if !is_under_any(&dn, &roots) && !added_dirs.iter().any(|d| norm(d) == dn) {
-                added_dirs.push(dir_s);
-            }
-        }
-        if let Some(t) = crate::parse_metadata(&resolved) {
+        };
+        if let Some(t) = crate::parse_metadata(&canonical) {
             tracks.push(t);
         }
     }
 
     if tracks.is_empty() {
         return Err("No playable audio files found in the M3U".into());
-    }
-    // Persist any new folders as roots so the tracks stay streamable next launch.
-    if !added_dirs.is_empty() {
-        roots.extend(added_dirs);
-        crate::db::db_set_roots(db.clone(), roots)?;
     }
     crate::db::db_upsert_tracks(db, tracks.clone())?;
     Ok(tracks.iter().map(|t| t.path.clone()).collect())

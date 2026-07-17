@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "vinyl-scratch",
+  "description": "Minimal capability for the dedicated vinyl scratch window",
+  "windows": ["vinyl-scratch"],
+  "permissions": [
+    "vinyl-playback",
+    "core:event:allow-emit"
+  ]
+}

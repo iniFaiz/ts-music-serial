@@ -15,7 +15,11 @@ use tauri::{AppHandle, Manager};
 use walkdir::WalkDir;
 
 use crate::library_db as db;
-use crate::{allow_root, is_audio_file, parse_metadata, MusicTrack};
+use crate::library_scan::{
+    canonical_roots, canonicalize_directory, canonicalize_existing_path, consume_native_drop,
+    grant_session_audio, path_is_within_roots, register_library_roots,
+};
+use crate::{is_audio_file, parse_metadata, MusicTrack};
 
 // Metadata objects (and their tag-reader allocations) are released after every
 // transaction rather than accumulating for the entire library.
@@ -110,31 +114,54 @@ fn index_directory(
         // parsing. Crucially, the iterator is consumed as a stream.
         for entry in jwalk::WalkDir::new(root).into_iter().filter_map(Result::ok) {
             if entry.file_type().is_file() {
-                queue_audio_path(
-                    app,
-                    entry.path(),
-                    use_parallelism,
-                    refresh_fingerprints,
-                    batch,
-                    summary,
-                )?;
+                if let Some(path) = safe_walked_file(root, &entry.path()) {
+                    queue_audio_path(
+                        app,
+                        path,
+                        use_parallelism,
+                        refresh_fingerprints,
+                        batch,
+                        summary,
+                    )?;
+                }
             }
         }
     } else {
         for entry in WalkDir::new(root).into_iter().filter_map(Result::ok) {
             if entry.file_type().is_file() {
-                queue_audio_path(
-                    app,
-                    entry.path().to_owned(),
-                    use_parallelism,
-                    refresh_fingerprints,
-                    batch,
-                    summary,
-                )?;
+                if let Some(path) = safe_walked_file(root, entry.path()) {
+                    queue_audio_path(
+                        app,
+                        path,
+                        use_parallelism,
+                        refresh_fingerprints,
+                        batch,
+                        summary,
+                    )?;
+                }
             }
         }
     }
     Ok(())
+}
+
+/// Resolve every file found by the walker and verify the resolved target still
+/// lies below the canonical root. Walkers do not follow symlinks by default;
+/// this second check also covers Windows junction/reparse-point surprises and
+/// a link swap between directory enumeration and metadata parsing.
+fn safe_walked_file(root: &Path, candidate: &Path) -> Option<PathBuf> {
+    if !is_audio_file(candidate) {
+        return None;
+    }
+    let canonical = canonicalize_existing_path(candidate).ok()?;
+    if canonical.is_file()
+        && is_audio_file(&canonical)
+        && path_is_within_roots(&canonical, &[root.to_owned()])
+    {
+        Some(canonical)
+    } else {
+        None
+    }
 }
 
 fn push_root(roots: &mut Vec<String>, root: &Path) {
@@ -171,7 +198,6 @@ fn index_paths_locked(
 
     for path in paths {
         if path.is_dir() {
-            allow_root(app, &path.to_string_lossy());
             let before = summary.scanned;
             index_directory(
                 app,
@@ -188,16 +214,10 @@ fn index_paths_locked(
                 refresh_fingerprints,
                 &mut summary,
             )?;
-            // A dropped empty directory is not registered automatically; a
-            // folder explicitly selected by the user is added by the frontend.
             if summary.scanned > before {
                 push_root(&mut summary.roots, &path);
             }
         } else if path.is_file() && is_audio_file(&path) {
-            if let Some(parent) = path.parent() {
-                allow_root(app, &parent.to_string_lossy());
-                push_root(&mut summary.roots, parent);
-            }
             queue_audio_path(
                 app,
                 path,
@@ -224,21 +244,56 @@ fn index_paths_locked(
     Ok(summary)
 }
 
-// Full/manual scans enter here. `spawn_blocking` keeps traversal and tag reads
-// off Tauri's async runtime; `job` guarantees full scans and watcher batches do
-// not race each other or multiply memory usage.
-#[tauri::command]
-pub(crate) async fn index_library(
-    app: AppHandle,
-    paths: Vec<String>,
+pub(crate) fn index_authorized_paths(
+    app: &AppHandle,
+    paths: Vec<PathBuf>,
     use_parallelism: bool,
     prune_missing: bool,
 ) -> Result<IndexSummary, String> {
+    let state = app.state::<LibraryIndexState>();
+    let _job = state.job.lock();
+    index_paths_locked(app, paths, use_parallelism, prune_missing, false)
+}
+
+// Full/manual scans never accept webview-provided paths. With no grant they
+// read the canonical roots from SQLite. A native drag/drop token is consumed
+// exactly once and resolves to the paths captured by Tauri's native event.
+#[tauri::command]
+pub(crate) async fn index_library(
+    app: AppHandle,
+    use_parallelism: bool,
+    prune_missing: bool,
+    dnd_grant: Option<String>,
+) -> Result<IndexSummary, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let state = app.state::<LibraryIndexState>();
-        let _job = state.job.lock();
-        let paths = paths.into_iter().map(PathBuf::from).collect();
-        index_paths_locked(&app, paths, use_parallelism, prune_missing, false)
+        let is_drop = dnd_grant.is_some();
+        let mut roots_added = Vec::new();
+        let paths = if let Some(token) = dnd_grant {
+            let dropped = consume_native_drop(&app, &token)?;
+            let mut directories = Vec::new();
+            let mut files = Vec::new();
+            for path in dropped {
+                if path.is_dir() {
+                    directories.push(canonicalize_directory(&path)?);
+                } else if path.is_file() && is_audio_file(&path) {
+                    files.push(grant_session_audio(&app, &path)?);
+                }
+            }
+            if !directories.is_empty() {
+                roots_added = register_library_roots(&app, &directories)?;
+            }
+            directories.extend(files);
+            directories
+        } else {
+            canonical_roots(&app)
+        };
+
+        let mut summary =
+            index_authorized_paths(&app, paths, use_parallelism, prune_missing && !is_drop)?;
+        if is_drop {
+            summary.roots = roots_added;
+        }
+        Ok(summary)
     })
     .await
     .map_err(|error| format!("Library index job failed: {error}"))?
@@ -253,7 +308,23 @@ pub(crate) fn index_watcher_paths(
 ) -> Result<IndexSummary, String> {
     let state = app.state::<LibraryIndexState>();
     let _job = state.job.lock();
-    let paths = compact_changed_paths(paths);
+    let roots = canonical_roots(app);
+    let paths = compact_changed_paths(
+        paths
+            .into_iter()
+            .filter_map(|path| {
+                if path.exists() {
+                    canonicalize_existing_path(&path)
+                        .ok()
+                        .filter(|resolved| path_is_within_roots(resolved, &roots))
+                } else if path.is_absolute() && path_is_within_roots(&path, &roots) {
+                    Some(path)
+                } else {
+                    None
+                }
+            })
+            .collect(),
+    );
     let changed = paths.clone();
     let mut summary = index_paths_locked(app, paths, true, false, true)?;
     summary.removed = db::prune_changed_paths(&app.state::<db::Db>(), &changed)?.len();

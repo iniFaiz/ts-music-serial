@@ -16,10 +16,16 @@ use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink, Source};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use crate::{cover_cache_key, is_allowed_audio, parse_rg_db};
+use crate::{cover_cache_key, library_db, parse_rg_db, resolve_allowed_audio};
 
 #[cfg(target_os = "windows")]
 mod exclusive;
+
+mod session;
+pub(crate) use session::{
+    PlaybackEffect, PlaybackIntent, PlaybackSessionSnapshot, PlaybackSessionUpdate, PreparedToken,
+    TransitionMode,
+};
 
 // ---------------------------------------------------------------------------
 // Native audio playback
@@ -58,6 +64,7 @@ struct FadingTrack {
 
 struct PreparedTrack {
     path: String,
+    token: PreparedToken,
     decoder: Decoder<Cursor<Vec<u8>>>,
     duration: f64,
     gain_db: Option<f32>,
@@ -90,8 +97,12 @@ pub(crate) struct AudioPlayer {
     cmd_tx: mpsc::Sender<AudioCommand>,
     // Pre-decoded next track details
     prepared: Arc<Mutex<Option<PreparedTrack>>>,
-    // Target path currently being prepared (prevents race conditions)
-    prepared_target_path: Arc<Mutex<Option<String>>>,
+    // Target token currently being decoded. Unlike a path-only marker this
+    // distinguishes duplicate occurrences of the same file in the queue.
+    preparing: Arc<Mutex<Option<PreparedToken>>>,
+    // Queue/transition policy. Embedded here so legacy commands and the new
+    // typed intent API cannot accidentally operate on separate state objects.
+    session: session::PlaybackSession,
     // Transition mode and crossfade settings
     transition_mode: Arc<Mutex<String>>,
     crossfade_secs: Arc<Mutex<f64>>,
@@ -121,7 +132,8 @@ impl Clone for AudioPlayer {
             last_volume: self.last_volume.clone(),
             cmd_tx: self.cmd_tx.clone(),
             prepared: self.prepared.clone(),
-            prepared_target_path: self.prepared_target_path.clone(),
+            preparing: self.preparing.clone(),
+            session: self.session.clone(),
             transition_mode: self.transition_mode.clone(),
             crossfade_secs: self.crossfade_secs.clone(),
             normalization_enabled: self.normalization_enabled.clone(),
@@ -154,6 +166,90 @@ pub(crate) struct PlayerStatus {
     pub(crate) playing: bool,
     pub(crate) finished: bool,
     pub(crate) path: Option<String>,
+}
+
+fn invalidate_prepared_decoder(player: &AudioPlayer) {
+    *player.prepared.lock() = None;
+    *player.preparing.lock() = None;
+}
+
+fn emit_session_update(app: &AppHandle, update: &PlaybackSessionUpdate) {
+    if let Some(database) = app.try_state::<library_db::Db>() {
+        for event in &update.events {
+            if let session::PlaybackSessionEvent::Accounting { kind, path, .. } = event {
+                let result = match kind {
+                    session::AccountingKind::PlayStarted => {
+                        library_db::stats::record_play_start(database.inner(), path)
+                    }
+                    session::AccountingKind::PlayCounted => {
+                        library_db::stats::record_play(database.inner(), path)
+                    }
+                    session::AccountingKind::SkipCounted => {
+                        library_db::stats::record_skip(database.inner(), path)
+                    }
+                };
+                if let Err(error) = result {
+                    eprintln!("Failed to persist native playback accounting: {error}");
+                }
+            }
+        }
+    }
+    // Progress is observed on every status poll; only publish meaningful
+    // changes so this typed event does not become a 4 Hz snapshot broadcast.
+    if !update.events.is_empty() || update.effect.is_some() {
+        let _ = app.emit("playback-session-event", update.clone());
+    }
+}
+
+fn apply_immediate_session_effect(
+    app: &AppHandle,
+    player: &AudioPlayer,
+    effect: Option<&PlaybackEffect>,
+) {
+    match effect {
+        Some(PlaybackEffect::SetPlaying { playing }) => {
+            #[cfg(target_os = "windows")]
+            if player.exclusive_enabled.load(Ordering::SeqCst) {
+                if let Some(ex) = app.try_state::<Arc<exclusive::ExclusivePlayer>>() {
+                    if ex.is_active() {
+                        ex.set_playing(*playing);
+                        return;
+                    }
+                }
+            }
+            if let Some(sink) = player.sink() {
+                if *playing {
+                    sink.play();
+                } else {
+                    sink.pause();
+                }
+            }
+            for fading in player.fading_tracks.lock().iter() {
+                if *playing {
+                    fading.sink.play();
+                } else {
+                    fading.sink.pause();
+                }
+            }
+        }
+        Some(PlaybackEffect::Stop { .. }) => {
+            #[cfg(target_os = "windows")]
+            if let Some(ex) = app.try_state::<Arc<exclusive::ExclusivePlayer>>() {
+                if ex.is_active() {
+                    ex.stop();
+                }
+            }
+            for fading in player.fading_tracks.lock().drain(..) {
+                fading.sink.stop();
+            }
+            if let Some(track) = player.current_track.lock().take() {
+                track.sink.stop();
+            }
+            player.active.store(false, Ordering::SeqCst);
+            invalidate_prepared_decoder(player);
+        }
+        _ => {}
+    }
 }
 
 mod decoder;
@@ -189,11 +285,10 @@ pub(crate) async fn player_load(
     autoplay: bool,
     duration_hint: f64,
     fade_in_secs: Option<f64>,
+    queue_entry_id: Option<String>,
 ) -> Result<PlaybackInfo, String> {
-    let path_buf = PathBuf::from(&path);
-    if !is_allowed_audio(&app, &path_buf) {
-        return Err("Path is not within an allowed music folder".to_string());
-    }
+    let path_buf = resolve_allowed_audio(&app, Path::new(&path))?;
+    let path = path_buf.to_string_lossy().to_string();
 
     // WASAPI exclusive path (Windows). Falls back to shared mode on any failure.
     #[cfg(target_os = "windows")]
@@ -207,7 +302,15 @@ pub(crate) async fn player_load(
             .await
             .map_err(|e| format!("Exclusive load task failed: {e}"))?;
             match res {
-                Ok(info) => return Ok(info),
+                Ok(info) => {
+                    let session_update =
+                        player
+                            .session
+                            .legacy_loaded(&path, queue_entry_id.as_deref(), autoplay);
+                    invalidate_prepared_decoder(&player);
+                    emit_session_update(&app, &session_update);
+                    return Ok(info);
+                }
                 Err(e) => {
                     eprintln!("WASAPI exclusive load failed ({e}); using shared mode.");
                     let _ = app.emit("wasapi-exclusive-error", e);
@@ -293,13 +396,22 @@ pub(crate) async fn player_load(
     // read + decode on the blocking pool.
     let prepared_decoder = {
         let mut g = prepared.lock();
-        let mut target_g = player.prepared_target_path.lock();
-        if g.as_ref().map(|p| p.path == path).unwrap_or(false) {
-            *target_g = None;
+        let reusable = g
+            .as_ref()
+            .map(|prepared| {
+                prepared.path == path
+                    && queue_entry_id
+                        .as_deref()
+                        .map(|id| id == prepared.token.entry_id)
+                        .unwrap_or(true)
+                    && player.session.is_prepare_current(&prepared.token)
+            })
+            .unwrap_or(false);
+        *player.preparing.lock() = None;
+        if reusable {
             g.take()
         } else {
             *g = None;
-            *target_g = None;
             None
         }
     };
@@ -388,6 +500,11 @@ pub(crate) async fn player_load(
         bit_depth = props.bit_depth();
     }
 
+    let session_update = player
+        .session
+        .legacy_loaded(&path, queue_entry_id.as_deref(), autoplay);
+    emit_session_update(&app, &session_update);
+
     Ok(PlaybackInfo {
         duration,
         sample_rate,
@@ -404,11 +521,10 @@ pub(crate) async fn player_prepare_next(
     player: State<'_, AudioPlayer>,
     path: String,
     duration_hint: Option<f64>,
+    queue_entry_id: Option<String>,
 ) -> Result<(), String> {
-    let path_buf = PathBuf::from(&path);
-    if !is_allowed_audio(&app, &path_buf) {
-        return Err("Path is not within an allowed music folder".to_string());
-    }
+    let path_buf = resolve_allowed_audio(&app, Path::new(&path))?;
+    let path = path_buf.to_string_lossy().to_string();
 
     // The exclusive engine doesn't use rodio pre-decode; skip entirely.
     #[cfg(target_os = "windows")]
@@ -416,29 +532,41 @@ pub(crate) async fn player_prepare_next(
         return Ok(());
     }
 
-    // Set target path and clear any stale prepared track
+    let Some(token) = player
+        .session
+        .begin_prepare(&path, queue_entry_id.as_deref())
+    else {
+        // Transition-off and a path which is no longer part of the queue both
+        // mean the decoder must be released, not merely ignored by the ticker.
+        *player.prepared.lock() = None;
+        *player.preparing.lock() = None;
+        return Ok(());
+    };
+
+    // Claim the exact entry+generation target and clear any stale decoder.
     {
-        let mut target_g = player.prepared_target_path.lock();
-        if target_g.as_ref() == Some(&path) {
+        let mut target_g = player.preparing.lock();
+        if target_g.as_ref() == Some(&token) {
             return Ok(());
         }
-        *target_g = Some(path.clone());
+        *target_g = Some(token.clone());
         *player.prepared.lock() = None;
     }
 
     let prepared = player.prepared.clone();
-    let prepared_target_path = player.prepared_target_path.clone();
+    let preparing = player.preparing.clone();
+    let session = player.session.clone();
     let pb = path_buf.clone();
-    let path_clone = path.clone();
+    let token_for_decode = token.clone();
     if let Ok(Ok((dec, raw_dur))) =
         tauri::async_runtime::spawn_blocking(move || build_decoder(&pb)).await
     {
-        // Check if this path is still the target before continuing with RG tags and saving
+        // Queue edits and mode changes bump the policy generation.  Check both
+        // policy and audio-layer target before doing more work.
+        if preparing.lock().as_ref() != Some(&token_for_decode)
+            || !session.is_prepare_current(&token_for_decode)
         {
-            let target_g = prepared_target_path.lock();
-            if target_g.as_ref() != Some(&path_clone) {
-                return Ok(());
-            }
+            return Ok(());
         }
 
         // Parse ReplayGain tags of the prepared track
@@ -462,35 +590,40 @@ pub(crate) async fn player_prepare_next(
             duration_hint.unwrap_or(0.0)
         };
 
-        // Check again after metadata read
+        // Check again after metadata I/O; this is the race window that used to
+        // allow an old queue's decoder to overwrite the new target.
+        if preparing.lock().as_ref() != Some(&token_for_decode)
+            || !session.is_prepare_current(&token_for_decode)
         {
-            let target_g = prepared_target_path.lock();
-            if target_g.as_ref() != Some(&path_clone) {
-                return Ok(());
-            }
+            return Ok(());
         }
 
         *prepared.lock() = Some(PreparedTrack {
-            path: path_clone,
+            path,
+            token: token_for_decode,
             decoder: dec,
             duration: dur,
             gain_db,
             peak,
         });
+    } else {
+        let mut target = preparing.lock();
+        if target.as_ref() == Some(&token) {
+            *target = None;
+        }
     }
     Ok(())
 }
 
 #[tauri::command]
 pub(crate) fn player_pause(app: AppHandle, player: State<AudioPlayer>) {
-    #[cfg(not(target_os = "windows"))]
-    let _ = app;
-
     #[cfg(target_os = "windows")]
     if player.exclusive_enabled.load(Ordering::SeqCst) {
         if let Some(ex) = app.try_state::<Arc<exclusive::ExclusivePlayer>>() {
             if ex.is_active() {
                 ex.set_playing(false);
+                let update = player.session.set_playing(false);
+                emit_session_update(&app, &update);
                 return;
             }
         }
@@ -503,18 +636,19 @@ pub(crate) fn player_pause(app: AppHandle, player: State<AudioPlayer>) {
     for track in fading.iter() {
         track.sink.pause();
     }
+    let update = player.session.set_playing(false);
+    emit_session_update(&app, &update);
 }
 
 #[tauri::command]
 pub(crate) fn player_resume(app: AppHandle, player: State<AudioPlayer>) {
-    #[cfg(not(target_os = "windows"))]
-    let _ = app;
-
     #[cfg(target_os = "windows")]
     if player.exclusive_enabled.load(Ordering::SeqCst) {
         if let Some(ex) = app.try_state::<Arc<exclusive::ExclusivePlayer>>() {
             if ex.is_active() {
                 ex.set_playing(true);
+                let update = player.session.set_playing(true);
+                emit_session_update(&app, &update);
                 return;
             }
         }
@@ -527,6 +661,8 @@ pub(crate) fn player_resume(app: AppHandle, player: State<AudioPlayer>) {
     for track in fading.iter() {
         track.sink.play();
     }
+    let update = player.session.set_playing(true);
+    emit_session_update(&app, &update);
 }
 
 #[tauri::command]
@@ -584,9 +720,6 @@ pub(crate) fn player_seek(
 
 #[tauri::command]
 pub(crate) fn player_stop(app: AppHandle, player: State<AudioPlayer>) {
-    #[cfg(not(target_os = "windows"))]
-    let _ = app;
-
     #[cfg(target_os = "windows")]
     if let Some(ex) = app.try_state::<Arc<exclusive::ExclusivePlayer>>() {
         if ex.is_active() {
@@ -604,22 +737,34 @@ pub(crate) fn player_stop(app: AppHandle, player: State<AudioPlayer>) {
         }
     }
     player.active.store(false, Ordering::SeqCst);
+    invalidate_prepared_decoder(&player);
+    let update = player.session.set_playing(false);
+    emit_session_update(&app, &update);
 }
 
 #[tauri::command]
 pub(crate) fn player_status(app: AppHandle, player: State<AudioPlayer>) -> PlayerStatus {
-    #[cfg(not(target_os = "windows"))]
-    let _ = app;
-
     #[cfg(target_os = "windows")]
     if player.exclusive_enabled.load(Ordering::SeqCst) {
         if let Some(ex) = app.try_state::<Arc<exclusive::ExclusivePlayer>>() {
             if ex.is_active() {
-                return ex.status();
+                let mut status = ex.status();
+                let update = player.session.observe_progress(
+                    status.position,
+                    status.duration,
+                    status.finished,
+                );
+                if matches!(update.effect.as_ref(), Some(PlaybackEffect::Stop { .. })) {
+                    status.playing = false;
+                    status.finished = false;
+                }
+                apply_immediate_session_effect(&app, &player, update.effect.as_ref());
+                emit_session_update(&app, &update);
+                return status;
             }
         }
     }
-    match player.sink() {
+    let mut status = match player.sink() {
         Some(sink) => {
             let empty = sink.empty();
             let path = player.current_track.lock().as_ref().map(|t| t.path.clone());
@@ -638,13 +783,65 @@ pub(crate) fn player_status(app: AppHandle, player: State<AudioPlayer>) -> Playe
             finished: false,
             path: None,
         },
+    };
+    let update = player
+        .session
+        .observe_progress(status.position, status.duration, status.finished);
+    if matches!(update.effect.as_ref(), Some(PlaybackEffect::Stop { .. })) {
+        status.playing = false;
+        status.finished = false;
     }
+    apply_immediate_session_effect(&app, &player, update.effect.as_ref());
+    emit_session_update(&app, &update);
+    status
 }
 
 #[tauri::command]
-pub(crate) fn player_set_transition(player: State<AudioPlayer>, mode: String, crossfade_secs: f64) {
-    *player.transition_mode.lock() = mode;
-    *player.crossfade_secs.lock() = crossfade_secs;
+pub(crate) fn player_set_transition(
+    app: AppHandle,
+    player: State<AudioPlayer>,
+    mode: String,
+    crossfade_secs: f64,
+) {
+    let typed_mode = TransitionMode::from_legacy(&mode);
+    *player.transition_mode.lock() = match typed_mode {
+        TransitionMode::Off => "off",
+        TransitionMode::Gapless => "gapless",
+        TransitionMode::Crossfade => "crossfade",
+    }
+    .to_string();
+    *player.crossfade_secs.lock() = crossfade_secs.clamp(0.25, 12.0);
+    let update = player
+        .session
+        .set_legacy_transition(typed_mode, crossfade_secs);
+    if update.prepared_invalidated || typed_mode == TransitionMode::Off {
+        invalidate_prepared_decoder(&player);
+    }
+    emit_session_update(&app, &update);
+}
+
+/// Read-only typed state for the incremental frontend migration.
+#[tauri::command]
+pub(crate) fn playback_session_snapshot(player: State<AudioPlayer>) -> PlaybackSessionSnapshot {
+    player.session.snapshot()
+}
+
+/// Apply a queue/session intent.  The returned effect tells the compatibility
+/// bridge which legacy audio command to execute; queue policy itself is decided
+/// here and the same update is broadcast for every window.
+#[tauri::command]
+pub(crate) fn playback_session_intent(
+    app: AppHandle,
+    player: State<AudioPlayer>,
+    intent: PlaybackIntent,
+) -> Result<PlaybackSessionUpdate, String> {
+    let update = player.session.apply(intent)?;
+    if update.prepared_invalidated {
+        invalidate_prepared_decoder(&player);
+    }
+    apply_immediate_session_effect(&app, &player, update.effect.as_ref());
+    emit_session_update(&app, &update);
+    Ok(update)
 }
 
 #[tauri::command]
@@ -831,7 +1028,8 @@ pub(crate) fn init_audio_player() -> AudioPlayer {
         last_volume,
         cmd_tx,
         prepared: Arc::new(Mutex::new(None)),
-        prepared_target_path: Arc::new(Mutex::new(None)),
+        preparing: Arc::new(Mutex::new(None)),
+        session: session::PlaybackSession::default(),
         transition_mode: Arc::new(Mutex::new("off".to_string())),
         crossfade_secs: Arc::new(Mutex::new(6.0)),
         normalization_enabled: Arc::new(Mutex::new(false)),
@@ -854,6 +1052,7 @@ const GAPLESS_LEAD_SECS: f64 = 0.3;
 // it to the current track the instant rodio advances the queue to it.
 struct GaplessQueued {
     path: String,
+    token: PreparedToken,
     duration: f64,
     gain_db: Option<f32>,
     peak: Option<f32>,
@@ -1002,7 +1201,28 @@ pub(crate) fn spawn_player_ticker(app: AppHandle, player: AudioPlayer) {
                         duration: q.duration,
                         start_time: Instant::now(),
                     });
-                    let _ = app.emit("track-changed", serde_json::json!({ "path": q.path }));
+                    let session_update =
+                        player
+                            .session
+                            .promote_prepared(&q.token)
+                            .unwrap_or_else(|| {
+                                // The source was appended just before a queue edit.
+                                // Once it has audibly started, reconcile policy to
+                                // audio truth rather than emitting a path-only ghost.
+                                player
+                                    .session
+                                    .legacy_loaded(&q.path, Some(&q.token.entry_id), true)
+                            });
+                    emit_session_update(&app, &session_update);
+                    let _ = app.emit(
+                        "track-changed",
+                        serde_json::json!({
+                            "path": q.path,
+                            "queueEntryId": session_update.snapshot.current_entry_id,
+                            "generation": session_update.snapshot.generation,
+                            "reason": "gapless"
+                        }),
+                    );
                     // Re-read fresh state next tick rather than acting on the
                     // outgoing track's stale position/duration this iteration.
                     continue;
@@ -1016,101 +1236,114 @@ pub(crate) fn spawn_player_ticker(app: AppHandle, player: AudioPlayer) {
                 && (duration > crossfade_secs && position >= (duration - crossfade_secs) || empty)
             {
                 if transition_triggered_for_gen != current_gen {
-                    let has_prep = player.prepared.lock().is_some();
+                    let prepared_opt = player
+                        .prepared
+                        .lock()
+                        .take()
+                        .filter(|prepared| player.session.is_prepare_current(&prepared.token));
+                    // Consuming or rejecting a decoder always releases its
+                    // in-flight marker so the following entry can prepare.
+                    *player.preparing.lock() = None;
 
-                    if has_prep {
-                        let prepared_opt = player.prepared.lock().take();
-                        // Consuming the prepared track invalidates the "currently
-                        // preparing" marker; clear it so the next prepare_next call
-                        // (for the track after this one) is never mistaken for a no-op.
-                        *player.prepared_target_path.lock() = None;
-
-                        if let Some(prep) = prepared_opt {
-                            let (reply_tx, reply_rx) = mpsc::channel();
-                            if player
-                                .cmd_tx
-                                .send(AudioCommand::CreateSink(reply_tx))
-                                .is_ok()
+                    if let Some(prep) = prepared_opt {
+                        let (reply_tx, reply_rx) = mpsc::channel();
+                        if player
+                            .cmd_tx
+                            .send(AudioCommand::CreateSink(reply_tx))
+                            .is_ok()
+                        {
+                            if let Ok(Ok(new_sink)) = reply_rx.recv_timeout(Duration::from_secs(2))
                             {
-                                if let Ok(Ok(new_sink)) =
-                                    reply_rx.recv_timeout(Duration::from_secs(2))
-                                {
-                                    let mut current_guard = player.current_track.lock();
-                                    if let Some(ref old_track) = *current_guard {
-                                        let mut fading_guard = player.fading_tracks.lock();
-                                        fading_guard.push(FadingTrack {
-                                            sink: old_track.sink.clone(),
-                                            fade_end: Instant::now()
-                                                + Duration::from_secs_f64(crossfade_secs),
-                                            fade_duration: Duration::from_secs_f64(crossfade_secs),
-                                            initial_volume: player.effective_volume(),
-                                        });
-                                    }
-
-                                    let new_gen =
-                                        player.generation.fetch_add(1, Ordering::SeqCst) + 1;
-                                    // Mark the *outgoing* track's generation as handled — NOT the
-                                    // new one. The new track starts via the `track-changed` event,
-                                    // which the frontend handles with `skipNextLoad` and so never
-                                    // calls `player_load` to bump the generation. Tagging `new_gen`
-                                    // here left the guard equal to the new track's live generation
-                                    // for its entire playback, blocking *its* transition — so
-                                    // crossfade only fired on every other track. Keying on
-                                    // `current_gen` lets each track transition exactly once.
-                                    transition_triggered_for_gen = current_gen;
-
-                                    let next_dur = prep.duration;
-                                    *player.duration.lock() = next_dur;
-
-                                    // Apply normalization to the new sink
-                                    let norm_enabled = *player.normalization_enabled.lock();
-                                    let preamp_db = *player.normalization_preamp_db.lock();
-                                    let factor = if norm_enabled {
-                                        let total_db =
-                                            prep.gain_db.map(|g| g as f64).unwrap_or(0.0)
-                                                + preamp_db;
-                                        let mut f = 10f64.powf(total_db / 20.0);
-                                        if let Some(pk) = prep.peak {
-                                            if pk > 0.0 {
-                                                f = f.min(1.0 / pk as f64);
-                                            }
-                                        }
-                                        (f as f32).clamp(0.0, 4.0)
-                                    } else {
-                                        1.0
-                                    };
-                                    *player.norm_factor.lock() = factor;
-
-                                    let equalized = EqualizerSource::new(
-                                        prep.decoder,
-                                        player.equalizer.clone(),
-                                    );
-                                    let tapped = SpectrumSource::new(
-                                        equalized,
-                                        player.spectrum.clone(),
-                                        player.generation.clone(),
-                                        new_gen,
-                                    );
-                                    new_sink.append(
-                                        tapped.fade_in(Duration::from_secs_f64(crossfade_secs)),
-                                    );
-
-                                    let user_vol = *player.last_volume.lock();
-                                    new_sink.set_volume(user_vol * factor);
-                                    new_sink.play();
-
-                                    *current_guard = Some(ActiveTrack {
-                                        path: prep.path.clone(),
-                                        sink: new_sink,
-                                        duration: next_dur,
-                                        start_time: Instant::now(),
+                                let mut current_guard = player.current_track.lock();
+                                if let Some(ref old_track) = *current_guard {
+                                    let mut fading_guard = player.fading_tracks.lock();
+                                    fading_guard.push(FadingTrack {
+                                        sink: old_track.sink.clone(),
+                                        fade_end: Instant::now()
+                                            + Duration::from_secs_f64(crossfade_secs),
+                                        fade_duration: Duration::from_secs_f64(crossfade_secs),
+                                        initial_volume: player.effective_volume(),
                                     });
-
-                                    let _ = app.emit(
-                                        "track-changed",
-                                        serde_json::json!({ "path": prep.path }),
-                                    );
                                 }
+
+                                let new_gen = player.generation.fetch_add(1, Ordering::SeqCst) + 1;
+                                // Mark the *outgoing* track's generation as handled — NOT the
+                                // new one. The new track starts via the `track-changed` event,
+                                // which the frontend handles with `skipNextLoad` and so never
+                                // calls `player_load` to bump the generation. Tagging `new_gen`
+                                // here left the guard equal to the new track's live generation
+                                // for its entire playback, blocking *its* transition — so
+                                // crossfade only fired on every other track. Keying on
+                                // `current_gen` lets each track transition exactly once.
+                                transition_triggered_for_gen = current_gen;
+
+                                let next_dur = prep.duration;
+                                *player.duration.lock() = next_dur;
+
+                                // Apply normalization to the new sink
+                                let norm_enabled = *player.normalization_enabled.lock();
+                                let preamp_db = *player.normalization_preamp_db.lock();
+                                let factor = if norm_enabled {
+                                    let total_db =
+                                        prep.gain_db.map(|g| g as f64).unwrap_or(0.0) + preamp_db;
+                                    let mut f = 10f64.powf(total_db / 20.0);
+                                    if let Some(pk) = prep.peak {
+                                        if pk > 0.0 {
+                                            f = f.min(1.0 / pk as f64);
+                                        }
+                                    }
+                                    (f as f32).clamp(0.0, 4.0)
+                                } else {
+                                    1.0
+                                };
+                                *player.norm_factor.lock() = factor;
+
+                                let prepared_token = prep.token.clone();
+                                let prepared_path = prep.path.clone();
+
+                                let equalized =
+                                    EqualizerSource::new(prep.decoder, player.equalizer.clone());
+                                let tapped = SpectrumSource::new(
+                                    equalized,
+                                    player.spectrum.clone(),
+                                    player.generation.clone(),
+                                    new_gen,
+                                );
+                                new_sink.append(
+                                    tapped.fade_in(Duration::from_secs_f64(crossfade_secs)),
+                                );
+
+                                let user_vol = *player.last_volume.lock();
+                                new_sink.set_volume(user_vol * factor);
+                                new_sink.play();
+
+                                *current_guard = Some(ActiveTrack {
+                                    path: prep.path.clone(),
+                                    sink: new_sink,
+                                    duration: next_dur,
+                                    start_time: Instant::now(),
+                                });
+
+                                let session_update = player
+                                    .session
+                                    .promote_prepared(&prepared_token)
+                                    .unwrap_or_else(|| {
+                                        player.session.legacy_loaded(
+                                            &prepared_path,
+                                            Some(&prepared_token.entry_id),
+                                            true,
+                                        )
+                                    });
+                                emit_session_update(&app, &session_update);
+                                let _ = app.emit(
+                                    "track-changed",
+                                    serde_json::json!({
+                                        "path": prepared_path,
+                                        "queueEntryId": session_update.snapshot.current_entry_id,
+                                        "generation": session_update.snapshot.generation,
+                                        "reason": "crossfade"
+                                    }),
+                                );
                             }
                         }
                     }
@@ -1125,12 +1358,16 @@ pub(crate) fn spawn_player_ticker(app: AppHandle, player: AudioPlayer) {
                 // starts the instant the current source ends — one continuous
                 // sink, no fade, no gap. The boundary handler above promotes it
                 // to the current track once it actually begins.
-                let prepared_opt = player.prepared.lock().take();
+                let prepared_opt = player
+                    .prepared
+                    .lock()
+                    .take()
+                    .filter(|prepared| player.session.is_prepare_current(&prepared.token));
                 if let Some(prep) = prepared_opt {
                     // Consuming the prepared track invalidates the "currently
                     // preparing" marker; clear it so the next prepare_next call
                     // (for the track after this one) is never mistaken for a no-op.
-                    *player.prepared_target_path.lock() = None;
+                    *player.preparing.lock() = None;
                     // Reserve the generation now so this track's spectrum tap is
                     // live the moment it becomes the active source. (The outgoing
                     // track's visualizer goes quiet for the short lead window —
@@ -1150,6 +1387,7 @@ pub(crate) fn spawn_player_ticker(app: AppHandle, player: AudioPlayer) {
                     current_sink.append(tapped);
                     gapless_queued = Some(GaplessQueued {
                         path: prep.path.clone(),
+                        token: prep.token,
                         duration: prep.duration,
                         gain_db: prep.gain_db,
                         peak: prep.peak,
@@ -1304,10 +1542,8 @@ fn compute_gain_blocking(path: &Path) -> Result<f32, String> {
 // computing and caching it on first request.
 #[tauri::command]
 pub(crate) async fn compute_track_gain(app: AppHandle, path: String) -> Result<f32, String> {
-    let path_buf = PathBuf::from(&path);
-    if !is_allowed_audio(&app, &path_buf) {
-        return Err("Path is not within an allowed music folder".to_string());
-    }
+    let path_buf = resolve_allowed_audio(&app, Path::new(&path))?;
+    let path = path_buf.to_string_lossy().to_string();
     let key = cover_cache_key(&path_buf).unwrap_or_else(|| path.clone());
     if let Some(g) = read_loudness(&app, &key) {
         return Ok(g);

@@ -13,11 +13,11 @@ use super::{
 
 // ---- Play statistics --------------------------------------------------------
 
-#[tauri::command]
-pub fn db_record_play_start(db: State<Db>, path: String) -> Result<(), String> {
+pub(crate) fn record_play_start(db: &Db, path: &str) -> Result<(), String> {
     let conn = db.0.lock();
     conn.execute(
-        "INSERT INTO stats(path, play_count, last_played, skip_count) VALUES (?1, 0, ?2, 0)
+        "INSERT INTO stats(path, play_count, last_played, skip_count)
+         SELECT path, 0, ?2, 0 FROM tracks WHERE path = ?1
          ON CONFLICT(path) DO UPDATE SET last_played = ?2",
         params![path, now_ms()],
     )
@@ -26,10 +26,15 @@ pub fn db_record_play_start(db: State<Db>, path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn db_record_play(db: State<Db>, path: String) -> Result<(), String> {
+pub fn db_record_play_start(db: State<Db>, path: String) -> Result<(), String> {
+    record_play_start(db.inner(), &path)
+}
+
+pub(crate) fn record_play(db: &Db, path: &str) -> Result<(), String> {
     let conn = db.0.lock();
     conn.execute(
-        "INSERT INTO stats(path, play_count, last_played, skip_count) VALUES (?1, 1, ?2, 0)
+        "INSERT INTO stats(path, play_count, last_played, skip_count)
+         SELECT path, 1, ?2, 0 FROM tracks WHERE path = ?1
          ON CONFLICT(path) DO UPDATE SET play_count = play_count + 1, last_played = ?2",
         params![path, now_ms()],
     )
@@ -38,15 +43,25 @@ pub fn db_record_play(db: State<Db>, path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn db_record_skip(db: State<Db>, path: String) -> Result<(), String> {
+pub fn db_record_play(db: State<Db>, path: String) -> Result<(), String> {
+    record_play(db.inner(), &path)
+}
+
+pub(crate) fn record_skip(db: &Db, path: &str) -> Result<(), String> {
     let conn = db.0.lock();
     conn.execute(
-        "INSERT INTO stats(path, play_count, last_played, skip_count) VALUES (?1, 0, 0, 1)
+        "INSERT INTO stats(path, play_count, last_played, skip_count)
+         SELECT path, 0, 0, 1 FROM tracks WHERE path = ?1
          ON CONFLICT(path) DO UPDATE SET skip_count = skip_count + 1",
         params![path],
     )
     .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[tauri::command]
+pub fn db_record_skip(db: State<Db>, path: String) -> Result<(), String> {
+    record_skip(db.inner(), &path)
 }
 
 #[tauri::command]

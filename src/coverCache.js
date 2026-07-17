@@ -20,6 +20,7 @@ import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 const cache = new Map();
 const inflight = new Map();
 const MAX_COVERS = 2000;
+const RETRY_DELAY_MS = 100;
 
 // Promote a key to most-recently-used (Map keeps insertion order, so re-inserting
 // moves it to the end where it survives eviction longest).
@@ -58,18 +59,21 @@ export async function loadCover(path) {
   }
   if (inflight.has(path)) return inflight.get(path);
 
-  const request = invoke('get_track_cover_path', { path })
+  const request = invokeCoverPath(path)
     .then((result) => {
       // Backend returns the on-disk thumbnail path (or null for no art). Convert
       // it to an asset-protocol URL the <img> can load without base64/IPC.
       const value = result ? convertFileSrc(result) : null;
-      cacheSet(path, value);
+      // A real miss is deliberately not cached forever: indexing or online
+      // metadata may attach artwork to this same path moments later.
+      if (value) cacheSet(path, value);
       return value;
     })
-    .catch(() => {
-      // Cache the miss as "no cover" so a failing file isn't retried on every
-      // navigation. The placeholder UI is shown for null.
-      cacheSet(path, null);
+    .catch((error) => {
+      // An IPC/authorization failure can be transient while roots are being
+      // restored or an index transaction is finishing. Never turn that into a
+      // permanent negative cache entry.
+      console.warn(`Failed to load cover for ${path}`, error);
       return null;
     })
     .finally(() => {
@@ -78,6 +82,46 @@ export async function loadCover(path) {
 
   inflight.set(path, request);
   return request;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function invokeCoverPath(path) {
+  try {
+    return await invoke('get_track_cover_path', { path });
+  } catch (firstError) {
+    // One short retry absorbs the startup/indexing race without creating an
+    // unbounded request loop for genuinely inaccessible files.
+    await delay(RETRY_DELAY_MS);
+    try {
+      return await invoke('get_track_cover_path', { path });
+    } catch {
+      throw firstError;
+    }
+  }
+}
+
+// Rare fallback for a valid thumbnail that WebView2 cannot fetch through the
+// asset protocol. Normal cards stay on the zero-copy filesystem URL path.
+export async function loadCoverDataUrl(path) {
+  if (!path) return null;
+  try {
+    const value = (await invoke('get_track_cover', { path })) || null;
+    if (value) cacheSet(path, value);
+    return value;
+  } catch (error) {
+    console.warn(`Failed to load fallback cover for ${path}`, error);
+    return null;
+  }
+}
+
+// Remove a successful URL without notifying every CoverImage. Used by a single
+// component when its <img> reports that the asset URL itself could not load.
+export function evictCover(path) {
+  cache.delete(path);
+  inflight.delete(path);
 }
 
 export function clearCoverCache() {
@@ -89,6 +133,12 @@ export function clearCoverCache() {
 // mounted instances re-resolve (their `path` prop doesn't change on tag edits,
 // so the normal path watcher wouldn't refire).
 export const coverVersion = ref(0);
+
+// Successful URLs remain cached. Components whose previous request returned
+// null get another chance after indexing, metadata import, or root restoration.
+export function retryMissingCovers() {
+  coverVersion.value++;
+}
 
 // Drop one track's cached cover (after the tag editor rewrote the file). The
 // next resolve re-runs get_track_cover_path, whose on-disk key includes
