@@ -1,7 +1,5 @@
 import { createApp } from 'vue';
 import './assets/main.css';
-import App from './App.vue';
-import router from './router';
 
 // Disable right-click context menu globally (prevents 'Inspect Element')
 document.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -21,4 +19,21 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-createApp(App).use(router).mount('#app');
+const windowMode = new URLSearchParams(window.location.search).get('tsWindow');
+
+async function bootstrap() {
+  if (windowMode === 'vinyl-scratch') {
+    document.documentElement.classList.add('vinyl-native-window');
+    const { default: VinylScratchApp } = await import('./VinylScratchApp.vue');
+    createApp(VinylScratchApp).mount('#app');
+    return;
+  }
+
+  const [{ default: App }, { default: router }] = await Promise.all([
+    import('./App.vue'),
+    import('./router'),
+  ]);
+  createApp(App).use(router).mount('#app');
+}
+
+bootstrap();

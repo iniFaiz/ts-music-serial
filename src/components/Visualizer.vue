@@ -3,6 +3,7 @@ import { ref, watch, onMounted, onUnmounted } from 'vue';
 import { store } from '../store';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { nyancatRainbowRgb } from '../nyancatTheme';
 
 // Real-time 7-bar spectrum visualizer. The backend analyzes audio into 6 bands;
 // we map these onto a beautiful 7-bar Apple-style equalizer.
@@ -23,6 +24,9 @@ let inflight = false;
 let lastPoll = 0;
 let isVisible = null; // Unset initially to force the first updateVisibilityState to run
 let pollTimer = null;
+let nyancatColorMix = store.nyancatMode ? 1 : 0;
+let reduceMotion = false;
+let motionQuery = null;
 const appWindow = getCurrentWindow();
 
 // Linear interpolation to map 6 backend bands to 7 visualizer bars
@@ -50,7 +54,10 @@ const updateVisibilityState = (visible) => {
 
   if (visible) {
     // Only resume animation loop if the player is playing, or if we need to settle to 0
-    if (!rafId && (store.isPlaying || heights.some((h) => h > 0))) {
+    if (
+      !rafId &&
+      (store.isPlaying || (store.nyancatMode && !reduceMotion) || heights.some((h) => h > 0))
+    ) {
       rafId = requestAnimationFrame(tick);
     }
   } else {
@@ -81,7 +88,7 @@ const checkWindowStatus = async () => {
   }
 };
 
-const draw = () => {
+const draw = (now = performance.now()) => {
   const canvas = canvasRef.value;
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
@@ -92,8 +99,6 @@ const draw = () => {
 
   // Clear context
   ctx.clearRect(0, 0, width, height);
-  ctx.fillStyle = '#ffffff';
-
   const barWidth = 2.5;
   const gap = 2.5;
   const minHeight = 2.5; // Matches barWidth so that idle state is a perfect circle
@@ -103,6 +108,16 @@ const draw = () => {
     const barHeight = Math.max(minHeight, hFactor * height);
     const x = i * (barWidth + gap);
     const y = height - barHeight;
+
+    if (nyancatColorMix > 0) {
+      const rainbow = nyancatRainbowRgb(reduceMotion ? 0 : now, i, BAR_COUNT, 0.98, 0.62);
+      const mixed = rainbow.map((channel) =>
+        Math.round(255 + (channel - 255) * nyancatColorMix)
+      );
+      ctx.fillStyle = `rgb(${mixed[0]}, ${mixed[1]}, ${mixed[2]})`;
+    } else {
+      ctx.fillStyle = '#ffffff';
+    }
 
     ctx.beginPath();
     ctx.roundRect(x, y, barWidth, barHeight, barWidth / 2);
@@ -147,6 +162,16 @@ const tick = (now) => {
   // Ease each bar toward its target.
   const easeFactor = store.isPlaying ? 0.22 : 0.08;
   let hasChanged = false;
+  const colorTarget = store.nyancatMode ? 1 : 0;
+  const colorDiff = colorTarget - nyancatColorMix;
+  let colorChanging = false;
+
+  if (Math.abs(colorDiff) > 0.002) {
+    nyancatColorMix += colorDiff * 0.1;
+    colorChanging = true;
+  } else {
+    nyancatColorMix = colorTarget;
+  }
 
   for (let i = 0; i < BAR_COUNT; i++) {
     const t = targets[i];
@@ -160,11 +185,16 @@ const tick = (now) => {
   }
 
   // Draw the updated heights on the canvas
-  draw();
+  draw(now);
 
   // Optimize: stop the requestAnimationFrame loop entirely once the bars have fully settled to 0
   // to avoid consuming any CPU while the player is paused/stopped.
-  if (store.isPlaying || hasChanged) {
+  if (
+    store.isPlaying ||
+    hasChanged ||
+    colorChanging ||
+    (store.nyancatMode && !reduceMotion)
+  ) {
     rafId = requestAnimationFrame(tick);
   } else {
     rafId = null;
@@ -181,6 +211,30 @@ watch(
   }
 );
 
+// Rainbow colors keep flowing even while playback is paused. Toggling the
+// easter egg off lets the loop run only until the bars fade back to white.
+watch(
+  () => store.nyancatMode,
+  (enabled) => {
+    if (reduceMotion) {
+      nyancatColorMix = enabled ? 1 : 0;
+      draw(0);
+      return;
+    }
+    if (isVisible && !rafId) rafId = requestAnimationFrame(tick);
+  }
+);
+
+const onMotionPreferenceChange = (event) => {
+  reduceMotion = event.matches;
+  if (reduceMotion) {
+    nyancatColorMix = store.nyancatMode ? 1 : 0;
+    draw(0);
+  } else if (store.nyancatMode && isVisible && !rafId) {
+    rafId = requestAnimationFrame(tick);
+  }
+};
+
 const setupCanvas = () => {
   const canvas = canvasRef.value;
   if (!canvas) return;
@@ -195,6 +249,9 @@ const setupCanvas = () => {
 };
 
 onMounted(async () => {
+  motionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+  reduceMotion = motionQuery.matches;
+  motionQuery.addEventListener('change', onMotionPreferenceChange);
   setupCanvas();
 
   // Listen to visibilitychange event
@@ -216,12 +273,13 @@ onMounted(async () => {
   await checkWindowStatus();
 
   // If initial check starts in active playback, make sure loop runs
-  if (store.isPlaying && isVisible && !rafId) {
+  if ((store.isPlaying || (store.nyancatMode && !reduceMotion)) && isVisible && !rafId) {
     rafId = requestAnimationFrame(tick);
   }
 
   onUnmounted(() => {
     document.removeEventListener('visibilitychange', checkWindowStatus);
+    if (motionQuery) motionQuery.removeEventListener('change', onMotionPreferenceChange);
     if (pollTimer) clearInterval(pollTimer);
     if (unlistenBlur) unlistenBlur();
     if (unlistenFocus) unlistenFocus();
@@ -237,8 +295,27 @@ onMounted(async () => {
   <canvas
     ref="canvasRef"
     class="mr-3 shrink-0 translate-y-[-16px] hidden md:block"
+    :class="{ 'nyancat-visualizer-glow': store.nyancatMode }"
     style="width: 33px; height: 55px"
     :title="store.isPlaying ? 'Now playing' : 'Audio visualizer'"
     aria-hidden="true"
   ></canvas>
 </template>
+
+<style scoped>
+canvas {
+  filter: drop-shadow(0 0 0 rgba(50, 210, 255, 0));
+  transition: filter 0.75s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.nyancat-visualizer-glow {
+  filter: drop-shadow(0 0 3px rgba(50, 220, 255, 0.82))
+    drop-shadow(0 0 6px rgba(192, 70, 255, 0.52));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  canvas {
+    transition-duration: 0.01ms;
+  }
+}
+</style>

@@ -23,6 +23,10 @@
     "core:window:allow-set-min-size",
     "core:window:allow-set-resizable",
     "core:window:allow-set-always-on-top",
-    "core:window:allow-outer-size"
+    "core:window:allow-outer-size",
+    "core:window:allow-show",
+    "core:window:allow-unminimize",
+    "core:window:allow-set-focus",
+    "core:webview:allow-create-webview-window"
   ]
 }

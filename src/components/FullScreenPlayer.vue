@@ -7,6 +7,7 @@ import { useRouter } from 'vue-router';
 import LyricContent from './LyricContent.vue';
 import { extractColorsForPath, defaultPalette } from '../colorExtract';
 import MarqueeText from './MarqueeText.vue';
+import { createNyanCatSeekStyle } from '../nyancatTheme';
 
 const router = useRouter();
 const coverUrl = ref(null);
@@ -305,6 +306,16 @@ const progressPercentage = computed(() => {
   const max = store.duration || 100;
   return Math.min(Math.max(((store.currentTime || 0) / max) * 100, 0), 100);
 });
+const fullscreenSeekStyle = computed(() =>
+  createNyanCatSeekStyle({
+    percentage: progressPercentage.value,
+    thumbSize: 13,
+    playedColor: '#fff',
+    unplayedColor: 'rgba(255,255,255,0.25)',
+    mix: store.nyancatBlend,
+    phase: store.nyancatPhase,
+  })
+);
 const volumePercentage = computed(() => (store.isMuted ? 0 : store.volume) * 100);
 
 const formatTime = (seconds) => {
@@ -525,9 +536,7 @@ const goToAlbum = (albumName) => {
               @input="onSeekInput"
               @change="onSeekCommit"
               class="w-full h-1 rounded-lg appearance-none cursor-pointer accent-[var(--accent-color)]"
-              :style="{
-                background: `linear-gradient(to right, #fff calc(${progressPercentage} * (100% - 13px) / 100 + 6.5px), rgba(255,255,255,0.25) calc(${progressPercentage} * (100% - 13px) / 100 + 6.5px))`,
-              }"
+              :style="fullscreenSeekStyle"
             />
             <div class="flex justify-between text-[11px] text-white/50 mt-1 tabular-nums">
               <span>{{ formatTime(store.currentTime) }}</span>

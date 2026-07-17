@@ -1,5 +1,6 @@
 <script setup>
 import { ref, watch, onMounted, onBeforeUnmount } from 'vue';
+import { nyancatRainbowRgb } from '../nyancatTheme';
 
 // Amplitude waveform that acts as the seek bar (see the reference: thin bottom-
 // anchored bars, the already-played portion in warm gold and the upcoming part
@@ -18,6 +19,7 @@ const props = defineProps({
   current: { type: Number, default: 0 }, // seconds
   duration: { type: Number, default: 0 }, // seconds
   disabled: { type: Boolean, default: false },
+  nyancat: { type: Boolean, default: false },
 });
 const emit = defineEmits(['input', 'commit']);
 
@@ -27,10 +29,36 @@ const UNPLAYED = '#4a90e2'; // blue — upcoming
 const canvas = ref(null);
 let dragging = false;
 let ro = null;
-let raf = null;
+let growthRaf = null;
+let nyancatRaf = null;
 let growth = 1; // bar-height multiplier for the rise animation
+let nyancatMix = props.nyancat ? 1 : 0;
+let reduceMotion = false;
+let motionQuery = null;
 
-function draw() {
+function mixedColor(base, target, amount) {
+  const channels = base.map((value, index) =>
+    Math.round(value + (target[index] - value) * amount)
+  );
+  return `rgb(${channels[0]}, ${channels[1]}, ${channels[2]})`;
+}
+
+// Each bar receives a different point on the Nyan Cat rainbow. Moving that
+// phase produces a continuous color trail across the entire waveform.
+function nyancatColor(played, index, count, time) {
+  const base = played ? [243, 182, 65] : [74, 144, 226];
+  if (nyancatMix <= 0) return played ? PLAYED : UNPLAYED;
+  const target = nyancatRainbowRgb(
+    time,
+    index,
+    count,
+    played ? 0.98 : 0.82,
+    played ? 0.62 : 0.44
+  );
+  return mixedColor(base, target, nyancatMix);
+}
+
+function draw(time = performance.now()) {
   const cv = canvas.value;
   if (!cv) return;
   const ctx = cv.getContext('2d');
@@ -69,26 +97,64 @@ function draw() {
     for (let j = s; j < e; j++) if (peaks[j] > p) p = peaks[j];
     const bh = Math.max(2, (p / 255) * (h - 1) * growth);
     const x = i * slot + (slot - drawW) / 2;
-    ctx.fillStyle = x + drawW / 2 <= playedX ? PLAYED : UNPLAYED;
+    const played = x + drawW / 2 <= playedX;
+    ctx.fillStyle = nyancatColor(played, i, n, time);
     ctx.fillRect(x, h - bh, drawW, bh); // bottom-anchored
   }
+}
+
+function loopNyancat(time) {
+  draw(time);
+  if (props.nyancat && !reduceMotion) nyancatRaf = requestAnimationFrame(loopNyancat);
+  else nyancatRaf = null;
+}
+
+function animateNyancat(next) {
+  if (nyancatRaf) cancelAnimationFrame(nyancatRaf);
+  nyancatRaf = null;
+
+  const from = nyancatMix;
+  const to = next ? 1 : 0;
+  if (reduceMotion || from === to) {
+    nyancatMix = to;
+    draw();
+    if (next && !reduceMotion) nyancatRaf = requestAnimationFrame(loopNyancat);
+    return;
+  }
+
+  const startedAt = performance.now();
+  const duration = 900;
+  const step = (time) => {
+    const progress = Math.min(1, (time - startedAt) / duration);
+    const eased = 1 - Math.pow(1 - progress, 3);
+    nyancatMix = from + (to - from) * eased;
+    draw(time);
+    if (progress < 1) {
+      nyancatRaf = requestAnimationFrame(step);
+    } else if (next && !reduceMotion) {
+      nyancatRaf = requestAnimationFrame(loopNyancat);
+    } else {
+      nyancatRaf = null;
+    }
+  };
+  nyancatRaf = requestAnimationFrame(step);
 }
 
 // Grow the bars up from the baseline (used when a track's peaks first load, and
 // when the waveform is toggled on with peaks already cached).
 function animateGrowth() {
-  if (raf) cancelAnimationFrame(raf);
+  if (growthRaf) cancelAnimationFrame(growthRaf);
   growth = 0;
   const dur = 460;
   const t0 = performance.now();
   const step = (t) => {
     const p = Math.min(1, (t - t0) / dur);
     growth = 1 - Math.pow(1 - p, 3); // easeOutCubic
-    draw();
-    if (p < 1) raf = requestAnimationFrame(step);
-    else raf = null;
+    draw(t);
+    if (p < 1) growthRaf = requestAnimationFrame(step);
+    else growthRaf = null;
   };
-  raf = requestAnimationFrame(step);
+  growthRaf = requestAnimationFrame(step);
 }
 
 function fracFromEvent(e) {
@@ -120,7 +186,14 @@ function onUp(e) {
   emit('commit', toSeconds(fracFromEvent(e)));
 }
 
-watch(() => [props.current, props.duration], draw);
+watch(
+  () => [props.current, props.duration],
+  () => draw()
+);
+watch(
+  () => props.nyancat,
+  (next) => animateNyancat(next)
+);
 watch(
   () => props.peaks,
   (next) => {
@@ -129,16 +202,27 @@ watch(
   }
 );
 
+const onMotionPreferenceChange = (event) => {
+  reduceMotion = event.matches;
+  animateNyancat(props.nyancat);
+};
+
 onMounted(() => {
-  ro = new ResizeObserver(draw);
+  motionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+  reduceMotion = motionQuery.matches;
+  motionQuery.addEventListener('change', onMotionPreferenceChange);
+  ro = new ResizeObserver(() => draw());
   if (canvas.value) ro.observe(canvas.value);
   if (props.peaks && props.peaks.length) animateGrowth();
   else draw();
+  if (props.nyancat) animateNyancat(true);
 });
 
 onBeforeUnmount(() => {
-  if (raf) cancelAnimationFrame(raf);
+  if (growthRaf) cancelAnimationFrame(growthRaf);
+  if (nyancatRaf) cancelAnimationFrame(nyancatRaf);
   if (ro) ro.disconnect();
+  if (motionQuery) motionQuery.removeEventListener('change', onMotionPreferenceChange);
 });
 </script>
 

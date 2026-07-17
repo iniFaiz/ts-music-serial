@@ -103,11 +103,20 @@ export const store = reactive({
   currentSampleRate: null,
   currentBitDepth: null,
   isPlaying: false,
+  // One-tick latch used when the native vinyl window already changed the Rust
+  // player directly. PlayerControls still updates SMTC/UI, but skips sending the
+  // same pause/resume command a second time (important for short scratch grains).
+  externalPlaybackSync: false,
   isBuffering: false,
   volume: 1.0,
   isMuted: false,
   currentTime: 0,
   duration: 0,
+  // Session-only easter egg activated by typing "nyancat". The blend is kept
+  // separately so every player can fade in/out without changing thumb layout.
+  nyancatMode: false,
+  nyancatBlend: 0,
+  nyancatPhase: 0,
   // Timestamp of the last user seek; the PlayerControls poll uses it to avoid
   // snapping the slider back to a stale position. Shared so the fullscreen
   // player and lyric-click seeks suppress the poll too. Not persisted.

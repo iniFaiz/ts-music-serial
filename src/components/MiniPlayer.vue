@@ -23,6 +23,7 @@ import LyricContent from './LyricContent.vue';
 import LosslessBadge from './LosslessBadge.vue';
 import CoverImage from './CoverImage.vue';
 import MarqueeText from './MarqueeText.vue';
+import { createNyanCatSeekStyle } from '../nyancatTheme';
 
 const router = useRouter();
 
@@ -364,6 +365,16 @@ const progressPercentage = computed(() => {
   const max = store.duration || 100;
   return Math.min(Math.max((Number(seekValue.value) / max) * 100, 0), 100);
 });
+const miniSeekStyle = computed(() =>
+  createNyanCatSeekStyle({
+    percentage: progressPercentage.value,
+    thumbSize: 12,
+    playedColor: '#fff',
+    unplayedColor: 'rgba(255,255,255,0.28)',
+    mix: store.nyancatBlend,
+    phase: store.nyancatPhase,
+  })
+);
 const volumePercentage = computed(() => (store.isMuted ? 0 : store.volume) * 100);
 
 const formatTime = (seconds) => {
@@ -1047,9 +1058,7 @@ onUnmounted(() => {
           @change="onSeekCommit"
           :disabled="!song"
           class="mini-seek w-full appearance-none cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-          :style="{
-            background: `linear-gradient(to right, #fff calc(${progressPercentage} * (100% - 12px) / 100 + 6px), rgba(255,255,255,0.28) calc(${progressPercentage} * (100% - 12px) / 100 + 6px))`,
-          }"
+          :style="miniSeekStyle"
         />
         <div class="flex justify-between text-[10px] text-white/50 mt-1 mb-2 tabular-nums">
           <span>{{ formatTime(store.currentTime) }}</span>

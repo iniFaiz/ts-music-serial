@@ -10,6 +10,7 @@ import WaveformSeekbar from './WaveformSeekbar.vue';
 import { navigateWithTransition } from '../viewTransition';
 import { loadWaveform, getCachedWaveform } from '../waveformCache';
 import MarqueeText from './MarqueeText.vue';
+import { createNyanCatSeekStyle } from '../nyancatTheme';
 
 const router = useRouter();
 const playerCoverRef = ref(null);
@@ -89,6 +90,17 @@ const progressPercentage = computed(() => {
   const max = store.duration || 100;
   const val = Number(seekValue.value) || 0;
   return Math.min(Math.max((val / max) * 100, 0), 100);
+});
+
+const mainSeekStyle = computed(() => {
+  return createNyanCatSeekStyle({
+    percentage: progressPercentage.value,
+    thumbSize: 12,
+    playedColor: 'var(--accent-color)',
+    unplayedColor: '#4b5563',
+    mix: store.waveformEnabled ? 0 : store.nyancatBlend,
+    phase: store.nyancatPhase,
+  });
 });
 
 const volumePercentage = computed(() => {
@@ -246,6 +258,9 @@ watch(
     if (playing && store.currentSong) recordStart(store.currentSong.path);
     pushMediaPlayback();
     store.syncDiscord();
+    // The native vinyl window already issued this command to the shared Rust
+    // player. Avoid a late duplicate pause silencing its 48ms scratch grain.
+    if (store.externalPlaybackSync) return;
     try {
       await invoke(playing ? 'player_resume' : 'player_pause');
     } catch {
@@ -935,9 +950,7 @@ const formatTime = (seconds) => {
               @change="onSeekCommit"
               class="seeker-input absolute inset-x-0 top-1/2 -translate-y-1/2 w-full rounded-lg appearance-none cursor-pointer accent-[var(--accent-color)] transition-opacity duration-300 disabled:cursor-not-allowed"
               :class="store.waveformEnabled ? 'opacity-0 pointer-events-none' : 'opacity-100'"
-              :style="{
-                background: `linear-gradient(to right, var(--accent-color) calc(${progressPercentage} * (100% - 12px) / 100 + 6px), #4b5563 calc(${progressPercentage} * (100% - 12px) / 100 + 6px))`,
-              }"
+              :style="mainSeekStyle"
               :disabled="!store.currentSong"
             />
             <Transition name="wf-fade">
@@ -948,6 +961,7 @@ const formatTime = (seconds) => {
                 :current="seekValue"
                 :duration="Math.max(store.duration || 100, seekValue)"
                 :disabled="!store.currentSong"
+                :nyancat="store.nyancatMode"
                 @input="
                   (v) => {
                     seekValue = v;
@@ -1168,6 +1182,7 @@ input[type='range']::-moz-range-thumb {
   height: 4px;
   transition: height 0.15s cubic-bezier(0.4, 0, 0.2, 1);
 }
+
 .seeker-input::-webkit-slider-thumb {
   transform: scale(0);
   transition:

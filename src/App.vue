@@ -3,6 +3,7 @@ import { ref, onMounted, onUnmounted, nextTick, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { listen } from '@tauri-apps/api/event';
+import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { store } from './store';
 import PlayerControls from './components/PlayerControls.vue';
 import QueuePanel from './components/QueuePanel.vue';
@@ -28,6 +29,8 @@ import {
   tracksPageCacheKey,
 } from './libraryQueries';
 import { getCollection } from './collections';
+import { createKeySequenceMatcher } from './nyancatEasterEgg';
+import { KONAMI_CODE, createCodeSequenceMatcher } from './vinylScratch';
 
 const router = useRouter();
 
@@ -46,6 +49,94 @@ const SEEK_STEP = 5; // seconds for ←/→
 const SEEK_STEP_BIG = 10; // seconds for Shift+←/→
 const VOLUME_STEP = 0.05; // 5% for ↑/↓
 const VOLUME_STEP_BIG = 0.1; // 10% for Shift+↑/↓
+
+const nyancatSequence = createKeySequenceMatcher('nyancat');
+const konamiSequence = createCodeSequenceMatcher(KONAMI_CODE);
+let nyancatBlendRaf = null;
+let nyancatPhaseRaf = null;
+let nyancatLastPhaseTime = null;
+let nyancatMotionQuery = null;
+
+const easeInOutCubic = (value) =>
+  value < 0.5 ? 4 * value * value * value : 1 - Math.pow(-2 * value + 2, 3) / 2;
+
+const stopNyancatPhase = () => {
+  if (nyancatPhaseRaf) cancelAnimationFrame(nyancatPhaseRaf);
+  nyancatPhaseRaf = null;
+  nyancatLastPhaseTime = null;
+};
+
+const startNyancatPhase = () => {
+  if (nyancatPhaseRaf || nyancatMotionQuery?.matches) return;
+
+  const step = (time) => {
+    if (nyancatLastPhaseTime !== null) {
+      const elapsed = Math.min(50, time - nyancatLastPhaseTime);
+      store.nyancatPhase = (store.nyancatPhase + elapsed * (360 / 5500)) % 360;
+    }
+    nyancatLastPhaseTime = time;
+
+    if (store.nyancatMode || store.nyancatBlend > 0) {
+      nyancatPhaseRaf = requestAnimationFrame(step);
+    } else {
+      nyancatPhaseRaf = null;
+      nyancatLastPhaseTime = null;
+    }
+  };
+
+  nyancatPhaseRaf = requestAnimationFrame(step);
+};
+
+// Crossfade the shared visual state instead of swapping gradients instantly.
+// A second toggle reverses cleanly from the current blend value.
+const animateNyancatBlend = (enabled) => {
+  if (nyancatBlendRaf) cancelAnimationFrame(nyancatBlendRaf);
+  nyancatBlendRaf = null;
+
+  if (enabled) startNyancatPhase();
+
+  const from = Math.min(1, Math.max(0, Number(store.nyancatBlend) || 0));
+  const to = enabled ? 1 : 0;
+  if (from === to) {
+    if (!enabled) stopNyancatPhase();
+    return;
+  }
+
+  if (nyancatMotionQuery?.matches) {
+    store.nyancatBlend = to;
+    stopNyancatPhase();
+    return;
+  }
+
+  const startedAt = performance.now();
+  // Keep a constant visual speed when a transition is reversed midway.
+  const duration = 850 * Math.abs(to - from);
+  const step = (time) => {
+    const progress = Math.min(1, (time - startedAt) / duration);
+    store.nyancatBlend = from + (to - from) * easeInOutCubic(progress);
+
+    if (progress < 1) {
+      nyancatBlendRaf = requestAnimationFrame(step);
+    } else {
+      store.nyancatBlend = to;
+      nyancatBlendRaf = null;
+      if (!enabled) stopNyancatPhase();
+    }
+  };
+
+  nyancatBlendRaf = requestAnimationFrame(step);
+};
+
+watch(
+  () => store.nyancatMode,
+  (enabled) => animateNyancatBlend(enabled),
+  { flush: 'sync' }
+);
+
+const handleNyancatMotionChange = () => {
+  if (nyancatMotionQuery?.matches) stopNyancatPhase();
+  animateNyancatBlend(store.nyancatMode);
+};
 
 // True when the keystroke is headed into a text field / editable area, where the
 // single-key media shortcuts must not hijack what the user is typing.
@@ -71,7 +162,64 @@ const bumpVolume = (delta) => {
   store.setVolume(v);
 };
 
+const openVinylScratchWindow = async () => {
+  try {
+    const existing = await WebviewWindow.getByLabel('vinyl-scratch');
+    if (existing) {
+      await existing.show();
+      await existing.unminimize();
+      await existing.setFocus();
+      return;
+    }
+
+    const vinylWindow = new WebviewWindow('vinyl-scratch', {
+      url: '/?tsWindow=vinyl-scratch',
+      title: 'TS Music Vinyl Scratch',
+      width: 680,
+      height: 620,
+      minWidth: 500,
+      minHeight: 470,
+      center: true,
+      focus: true,
+      resizable: true,
+      maximizable: false,
+      minimizable: true,
+      decorations: true,
+      shadow: true,
+      skipTaskbar: false,
+      backgroundColor: '#111113',
+      dragDropEnabled: false,
+    });
+
+    vinylWindow.once('tauri://error', (event) => {
+      console.error('Failed to open vinyl scratch window', event.payload);
+      store.statusMessage = `Could not open Vinyl Scratch: ${event.payload}`;
+    });
+  } catch (error) {
+    console.error('Failed to open vinyl scratch window', error);
+    store.statusMessage = `Could not open Vinyl Scratch: ${error}`;
+  }
+};
+
 const handleKeydown = (e) => {
+  // The classic Konami sequence opens the session-only interactive turntable.
+  // KeyboardEvent.code keeps B/A stable across keyboard layouts.
+  if (e.ctrlKey || e.metaKey || e.altKey || e.isComposing) {
+    konamiSequence.reset();
+  } else if (!e.repeat && konamiSequence.push(e.code)) {
+    e.preventDefault();
+    openVinylScratchWindow();
+    return;
+  }
+
+  // Check before the typing-target guard so the hidden sequence also works in
+  // Search. Modified shortcuts and IME input never complete it accidentally.
+  if (e.ctrlKey || e.metaKey || e.altKey || e.isComposing) {
+    nyancatSequence.reset();
+  } else if (!e.repeat && nyancatSequence.push(e.key)) {
+    store.nyancatMode = !store.nyancatMode;
+  }
+
   // Window-mode toggles + Escape work everywhere, even inside inputs.
   // Ctrl+Shift+F toggles the fullscreen Now-Playing view and enters native monitor
   // fullscreen. Ignored while the mini player is open (the two window modes conflict).
@@ -201,6 +349,7 @@ let unlistenExclusiveErr = null;
 let unlistenOpenFiles = null;
 let unlistenOnlineMetadata = null;
 let unlistenAudioDevices = null;
+let unlistenVinylPlayback = null;
 
 const scrollContainer = ref(null);
 const scrollPositions = new Map();
@@ -397,6 +546,8 @@ const handleAuxClick = (e) => {
 };
 
 onMounted(async () => {
+  nyancatMotionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+  nyancatMotionQuery.addEventListener('change', handleNyancatMotionChange);
   updateCompact();
   window.addEventListener('resize', updateCompact);
   window.addEventListener('mouseup', handleMouseUp);
@@ -471,9 +622,45 @@ onMounted(async () => {
   } catch {
     // best-effort
   }
+
+  // The native vinyl window controls the same Rust audio engine directly. Keep
+  // this window's reactive UI aligned after tonearm or scratch gestures there.
+  try {
+    unlistenVinylPlayback = await listen('vinyl-playback-sync', (event) => {
+      const payload = event.payload || {};
+      if (typeof payload.position === 'number' && Number.isFinite(payload.position)) {
+        store.currentTime = Math.max(0, payload.position);
+        store.lastSeekAt = Date.now();
+      }
+      if (
+        typeof payload.playing === 'boolean' &&
+        store.currentSong &&
+        store.isPlaying !== payload.playing
+      ) {
+        if (payload.playing && store.playbackFinished) {
+          // A finished Rodio sink cannot simply resume. Reload it at the needle
+          // position through the store's existing finished-track seek path.
+          store.seek(typeof payload.position === 'number' ? payload.position : 0);
+        } else {
+          store.externalPlaybackSync = true;
+          store.isPlaying = payload.playing;
+          nextTick(() => {
+            store.externalPlaybackSync = false;
+          });
+        }
+      }
+    });
+  } catch {
+    // Cross-window sync is best-effort; the backend remains authoritative.
+  }
 });
 
 onUnmounted(() => {
+  if (nyancatBlendRaf) cancelAnimationFrame(nyancatBlendRaf);
+  stopNyancatPhase();
+  if (nyancatMotionQuery) {
+    nyancatMotionQuery.removeEventListener('change', handleNyancatMotionChange);
+  }
   window.removeEventListener('resize', updateCompact);
   window.removeEventListener('mouseup', handleMouseUp);
   window.removeEventListener('mousedown', handleMouseDown);
@@ -485,6 +672,7 @@ onUnmounted(() => {
   if (unlistenOpenFiles) unlistenOpenFiles();
   if (unlistenOnlineMetadata) unlistenOnlineMetadata();
   if (unlistenAudioDevices) unlistenAudioDevices();
+  if (unlistenVinylPlayback) unlistenVinylPlayback();
   // Cleanup sidebar playlist drag
   document.removeEventListener('mousemove', onSidebarPlMouseMove);
   document.removeEventListener('mouseup', onSidebarPlMouseUp);
