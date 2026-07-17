@@ -202,7 +202,7 @@ fn emit_session_update(app: &AppHandle, update: &PlaybackSessionUpdate) {
 }
 
 fn apply_immediate_session_effect(
-    app: &AppHandle,
+    _app: &AppHandle,
     player: &AudioPlayer,
     effect: Option<&PlaybackEffect>,
 ) {
@@ -210,7 +210,7 @@ fn apply_immediate_session_effect(
         Some(PlaybackEffect::SetPlaying { playing }) => {
             #[cfg(target_os = "windows")]
             if player.exclusive_enabled.load(Ordering::SeqCst) {
-                if let Some(ex) = app.try_state::<Arc<exclusive::ExclusivePlayer>>() {
+                if let Some(ex) = _app.try_state::<Arc<exclusive::ExclusivePlayer>>() {
                     if ex.is_active() {
                         ex.set_playing(*playing);
                         return;
@@ -234,7 +234,7 @@ fn apply_immediate_session_effect(
         }
         Some(PlaybackEffect::Stop { .. }) => {
             #[cfg(target_os = "windows")]
-            if let Some(ex) = app.try_state::<Arc<exclusive::ExclusivePlayer>>() {
+            if let Some(ex) = _app.try_state::<Arc<exclusive::ExclusivePlayer>>() {
                 if ex.is_active() {
                     ex.stop();
                 }

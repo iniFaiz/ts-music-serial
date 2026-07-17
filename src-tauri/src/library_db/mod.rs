@@ -1456,14 +1456,16 @@ mod indexing_tests {
                 row.get(0)
             })
             .expect("read normalized playback state");
+        let playback: Value =
+            serde_json::from_str(&playback).expect("parse normalized playback state");
 
         assert_eq!(track_count, 1);
         assert_eq!(stats, (7, 20, 3));
         assert_eq!(favorite_position, 2);
         assert_eq!(playlist_position, 1);
         assert_eq!(root_count, 1);
-        assert!(!playback.contains(r"\\?\"));
-        assert!(playback.contains(r"D:\Music\song.flac"));
+        assert_eq!(playback["songPath"], legacy);
+        assert_eq!(playback["queuePaths"][0], legacy);
     }
 
     #[test]

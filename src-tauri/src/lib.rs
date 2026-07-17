@@ -617,12 +617,11 @@ fn smtc_set_playback(_playing: bool, _position: f64) {}
 fn player_show_in_folder(app: AppHandle, path: String) -> Result<(), String> {
     use std::process::Command;
     let path_buf = resolve_allowed_audio(&app, Path::new(&path))?;
-    let canonical_path = path_buf.to_string_lossy().to_string();
 
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
-        let mut path_win = canonical_path.replace('/', "\\");
+        let mut path_win = path_buf.to_string_lossy().replace('/', "\\");
         if path_win.starts_with(r"\\?\UNC\") {
             path_win = format!(r"\\{}", &path_win[8..]);
         } else if path_win.starts_with(r"\\?\") {
