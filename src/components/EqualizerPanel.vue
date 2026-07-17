@@ -29,7 +29,7 @@ function onPreset(id) {
 function bandStyle(v) {
   const pct = ((v - EQ_MIN_DB) / (EQ_MAX_DB - EQ_MIN_DB)) * 100;
   return {
-    background: `linear-gradient(to right, var(--accent-color) ${pct}%, #4b5563 ${pct}%)`,
+    background: `linear-gradient(to right, var(--accent-color) calc(${pct} * (100% - 14px) / 100 + 7px), #4b5563 calc(${pct} * (100% - 14px) / 100 + 7px))`,
   };
 }
 

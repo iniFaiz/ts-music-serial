@@ -936,7 +936,7 @@ const formatTime = (seconds) => {
               class="seeker-input absolute inset-x-0 top-1/2 -translate-y-1/2 w-full rounded-lg appearance-none cursor-pointer accent-[var(--accent-color)] transition-opacity duration-300 disabled:cursor-not-allowed"
               :class="store.waveformEnabled ? 'opacity-0 pointer-events-none' : 'opacity-100'"
               :style="{
-                background: `linear-gradient(to right, var(--accent-color) ${progressPercentage}%, #4b5563 ${progressPercentage}%)`,
+                background: `linear-gradient(to right, var(--accent-color) calc(${progressPercentage} * (100% - 12px) / 100 + 6px), #4b5563 calc(${progressPercentage} * (100% - 12px) / 100 + 6px))`,
               }"
               :disabled="!store.currentSong"
             />
@@ -1119,7 +1119,7 @@ const formatTime = (seconds) => {
           class="hidden sm:block w-16 md:w-24 h-1 rounded-lg appearance-none cursor-pointer accent-[var(--accent-color)] hover:accent-white transition-opacity duration-200"
           :class="store.isMuted ? 'opacity-40' : 'opacity-100'"
           :style="{
-            background: `linear-gradient(to right, var(--accent-color) ${volumePercentage}%, #4b5563 ${volumePercentage}%)`,
+            background: `linear-gradient(to right, var(--accent-color) calc(${volumePercentage} * (100% - 12px) / 100 + 6px), #4b5563 calc(${volumePercentage} * (100% - 12px) / 100 + 6px))`,
           }"
         />
       </div>

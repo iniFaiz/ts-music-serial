@@ -1048,7 +1048,7 @@ onUnmounted(() => {
           :disabled="!song"
           class="mini-seek w-full appearance-none cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
           :style="{
-            background: `linear-gradient(to right, #fff ${progressPercentage}%, rgba(255,255,255,0.28) ${progressPercentage}%)`,
+            background: `linear-gradient(to right, #fff calc(${progressPercentage} * (100% - 12px) / 100 + 6px), rgba(255,255,255,0.28) calc(${progressPercentage} * (100% - 12px) / 100 + 6px))`,
           }"
         />
         <div class="flex justify-between text-[10px] text-white/50 mt-1 mb-2 tabular-nums">
@@ -1134,7 +1134,7 @@ onUnmounted(() => {
                   @input="store.setVolume($event.target.value)"
                   class="mini-vol flex-1 appearance-none cursor-pointer"
                   :style="{
-                    background: `linear-gradient(to right, var(--accent-color) ${volumePercentage}%, rgba(255,255,255,0.22) ${volumePercentage}%)`,
+                    background: `linear-gradient(to right, var(--accent-color) calc(${volumePercentage} * (100% - 13px) / 100 + 6.5px), rgba(255,255,255,0.22) calc(${volumePercentage} * (100% - 13px) / 100 + 6.5px))`,
                   }"
                 />
                 <span

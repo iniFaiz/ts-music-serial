@@ -526,7 +526,7 @@ const goToAlbum = (albumName) => {
               @change="onSeekCommit"
               class="w-full h-1 rounded-lg appearance-none cursor-pointer accent-[var(--accent-color)]"
               :style="{
-                background: `linear-gradient(to right, #fff ${progressPercentage}%, rgba(255,255,255,0.25) ${progressPercentage}%)`,
+                background: `linear-gradient(to right, #fff calc(${progressPercentage} * (100% - 13px) / 100 + 6.5px), rgba(255,255,255,0.25) calc(${progressPercentage} * (100% - 13px) / 100 + 6.5px))`,
               }"
             />
             <div class="flex justify-between text-[11px] text-white/50 mt-1 tabular-nums">
@@ -743,7 +743,7 @@ const goToAlbum = (albumName) => {
               @input="store.setVolume($event.target.value)"
               class="flex-1 h-1 rounded-lg appearance-none cursor-pointer accent-[var(--accent-color)]"
               :style="{
-                background: `linear-gradient(to right, #fff ${volumePercentage}%, rgba(255,255,255,0.25) ${volumePercentage}%)`,
+                background: `linear-gradient(to right, #fff calc(${volumePercentage} * (100% - 13px) / 100 + 6.5px), rgba(255,255,255,0.25) calc(${volumePercentage} * (100% - 13px) / 100 + 6.5px))`,
               }"
             />
           </div>

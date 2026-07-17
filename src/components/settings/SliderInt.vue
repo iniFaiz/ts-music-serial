@@ -14,7 +14,7 @@
       @input="$emit('update:modelValue', Number($event.target.value))"
       class="w-full h-1 rounded-lg appearance-none cursor-pointer disabled:cursor-not-allowed"
       :style="{
-        background: `linear-gradient(to right, var(--accent-color) ${pct}%, #4b5563 ${pct}%)`,
+        background: `linear-gradient(to right, var(--accent-color) calc(${pct} * (100% - 13px) / 100 + 6.5px), #4b5563 calc(${pct} * (100% - 13px) / 100 + 6.5px))`,
       }"
     />
   </div>
