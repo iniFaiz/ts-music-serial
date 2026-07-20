@@ -49,14 +49,26 @@ const goBack = () => {
 const minimize = () => appWindow.minimize().catch(() => {});
 const toggleMaximize = () => appWindow.toggleMaximize().catch(() => {});
 const close = () => appWindow.close().catch(() => {});
+
+const startDrag = (e) => {
+  if (e.button !== 0) return;
+  if (e.target.closest('button, a, input, select, textarea, [role="button"]')) return;
+  appWindow.startDragging().catch(() => {});
+};
+
+const onTitleDblClick = (e) => {
+  if (e.target.closest('button, a, input, select, textarea, [role="button"]')) return;
+  toggleMaximize();
+};
 </script>
 
 <template>
   <!-- Custom title bar: draggable, with the brand on the left and the OS window
        controls on the right (the native frame is disabled in tauri.conf.json). -->
   <div
-    data-tauri-drag-region
-    class="h-10 shrink-0 flex items-center justify-between bg-[var(--sidebar-bg)] border-b border-[var(--border-color)] select-none"
+    @mousedown="startDrag"
+    @dblclick="onTitleDblClick"
+    class="h-10 shrink-0 flex items-center justify-between bg-[var(--sidebar-bg)] border-b border-[var(--border-color)] select-none cursor-default"
     style="view-transition-name: title-bar"
   >
     <!-- Brand + back -->

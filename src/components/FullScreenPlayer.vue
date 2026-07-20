@@ -1,5 +1,6 @@
 <script setup>
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { store } from '../store';
 import { loadCover, getCachedCover, hasCachedCover } from '../coverCache';
 import { loadLyrics, activeLineIndex } from '../lyricsCache';
@@ -344,6 +345,14 @@ watch(
   { immediate: true }
 );
 
+const appWindow = getCurrentWindow();
+
+const startDrag = (e) => {
+  if (e.button !== 0) return;
+  if (e.target.closest('button, a, input, select, textarea, [role="button"]')) return;
+  appWindow.startDragging().catch(() => {});
+};
+
 const close = () => {
   store.exitFullscreenWithTransition();
 };
@@ -386,8 +395,8 @@ const goToAlbum = (albumName) => {
 
       <!-- Draggable top strip + close button -->
       <div
-        data-tauri-drag-region
-        class="absolute top-0 left-0 right-0 z-10 flex items-center px-4 h-14"
+        @mousedown="startDrag"
+        class="absolute top-0 left-0 right-0 z-10 flex items-center px-4 h-14 select-none cursor-default"
       >
         <button
           @click="close"

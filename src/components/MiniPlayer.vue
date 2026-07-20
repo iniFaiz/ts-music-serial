@@ -484,9 +484,17 @@ const expandToFull = () => {
   store.exitMiniPlayer().finally(() => store.openFullscreen());
 };
 
+const appWindow = getCurrentWindow();
+
+const startDrag = (e) => {
+  if (e.button !== 0) return;
+  if (e.target.closest('button, a, input, select, textarea, [role="button"]')) return;
+  appWindow.startDragging().catch(() => {});
+};
+
 const closeWindow = () => {
   store.exitMiniPlayer().finally(() => {
-    getCurrentWindow()
+    appWindow
       .close()
       .catch(() => {});
   });
@@ -602,8 +610,8 @@ onUnmounted(() => {
       <!-- ============================ TOP CHROME ======================== -->
       <div
         ref="topChromeEl"
-        data-tauri-drag-region
-        class="z-20 flex items-start gap-3 px-3 pt-3 pb-2 shrink-0 transition-opacity duration-300"
+        @mousedown="startDrag"
+        class="z-20 flex items-start gap-3 px-3 pt-3 pb-2 shrink-0 transition-opacity duration-300 select-none cursor-default"
         :class="[
           isArtwork
             ? 'absolute top-0 left-0 right-0 bg-gradient-to-b from-black/60 to-transparent pb-6'
