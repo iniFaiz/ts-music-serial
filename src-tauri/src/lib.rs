@@ -31,6 +31,9 @@ mod thumbbar;
 mod tray;
 mod waveform;
 
+#[cfg(test)]
+mod ipc_contract_tests;
+
 use library_db as db;
 
 pub(crate) use cover_cache::{cover_cache_dir, cover_cache_key};
@@ -45,8 +48,8 @@ use metadata_tags::{preview_image, write_track_tags};
 pub(crate) use player::build_decoder;
 use player::{
     compute_track_gain, init_audio_player, list_output_devices, playback_session_intent,
-    playback_session_snapshot, player_load, player_pause, player_prepare_next, player_resume,
-    player_seek, player_set_equalizer, player_set_normalization, player_set_normalization_settings,
+    playback_session_snapshot, player_pause, player_prepare_next, player_resume, player_seek,
+    player_set_equalizer, player_set_normalization, player_set_normalization_settings,
     player_set_spectrum_enabled, player_set_transition, player_set_volume, player_spectrum,
     player_status, player_stop, set_output_device, set_wasapi_exclusive, spawn_player_ticker,
     AudioPlayer,
@@ -795,7 +798,6 @@ pub fn run() {
             get_track_palette,
             get_waveform,
             restore_roots,
-            player_load,
             player_prepare_next,
             player_pause,
             player_resume,

@@ -590,7 +590,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { store } from '../store';
-import { invoke } from '@tauri-apps/api/core';
+import { invokeCommand as invoke } from '../generated/ipc';
 import Section from '../components/settings/Section.vue';
 import ToggleInt from '../components/settings/ToggleInt.vue';
 import SelectInt from '../components/settings/SelectInt.vue';

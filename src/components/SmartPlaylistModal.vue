@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, watch } from 'vue';
 import { useRouter } from 'vue-router';
-import { invoke } from '@tauri-apps/api/core';
+import { invokeCommand as invoke } from '../generated/ipc';
 import { store } from '../store';
 import {
   FIELDS,

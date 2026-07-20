@@ -1,5 +1,5 @@
 import { reactive } from 'vue';
-import { invoke } from '@tauri-apps/api/core';
+import { invokeCommand as invoke } from './generated/ipc';
 import { open, save, ask } from '@tauri-apps/plugin-dialog';
 import { getCurrentWindow, LogicalSize } from '@tauri-apps/api/window';
 import { idbGet, idbDelete } from './libraryStore';
@@ -36,6 +36,22 @@ let savedWindowMaximized = false;
 // Debounce for statsVersion bumps — coalesces rapid plays/skips so Home insight
 // shelves refetch at most once per window instead of on every accounting event.
 let statsVersionTimer = null;
+// Serialize session mutations from this window. A load intent can await decoder
+// setup, so allowing later queue edits to overtake it would reintroduce the race
+// the native generation token is designed to prevent.
+let playbackIntentTail = Promise.resolve();
+const queueMetadata = new Map();
+
+const nativeQueueEntry = (song) => {
+  if (song.queueId) queueMetadata.set(song.queueId, { ...song });
+  return {
+    id: song.queueId || '',
+    path: song.path,
+    durationHint: song.duration_secs || 0,
+    trackGainDb: typeof song.track_gain_db === 'number' ? song.track_gain_db : null,
+    trackPeak: typeof song.track_peak === 'number' ? song.track_peak : null,
+  };
+};
 
 // Directory portion of a file path (handles both / and \ separators).
 function dirName(path) {
@@ -81,18 +97,9 @@ export const store = reactive({
   showBackupReportModal: false,
 
   currentSong: null,
-  preselectedNextSong: null,
-  // Compatibility latch for a decoder transition already performed in Rust.
-  // Declared up-front so Vue tracks it predictably; this can disappear once
-  // PlayerControls consumes PlaybackSession effects directly.
-  skipNextLoad: false,
   currentSampleRate: null,
   currentBitDepth: null,
   isPlaying: false,
-  // One-tick latch used when the native vinyl window already changed the Rust
-  // player directly. PlayerControls still updates SMTC/UI, but skips sending the
-  // same pause/resume command a second time (important for short scratch grains).
-  externalPlaybackSync: false,
   isBuffering: false,
   volume: 1.0,
   isMuted: false,
@@ -208,8 +215,6 @@ export const store = reactive({
 
   // Hand-off to PlayerControls' load watcher: where to start the next load and
   // whether it should auto-play. Used by "resume on launch" (seek + paused).
-  pendingSeek: null,
-  pendingAutoplay: true,
   devicesVersion: 0,
   queuePanelOpen: false,
   lyricsPanelOpen: false,
@@ -541,13 +546,10 @@ export const store = reactive({
       }
     }
 
-    // Re-load the last track but leave it paused at the saved position; the
-    // PlayerControls watcher reads pendingSeek/pendingAutoplay when it loads.
+    // Restore through one native play-queue intent, paused at the checkpoint.
     if (pb.songPath) {
       const song = await this.getTrackByPath(pb.songPath);
       if (song) {
-        this.pendingSeek = pb.positionSecs || 0;
-        this.pendingAutoplay = false;
         this.currentTime = pb.positionSecs || 0;
         this.isPlaying = false;
         let qIdx = pb.currentEntryId
@@ -557,8 +559,14 @@ export const store = reactive({
         if (qIdx !== -1) {
           this.currentSong = { ...this.queue[qIdx] };
         } else {
-          this.currentSong = { ...song, queueId: Math.random().toString(36).substring(2, 9) };
+          const restored = { ...song, queueId: Math.random().toString(36).substring(2, 9) };
+          this.queue.push(restored);
+          this.currentSong = restored;
         }
+        await this.playSong(this.currentSong, this.queue, {
+          autoplay: false,
+          startAt: pb.positionSecs || 0,
+        });
       }
     }
   },
@@ -923,9 +931,12 @@ export const store = reactive({
     this.persistState();
     // Reload the current track on the new device, preserving position/play state.
     if (this.currentSong) {
-      this.pendingSeek = this.currentTime || 0;
-      this.pendingAutoplay = this.isPlaying;
-      this.currentSong = { ...this.currentSong };
+      await this.sendPlaybackIntent({
+        type: 'select_entry',
+        entryId: this.currentSong.queueId,
+        autoplay: this.isPlaying,
+        startAt: this.currentTime || 0,
+      });
     }
   },
 
@@ -941,9 +952,12 @@ export const store = reactive({
         console.error('Failed to reset output device on device change', e);
       }
       if (this.currentSong) {
-        this.pendingSeek = this.currentTime || 0;
-        this.pendingAutoplay = this.isPlaying;
-        this.currentSong = { ...this.currentSong };
+        await this.sendPlaybackIntent({
+          type: 'select_entry',
+          entryId: this.currentSong.queueId,
+          autoplay: this.isPlaying,
+          startAt: this.currentTime || 0,
+        });
       }
     }
   },
@@ -1004,9 +1018,12 @@ export const store = reactive({
     // Reload the current track on the newly-selected engine, preserving
     // position/play state (same approach as switching output device).
     if (this.currentSong) {
-      this.pendingSeek = this.currentTime || 0;
-      this.pendingAutoplay = this.isPlaying;
-      this.currentSong = { ...this.currentSong };
+      await this.sendPlaybackIntent({
+        type: 'select_entry',
+        entryId: this.currentSong.queueId,
+        autoplay: this.isPlaying,
+        startAt: this.currentTime || 0,
+      });
     }
   },
 
@@ -1346,8 +1363,7 @@ export const store = reactive({
     this.scanComplete = false;
   },
 
-  playSong(song, newQueue = null) {
-    this.preselectedNextSong = null;
+  async playSong(song, newQueue = null, options = {}) {
     if (newQueue && newQueue.length > 0) {
       this.queue = newQueue.map((s) => ({
         ...s,
@@ -1396,19 +1412,36 @@ export const store = reactive({
           ...song,
           queueId: song.queueId || Math.random().toString(36).substring(2, 9),
         };
+        this.queue.push(entry);
         this.currentSong = { ...entry };
       } else {
         this.currentSong = null;
       }
     }
-    // Preserve pendingSeek if already set (e.g. by onSeekCommit on a finished track)
-    if (this.pendingSeek === null) {
-      this.pendingSeek = null;
-    }
-    this.pendingAutoplay = true;
-    this.isPlaying = true;
+    if (!this.currentSong) return;
+    const autoplay = options.autoplay !== false;
+    this.isPlaying = autoplay;
     this.playbackFinished = false;
+    this.isBuffering = true;
     this.persistState();
+    try {
+      await this.sendPlaybackIntent({
+        type: 'play_queue',
+        entries: this.queue.map(nativeQueueEntry),
+        startEntryId: this.currentSong.queueId,
+        autoplay,
+        startAt: options.startAt ?? null,
+        shuffle: !!this.shuffleMode,
+        repeat: ['off', 'all', 'one'][this.loopMode] || 'off',
+        autoplayMode: !!this.autoplayMode,
+        sleep: this.nativeSleepMode(),
+      });
+    } catch (error) {
+      this.isPlaying = false;
+      this.statusMessage = `Playback failed: ${error}`;
+    } finally {
+      this.isBuffering = false;
+    }
   },
 
   // ---- Queue management -------------------------------------------------
@@ -1440,7 +1473,11 @@ export const store = reactive({
       const idx = this.currentQueueIndex();
       this.queue.splice(idx + 1, 0, entry);
     }
-    this.preselectedNextSong = null;
+    this.sendPlaybackIntent({
+      type: 'enqueue',
+      entries: [nativeQueueEntry(entry)],
+      afterCurrent: true,
+    }).catch((error) => console.error('Failed to insert queue entry', error));
     this.persistState();
   },
 
@@ -1463,7 +1500,11 @@ export const store = reactive({
       const idx = this.currentQueueIndex();
       this.queue.splice(idx + 1, 0, ...list);
     }
-    this.preselectedNextSong = null;
+    this.sendPlaybackIntent({
+      type: 'enqueue',
+      entries: list.map(nativeQueueEntry),
+      afterCurrent: true,
+    }).catch((error) => console.error('Failed to insert queue entries', error));
     this.persistState();
   },
 
@@ -1479,14 +1520,21 @@ export const store = reactive({
       this.queue = [{ ...this.currentSong }];
     }
     this.queue.push(...list);
-    this.preselectedNextSong = null;
+    this.sendPlaybackIntent({
+      type: 'enqueue',
+      entries: list.map(nativeQueueEntry),
+      afterCurrent: false,
+    }).catch((error) => console.error('Failed to append queue entries', error));
     this.persistState();
   },
 
   removeFromQueue(index) {
     if (index < 0 || index >= this.queue.length) return;
-    this.queue.splice(index, 1);
-    this.preselectedNextSong = null;
+    const [removed] = this.queue.splice(index, 1);
+    this.sendPlaybackIntent({
+      type: 'remove_queue_item',
+      entryId: removed.queueId,
+    }).catch((error) => console.error('Failed to remove queue entry', error));
     this.persistState();
   },
 
@@ -1496,23 +1544,33 @@ export const store = reactive({
     if (to < 0 || to >= this.queue.length) return;
     const [item] = this.queue.splice(from, 1);
     this.queue.splice(to, 0, item);
-    this.preselectedNextSong = null;
+    this.sendPlaybackIntent({
+      type: 'move_queue_item',
+      entryId: item.queueId,
+      toIndex: to,
+    }).catch((error) => console.error('Failed to move queue entry', error));
     this.persistState();
   },
 
-  playQueueIndex(index) {
+  async playQueueIndex(index) {
     if (index < 0 || index >= this.queue.length) return;
-    this.preselectedNextSong = null;
-    if (this.pendingSeek === null) {
-      this.pendingSeek = null;
-    }
-    this.pendingAutoplay = true;
     if (!this.queue[index].queueId) {
       this.queue[index].queueId = Math.random().toString(36).substring(2, 9);
     }
     this.currentSong = { ...this.queue[index] };
     this.isPlaying = true;
     this.playbackFinished = false;
+    this.isBuffering = true;
+    try {
+      await this.sendPlaybackIntent({
+        type: 'select_entry',
+        entryId: this.queue[index].queueId,
+        autoplay: true,
+        startAt: null,
+      });
+    } finally {
+      this.isBuffering = false;
+    }
     this.persistState();
   },
 
@@ -1525,7 +1583,9 @@ export const store = reactive({
     } else {
       this.queue = [];
     }
-    this.preselectedNextSong = null;
+    this.sendPlaybackIntent({ type: 'clear_upcoming' }).catch((error) =>
+      console.error('Failed to clear upcoming queue', error)
+    );
     this.persistState();
   },
 
@@ -2084,19 +2144,19 @@ export const store = reactive({
     this.smartModal.mode = 'create';
   },
 
-  togglePlay() {
+  async togglePlay() {
     if (!this.currentSong) return;
     if (this.playbackFinished && this.currentSong) {
-      this.playSong(this.currentSong);
+      await this.playSong(this.currentSong, null, { autoplay: true, startAt: 0 });
     } else {
-      this.isPlaying = !this.isPlaying;
+      await this.sendPlaybackIntent({ type: 'set_playing', playing: !this.isPlaying });
     }
   },
 
   toggleLoop() {
     if (!this.currentSong) return;
     this.loopMode = (this.loopMode + 1) % 3;
-    this.preselectedNextSong = null;
+    this.pushPlaybackModes();
     this.persistState();
   },
 
@@ -2109,45 +2169,89 @@ export const store = reactive({
     return { mode: 'off' };
   },
 
-  async syncPlaybackSession() {
-    const update = await invoke('playback_session_intent', {
-      intent: {
-        type: 'sync_legacy',
-        entries: this.queue.map((song) => ({
-          id: song.queueId || '',
-          path: song.path,
-          durationHint: song.duration_secs || 0,
-        })),
-        currentEntryId: this.currentSong ? this.currentSong.queueId || null : null,
-        shuffle: !!this.shuffleMode,
-        repeat: ['off', 'all', 'one'][this.loopMode] || 'off',
-        autoplay: !!this.autoplayMode,
-        playing: !!this.isPlaying,
-        sleep: this.nativeSleepMode(),
-      },
-    });
-    this.playbackSessionSnapshot = update.snapshot;
-    return update;
+  sendPlaybackIntent(intent) {
+    const run = playbackIntentTail
+      .catch(() => {})
+      .then(() => invoke('playback_session_intent', { intent }))
+      .then((update) => {
+        this.applyPlaybackSessionUpdate(update);
+        return update;
+      });
+    playbackIntentTail = run.catch(() => {});
+    return run;
+  },
+
+  pushPlaybackModes() {
+    return this.sendPlaybackIntent({
+      type: 'set_modes',
+      shuffle: !!this.shuffleMode,
+      repeat: ['off', 'all', 'one'][this.loopMode] || 'off',
+      autoplay: !!this.autoplayMode,
+    }).catch((error) => console.error('Failed to update playback modes', error));
   },
 
   applyPlaybackSessionUpdate(update) {
     if (!update) return;
-    if (update.snapshot) this.playbackSessionSnapshot = update.snapshot;
+    if (update.snapshot) {
+      const snapshot = update.snapshot;
+      const available = [...this.queue];
+      const queue = snapshot.queue.map((entry) => {
+        let index = available.findIndex((song) => song.queueId === entry.id);
+        if (index === -1) index = available.findIndex((song) => song.path === entry.path);
+        const song =
+          index === -1
+            ? queueMetadata.get(entry.id) ||
+              [...queueMetadata.values()].find((candidate) => candidate.path === entry.path)
+            : available.splice(index, 1)[0];
+        const hydrated = song
+          ? { ...song, queueId: entry.id }
+          : {
+              queueId: entry.id,
+              path: entry.path,
+              duration_secs: entry.durationHint || 0,
+              title: entry.path.split(/[\\/]/).pop() || entry.path,
+              artist: 'Unknown Artist',
+              album: 'Unknown Album',
+            };
+        queueMetadata.set(entry.id, hydrated);
+        return hydrated;
+      });
+      this.queue = queue;
+      this.currentSong = snapshot.currentEntryId
+        ? queue.find((entry) => entry.queueId === snapshot.currentEntryId) || null
+        : null;
+      this.shuffleMode = !!snapshot.shuffle;
+      this.loopMode = { off: 0, all: 1, one: 2 }[snapshot.repeat] ?? 0;
+      this.autoplayMode = !!snapshot.autoplay;
+      this.isPlaying = !!snapshot.playing;
+      this.transitionMode = snapshot.transition || this.transitionMode;
+      this.crossfadeSecs = snapshot.crossfadeSecs || this.crossfadeSecs;
+      const sleep = snapshot.sleep || { mode: 'off' };
+      if (sleep.mode === 'end_track') {
+        this.sleepTimerMode = 'end';
+        this.sleepTimerDeadline = 0;
+      } else if (sleep.mode === 'end_queue') {
+        this.sleepTimerMode = 'end-queue';
+        this.sleepTimerDeadline = 0;
+      } else if (sleep.mode === 'deadline') {
+        this.sleepTimerDeadline = sleep.deadlineMs || 0;
+        this.sleepTimerMode = Math.max(
+          1,
+          Math.ceil((this.sleepTimerDeadline - Date.now()) / 60000)
+        );
+      } else {
+        this.sleepTimerMode = 'off';
+        this.sleepTimerDeadline = 0;
+      }
+      this.playbackSessionSnapshot = snapshot;
+    }
     const effect = update.effect;
-    if (!effect) return;
-
-    if (effect.type === 'load' && effect.entry) {
-      const entry = this.queue.find((song) => song.queueId === effect.entry.id);
-      if (!entry) return;
-      this.preselectedNextSong = null;
-      this.pendingSeek = effect.startAt ?? null;
-      this.pendingAutoplay = effect.autoplay !== false;
-      this.currentSong = { ...entry };
-      this.isPlaying = effect.autoplay !== false;
+    if (effect?.type === 'load') {
       this.playbackFinished = false;
-    } else if (effect.type === 'set_playing') {
+      this.currentTime = effect.startAt || 0;
+    } else if (effect?.type === 'set_playing') {
       this.isPlaying = !!effect.playing;
-    } else if (effect.type === 'stop') {
+    } else if (effect?.type === 'stop') {
       this.isPlaying = false;
       this.playbackFinished = true;
       if (String(effect.reason || '').startsWith('sleep_')) {
@@ -2161,49 +2265,43 @@ export const store = reactive({
   async nextSong(userTriggered = false) {
     if (!this.currentSong || this.queue.length === 0) return;
     try {
-      await this.syncPlaybackSession();
-      let update = await invoke('playback_session_intent', {
-        intent: { type: 'next', userTriggered: !!userTriggered },
+      this.isBuffering = true;
+      let update = await this.sendPlaybackIntent({
+        type: 'next',
+        userTriggered: !!userTriggered,
       });
 
       if (update.effect?.type === 'request_autoplay') {
         const song = await this.pickRandomSong();
         if (!song) {
-          this.isPlaying = false;
+          await this.sendPlaybackIntent({ type: 'set_playing', playing: false });
           this.playbackFinished = true;
           return;
         }
         const entry = { ...song, queueId: Math.random().toString(36).substring(2, 9) };
         this.queue.push(entry);
-        update = await invoke('playback_session_intent', {
-          intent: {
-            type: 'append_autoplay',
-            entry: {
-              id: entry.queueId,
-              path: entry.path,
-              durationHint: entry.duration_secs || 0,
-            },
-            playNow: true,
-          },
+        update = await this.sendPlaybackIntent({
+          type: 'append_autoplay',
+          entry: nativeQueueEntry(entry),
+          playNow: true,
         });
       }
-
-      this.applyPlaybackSessionUpdate(update);
     } catch (error) {
       console.error('Failed to advance native playback session', error);
+    } finally {
+      this.isBuffering = false;
     }
   },
 
   async prevSong() {
     if (!this.currentSong || this.queue.length === 0) return;
     try {
-      await this.syncPlaybackSession();
-      const update = await invoke('playback_session_intent', {
-        intent: { type: 'previous', position: this.currentTime || 0 },
-      });
-      this.applyPlaybackSessionUpdate(update);
+      this.isBuffering = true;
+      await this.sendPlaybackIntent({ type: 'previous', position: this.currentTime || 0 });
     } catch (error) {
       console.error('Failed to rewind native playback session', error);
+    } finally {
+      this.isBuffering = false;
     }
   },
 
@@ -2215,9 +2313,7 @@ export const store = reactive({
     this.currentTime = t;
     this.lastSeekAt = Date.now();
     if (this.playbackFinished && this.currentSong) {
-      this.pendingSeek = t;
-      this.pendingAutoplay = true;
-      this.playSong(this.currentSong);
+      this.playSong(this.currentSong, null, { autoplay: true, startAt: t });
     } else {
       try {
         await invoke('player_seek', { position: t });
@@ -2252,13 +2348,13 @@ export const store = reactive({
   toggleShuffle() {
     if (!this.currentSong) return;
     this.shuffleMode = !this.shuffleMode;
-    this.preselectedNextSong = null;
+    this.pushPlaybackModes();
     this.persistState();
   },
 
   toggleAutoplay() {
     this.autoplayMode = !this.autoplayMode;
-    this.preselectedNextSong = null;
+    this.pushPlaybackModes();
     this.persistState();
   },
 
@@ -2287,22 +2383,26 @@ export const store = reactive({
     if (mode === 'off' || mode === null || mode === undefined) {
       this.sleepTimerMode = 'off';
       this.sleepTimerDeadline = 0;
+      this.sendPlaybackIntent({ type: 'set_sleep', sleep: this.nativeSleepMode() }).catch(() => {});
       return;
     }
     if (mode === 'end' || mode === 'end-queue') {
       this.sleepTimerMode = mode;
       this.sleepTimerDeadline = 0;
+      this.sendPlaybackIntent({ type: 'set_sleep', sleep: this.nativeSleepMode() }).catch(() => {});
       return;
     }
     const raw = Number(mode);
     if (!isFinite(raw) || raw <= 0) {
       this.sleepTimerMode = 'off';
       this.sleepTimerDeadline = 0;
+      this.sendPlaybackIntent({ type: 'set_sleep', sleep: this.nativeSleepMode() }).catch(() => {});
       return;
     }
     const minutes = Math.min(1440, Math.max(1, Math.round(raw))); // clamp 1min–24h
     this.sleepTimerMode = minutes;
     this.sleepTimerDeadline = Date.now() + minutes * 60000;
+    this.sendPlaybackIntent({ type: 'set_sleep', sleep: this.nativeSleepMode() }).catch(() => {});
   },
 
   // ---- Command palette (Ctrl+K) -----------------------------------------
@@ -2483,74 +2583,12 @@ export const store = reactive({
     }
   },
 
-  // Exact queue occurrence which will play next. Returning the entry (rather
-  // than only its path) lets Rust distinguish the same file queued twice.
-  // Autoplay-random still resolves asynchronously through `preselectedNextSong`.
+  // Exact queue occurrence planned by Rust. There is intentionally no local
+  // shuffle/repeat/autoplay fallback: absence of nextEntryId is native truth.
   nextUpEntry() {
-    if (!this.currentSong || this.queue.length === 0) return null;
-    // Sleep timer "stop after current track": never pre-decode a next track, or
-    // gapless/crossfade would advance past the point we mean to stop at.
-    if (this.sleepTimerMode === 'end') return null;
     const nativeNextId = this.playbackSessionSnapshot?.nextEntryId;
-    if (nativeNextId) {
-      const nativeNext = this.queue.find((entry) => entry.queueId === nativeNextId);
-      if (nativeNext) return nativeNext;
-    }
-    if (this.loopMode === 2) return this.currentSong; // repeat-one
-
-    if (this.preselectedNextSong) {
-      return this.preselectedNextSong;
-    }
-
-    if (this.shuffleMode) {
-      const currentIndex = this.currentQueueIndex();
-      let nextIndex;
-      if (this.queue.length > 1) {
-        let tries = 0;
-        do {
-          nextIndex = Math.floor(Math.random() * this.queue.length);
-        } while (nextIndex === currentIndex && ++tries < 10);
-      } else {
-        nextIndex = 0;
-      }
-      this.preselectedNextSong = this.queue[nextIndex];
-      return this.preselectedNextSong;
-    }
-
-    const i = this.currentQueueIndex();
-    if (i < 0) return null;
-    let n = i + 1;
-    if (n >= this.queue.length) {
-      // Stop-at-end-of-queue: don't prepare a continuation.
-      if (this.sleepTimerMode === 'end-queue') return null;
-      if (this.loopMode === 1) {
-        n = 0;
-      } else if (this.autoplayMode) {
-        // Prefetch a random track; the watcher re-runs once it's set.
-        if (!this._prefetchingRandom) {
-          this._prefetchingRandom = true;
-          this.pickRandomSong()
-            .then((song) => {
-              if (song) {
-                const entry = {
-                  ...song,
-                  queueId: Math.random().toString(36).substring(2, 9),
-                };
-                this.queue.push(entry);
-                this.preselectedNextSong = entry;
-                this.syncPlaybackSession().catch(() => null);
-              }
-            })
-            .finally(() => {
-              this._prefetchingRandom = false;
-            });
-        }
-        return null;
-      } else {
-        return null;
-      }
-    }
-    return this.queue[n] || null;
+    if (!nativeNextId) return null;
+    return this.queue.find((entry) => entry.queueId === nativeNextId) || null;
   },
 
   // Kept for callers which only need display/path compatibility.

@@ -1,7 +1,7 @@
 <script setup>
 import { computed, ref, watch, nextTick, onMounted, onUnmounted, TransitionGroup } from 'vue';
 import { useRouter } from 'vue-router';
-import { invoke } from '@tauri-apps/api/core';
+import { invokeCommand as invoke } from '../generated/ipc';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { store } from '../store';
 import { invalidateCover } from '../coverCache';

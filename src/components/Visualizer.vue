@@ -1,7 +1,7 @@
 <script setup>
 import { ref, watch, onMounted, onUnmounted } from 'vue';
 import { store } from '../store';
-import { invoke } from '@tauri-apps/api/core';
+import { invokeCommand as invoke } from '../generated/ipc';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { nyancatRainbowRgb } from '../nyancatTheme';
 

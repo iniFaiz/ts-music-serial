@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue';
-import { invoke } from '@tauri-apps/api/core';
+import { invokeCommand as invoke } from './generated/ipc';
 import { emit } from '@tauri-apps/api/event';
 import CoverImage from './components/CoverImage.vue';
 import {

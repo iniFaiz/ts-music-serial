@@ -641,22 +641,11 @@ onMounted(async () => {
         store.currentTime = Math.max(0, payload.position);
         store.lastSeekAt = Date.now();
       }
-      if (
-        typeof payload.playing === 'boolean' &&
-        store.currentSong &&
-        store.isPlaying !== payload.playing
-      ) {
-        if (payload.playing && store.playbackFinished) {
-          // A finished Rodio sink cannot simply resume. Reload it at the needle
-          // position through the store's existing finished-track seek path.
-          store.seek(typeof payload.position === 'number' ? payload.position : 0);
-        } else {
-          store.externalPlaybackSync = true;
-          store.isPlaying = payload.playing;
-          nextTick(() => {
-            store.externalPlaybackSync = false;
-          });
-        }
+      if (payload.playing === true && store.currentSong && store.playbackFinished) {
+        store.playSong(store.currentSong, null, {
+          autoplay: true,
+          startAt: typeof payload.position === 'number' ? payload.position : 0,
+        });
       }
     });
   } catch {

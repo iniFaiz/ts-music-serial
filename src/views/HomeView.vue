@@ -1,6 +1,6 @@
 <script setup>
 import { computed } from 'vue';
-import { invoke } from '@tauri-apps/api/core';
+import { invokeCommand as invoke } from '../generated/ipc';
 import { useRouter } from 'vue-router';
 import { store } from '../store';
 import { useQuery } from '../useLibraryData';

@@ -10,7 +10,8 @@
     "tauri": "tauri",
     "lint": "eslint .",
     "format": "prettier --write \"src/**/*.{js,vue,css}\"",
-    "test": "vitest run"
+    "test": "vitest run",
+    "ipc:generate": "cargo check --manifest-path src-tauri/Cargo.toml --lib"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",

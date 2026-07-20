@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { invokeCommand as invoke } from './generated/ipc';
 
 export const TRACK_PAGE_SIZE = 300;
 

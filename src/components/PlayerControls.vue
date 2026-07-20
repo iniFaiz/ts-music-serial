@@ -1,7 +1,7 @@
 <script setup>
 import { ref, watch, onMounted, onUnmounted, computed } from 'vue';
 import { store } from '../store';
-import { invoke } from '@tauri-apps/api/core';
+import { invokeCommand as invoke } from '../generated/ipc';
 import { listen } from '@tauri-apps/api/event';
 import { useRouter } from 'vue-router';
 import CoverImage from './CoverImage.vue';
@@ -113,30 +113,8 @@ let stateTimer = null;
 // Seek suppression timestamp lives on the store (store.lastSeekAt) so the
 // fullscreen player and lyric-click seeks suppress this poll too.
 let endedHandledFor = null; // latch so a finished track only advances once
-let loadToken = 0; // guards against a stale load winning after a rapid skip
-
-// During the compatibility phase Vue keeps a presentation copy of the queue,
-// but every mutation is mirrored as one typed Rust intent. Rust then owns the
-// generation and exact entry identity used by decoder preparation/transition.
-const syncPlaybackSession = () =>
-  store.syncPlaybackSession().catch(() => null); // older/dev backends keep using the legacy path
-
-watch(
-  () => ({
-    queue: store.queue.map((song) => [song.queueId, song.path, song.duration_secs]),
-    current: store.currentSong ? store.currentSong.queueId : null,
-    shuffle: store.shuffleMode,
-    repeat: store.loopMode,
-    autoplay: store.autoplayMode,
-    playing: store.isPlaying,
-    sleep: store.sleepTimerMode,
-    deadline: store.sleepTimerDeadline,
-  }),
-  () => syncPlaybackSession(),
-  { deep: true, immediate: true }
-);
-
-// Load (and usually play) whenever the selected song changes.
+// Track selection is a native session effect. This watcher updates presentation
+// and integrations only; it never issues a second load command.
 watch(
   () => store.currentSong,
   async (song) => {
@@ -148,11 +126,6 @@ watch(
       store.duration = 0;
       store.currentTime = 0;
       seekValue.value = 0;
-      try {
-        await invoke('player_stop');
-      } catch (err) {
-        console.warn('Failed to stop player:', err);
-      }
       store.syncDiscord();
       return;
     }
@@ -160,78 +133,14 @@ watch(
     playbackError.value = null;
     endedHandledFor = null;
 
-    if (store.skipNextLoad) {
-      store.skipNextLoad = false;
-      store.isBuffering = false;
-      store.duration = song.duration_secs || 0;
-      store.currentSampleRate = song.sample_rate;
-      store.currentBitDepth = song.bit_depth;
-      pushMediaMetadata(song);
-      pushMediaPlayback();
-      store.syncDiscord();
-      return;
-    }
-
-    // Consume the one-shot load hints (set by resume-on-launch / normal plays).
-    const startAt = store.pendingSeek;
-    const autoplay = store.pendingAutoplay;
-    store.pendingSeek = null;
-    store.pendingAutoplay = true;
-
-    const token = ++loadToken;
-    store.isBuffering = true;
-    const startPos = startAt || 0;
-    store.currentTime = startPos;
-    seekValue.value = startPos;
-
-    // Set the normalization factor before loading so the initial volume is
-    // already corrected for this track.
+    store.duration = song.duration_secs || store.duration || 0;
+    store.currentSampleRate = song.sample_rate;
+    store.currentBitDepth = song.bit_depth;
+    seekValue.value = store.currentTime || 0;
     await applyNormalization(song);
-
-    try {
-      const fadeIn = 0; // Manual plays/skips are always instant (no crossfade). Crossfade only happens on auto-transitions!
-      const info = await invoke('player_load', {
-        path: song.path,
-        volume: store.isMuted ? 0 : store.volume,
-        startAt,
-        autoplay,
-        durationHint: song.duration_secs || 0,
-        fadeInSecs: fadeIn,
-        queueEntryId: song.queueId || null,
-      });
-      if (token !== loadToken) return; // a newer track was selected meanwhile
-      store.duration = info.duration || 0;
-      store.currentSampleRate = info.sample_rate;
-      store.currentBitDepth = info.bit_depth;
-      store.currentTime = startPos;
-      seekValue.value = startPos;
-      store.isPlaying = autoplay;
-      pushMediaMetadata(song);
-      pushMediaPlayback();
-      store.syncDiscord();
-
-      // Ensure the native queue contains all occurrences before preparing the
-      // exact next entry (important when the same path appears more than once).
-      await syncPlaybackSession();
-
-      // Trigger next track preparation since player_load clears/consumes the backend prepared state
-      if (store.transitionMode !== 'off' && !store.wasapiExclusive) {
-        const nextSong = store.nextUpEntry();
-        if (nextSong && nextSong.queueId !== song.queueId) {
-          invoke('player_prepare_next', {
-            path: nextSong.path,
-            durationHint: nextSong.duration_secs || 0,
-            queueEntryId: nextSong.queueId || null,
-          }).catch(() => {});
-        }
-      }
-    } catch (err) {
-      if (token !== loadToken) return;
-      playbackError.value = String(err);
-      store.isPlaying = false;
-    } finally {
-      if (token === loadToken) store.isBuffering = false;
-    }
+    pushMediaMetadata(song);
+    pushMediaPlayback();
+    store.syncDiscord();
   },
   { immediate: true }
 );
@@ -246,7 +155,7 @@ watch(
       : null;
   },
   (next) => {
-    if (next && store.currentSong && next.id !== store.currentSong.queueId) {
+    if (next && store.currentSong) {
       invoke('player_prepare_next', {
         path: next.path,
         durationHint: next.duration,
@@ -259,23 +168,15 @@ watch(
 
 watch(
   () => store.isPlaying,
-  async (playing) => {
+  () => {
     pushMediaPlayback();
     store.syncDiscord();
-    // The native vinyl window already issued this command to the shared Rust
-    // player. Avoid a late duplicate pause silencing its 48ms scratch grain.
-    if (store.externalPlaybackSync) return;
-    try {
-      await invoke(playing ? 'player_resume' : 'player_pause');
-    } catch {
-      // ignore — status poll keeps UI in sync
-    }
   }
 );
 
 // ---- System Media Transport Controls (Windows media overlay + media keys) ---
 
-const pushMediaMetadata = (song) => {
+function pushMediaMetadata(song) {
   if (!song) return;
   invoke('smtc_set_metadata', {
     title: song.title || '',
@@ -284,19 +185,19 @@ const pushMediaMetadata = (song) => {
     duration: store.duration || 0,
     path: song.path,
   }).catch(() => {});
-};
+}
 
-const pushMediaPlayback = () => {
+function pushMediaPlayback() {
   invoke('smtc_set_playback', {
     playing: store.isPlaying,
     position: store.currentTime || 0,
   }).catch(() => {});
-};
+}
 
 // ---- Volume normalization (Sound Check) -------------------------------------
 // Push the per-track gain to the backend. Uses the ReplayGain tag when present,
 // otherwise kicks off a one-time background loudness analysis and re-applies.
-const applyNormalization = async (song) => {
+async function applyNormalization(song) {
   if (!song) return;
   const enabled = store.normalizationEnabled;
   let gain = null;
@@ -334,7 +235,7 @@ const applyNormalization = async (song) => {
       })
       .catch(() => {});
   }
-};
+}
 
 // Re-apply when the normalization settings change mid-playback.
 watch(
@@ -345,7 +246,6 @@ watch(
 );
 
 let unlistenMedia = null;
-let unlistenTrackChanged = null;
 let unlistenPlaybackSession = null;
 
 const handleMediaControl = (payload) => {
@@ -367,7 +267,7 @@ const handleMediaControl = (payload) => {
       store.prevSong();
       break;
     case 'stop':
-      store.isPlaying = false;
+      invoke('player_stop').catch(() => {});
       break;
     case 'seek':
       if (typeof payload.position === 'number') {
@@ -526,53 +426,13 @@ onMounted(async () => {
   try {
     unlistenPlaybackSession = await listen('playback-session-event', (e) => {
       const update = e.payload;
-      if (update?.snapshot) store.playbackSessionSnapshot = update.snapshot;
       if (update?.events?.some((event) => event.type === 'accounting')) {
         store.bumpStats();
       }
-      if (update?.effect?.type === 'stop' || update?.effect?.type === 'set_playing') {
-        store.applyPlaybackSessionUpdate(update);
-      }
+      store.applyPlaybackSessionUpdate(update);
     });
   } catch {
     // Typed playback events are best-effort during development upgrades.
-  }
-
-  // Listen for backend automatic track-changed transitions (gapless/crossfade)
-  try {
-    unlistenTrackChanged = await listen('track-changed', async (e) => {
-      if (e.payload && e.payload.path) {
-        const path = e.payload.path;
-        const queueEntryId = e.payload.queueEntryId || null;
-        const preselected =
-          store.preselectedNextSong &&
-          ((queueEntryId && store.preselectedNextSong.queueId === queueEntryId) ||
-            (!queueEntryId && store.preselectedNextSong.path === path))
-            ? store.preselectedNextSong
-            : null;
-        store.preselectedNextSong = null;
-        let nextSong =
-          (queueEntryId && store.queue.find((s) => s.queueId === queueEntryId)) ||
-          preselected ||
-          store.queue.find((s) => s.path === path);
-        if (!nextSong) {
-          // Auto-advanced into a track that isn't in the queue (autoplay random):
-          // hydrate it from the DB and append it.
-          nextSong = await store.getTrackByPath(path);
-          if (nextSong && store.autoplayMode) {
-            store.queue.push({ ...nextSong });
-          }
-        }
-        if (nextSong) {
-          store.skipNextLoad = true;
-          store.currentSong = nextSong;
-          store.isPlaying = true;
-          endedHandledFor = null;
-        }
-      }
-    });
-  } catch (err) {
-    console.error('Failed to listen to track-changed:', err);
   }
 });
 
@@ -582,7 +442,6 @@ onUnmounted(() => {
   if (rafId) cancelAnimationFrame(rafId);
   if (stateTimer) clearInterval(stateTimer);
   if (unlistenMedia) unlistenMedia();
-  if (unlistenTrackChanged) unlistenTrackChanged();
   if (unlistenPlaybackSession) unlistenPlaybackSession();
   window.removeEventListener('beforeunload', flushState);
   document.removeEventListener('click', closeLosslessPopup);

@@ -2,7 +2,6 @@
 identifier = "playback"
 description = "Audio playback, queue-session intents, device controls, and play accounting."
 commands.allow = [
-  "player_load",
   "player_prepare_next",
   "player_pause",
   "player_resume",
@@ -39,4 +38,3 @@ commands.allow = [
   "player_seek",
   "player_status",
 ]
-

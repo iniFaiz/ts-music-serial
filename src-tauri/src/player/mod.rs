@@ -2,7 +2,6 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
@@ -12,7 +11,7 @@ use lofty::prelude::*;
 use lofty::probe::Probe;
 use lofty::tag::ItemKey;
 use parking_lot::Mutex;
-use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink, Source};
+use rodio::{OutputStream, OutputStreamBuilder, Sink, Source};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -65,7 +64,7 @@ struct FadingTrack {
 struct PreparedTrack {
     path: String,
     token: PreparedToken,
-    decoder: Decoder<Cursor<Vec<u8>>>,
+    decoder: AudioDecoder,
     duration: f64,
     gain_db: Option<f32>,
     peak: Option<f32>,
@@ -100,12 +99,8 @@ pub(crate) struct AudioPlayer {
     // Target token currently being decoded. Unlike a path-only marker this
     // distinguishes duplicate occurrences of the same file in the queue.
     preparing: Arc<Mutex<Option<PreparedToken>>>,
-    // Queue/transition policy. Embedded here so legacy commands and the new
-    // typed intent API cannot accidentally operate on separate state objects.
+    // Authoritative queue, playback, transition, autoplay and sleep policy.
     session: session::PlaybackSession,
-    // Transition mode and crossfade settings
-    transition_mode: Arc<Mutex<String>>,
-    crossfade_secs: Arc<Mutex<f64>>,
     // Normalization configuration
     normalization_enabled: Arc<Mutex<bool>>,
     normalization_preamp_db: Arc<Mutex<f64>>,
@@ -134,8 +129,6 @@ impl Clone for AudioPlayer {
             prepared: self.prepared.clone(),
             preparing: self.preparing.clone(),
             session: self.session.clone(),
-            transition_mode: self.transition_mode.clone(),
-            crossfade_secs: self.crossfade_secs.clone(),
             normalization_enabled: self.normalization_enabled.clone(),
             normalization_preamp_db: self.normalization_preamp_db.clone(),
             exclusive_enabled: self.exclusive_enabled.clone(),
@@ -253,7 +246,7 @@ fn apply_immediate_session_effect(
 }
 
 mod decoder;
-pub(crate) use decoder::build_decoder;
+pub(crate) use decoder::{build_decoder, AudioDecoder};
 
 mod spectrum;
 use spectrum::SPECTRUM_BANDS;
@@ -274,11 +267,10 @@ pub(crate) struct PlaybackInfo {
     pub(crate) bit_depth: Option<u8>,
 }
 
-#[tauri::command]
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn player_load(
-    app: AppHandle,
-    player: State<'_, AudioPlayer>,
+async fn load_track(
+    app: &AppHandle,
+    player: &AudioPlayer,
     path: String,
     volume: f64,
     start_at: Option<f64>,
@@ -287,7 +279,7 @@ pub(crate) async fn player_load(
     fade_in_secs: Option<f64>,
     queue_entry_id: Option<String>,
 ) -> Result<PlaybackInfo, String> {
-    let path_buf = resolve_allowed_audio(&app, Path::new(&path))?;
+    let path_buf = resolve_allowed_audio(app, Path::new(&path))?;
     let path = path_buf.to_string_lossy().to_string();
 
     // WASAPI exclusive path (Windows). Falls back to shared mode on any failure.
@@ -303,12 +295,7 @@ pub(crate) async fn player_load(
             .map_err(|e| format!("Exclusive load task failed: {e}"))?;
             match res {
                 Ok(info) => {
-                    let session_update =
-                        player
-                            .session
-                            .legacy_loaded(&path, queue_entry_id.as_deref(), autoplay);
-                    invalidate_prepared_decoder(&player);
-                    emit_session_update(&app, &session_update);
+                    invalidate_prepared_decoder(player);
                     return Ok(info);
                 }
                 Err(e) => {
@@ -500,11 +487,6 @@ pub(crate) async fn player_load(
         bit_depth = props.bit_depth();
     }
 
-    let session_update = player
-        .session
-        .legacy_loaded(&path, queue_entry_id.as_deref(), autoplay);
-    emit_session_update(&app, &session_update);
-
     Ok(PlaybackInfo {
         duration,
         sample_rate,
@@ -513,8 +495,7 @@ pub(crate) async fn player_load(
 }
 
 // Pre-decode the next track for near-gapless playback. The ready decoder is
-// stored and consumed by the upcoming player_load (when paths match), skipping
-// its disk read + decoder setup so the transition has no audible decode gap.
+// stored and consumed by the native session load/transition path.
 #[tauri::command]
 pub(crate) async fn player_prepare_next(
     app: AppHandle,
@@ -804,42 +785,74 @@ pub(crate) fn player_set_transition(
     crossfade_secs: f64,
 ) {
     let typed_mode = TransitionMode::from_legacy(&mode);
-    *player.transition_mode.lock() = match typed_mode {
-        TransitionMode::Off => "off",
-        TransitionMode::Gapless => "gapless",
-        TransitionMode::Crossfade => "crossfade",
-    }
-    .to_string();
-    *player.crossfade_secs.lock() = crossfade_secs.clamp(0.25, 12.0);
-    let update = player
-        .session
-        .set_legacy_transition(typed_mode, crossfade_secs);
+    let update = player.session.set_transition(typed_mode, crossfade_secs);
     if update.prepared_invalidated || typed_mode == TransitionMode::Off {
         invalidate_prepared_decoder(&player);
     }
     emit_session_update(&app, &update);
 }
 
-/// Read-only typed state for the incremental frontend migration.
+/// Read-only native playback state for window initialization and recovery.
 #[tauri::command]
 pub(crate) fn playback_session_snapshot(player: State<AudioPlayer>) -> PlaybackSessionSnapshot {
     player.session.snapshot()
 }
 
-/// Apply a queue/session intent.  The returned effect tells the compatibility
-/// bridge which legacy audio command to execute; queue policy itself is decided
-/// here and the same update is broadcast for every window.
+/// Apply an intent and execute its audio effect before publishing the snapshot.
+/// This ordering prevents a webview watcher from racing a prepared transition.
 #[tauri::command]
-pub(crate) fn playback_session_intent(
+pub(crate) async fn playback_session_intent(
     app: AppHandle,
-    player: State<AudioPlayer>,
+    player: State<'_, AudioPlayer>,
     intent: PlaybackIntent,
 ) -> Result<PlaybackSessionUpdate, String> {
     let update = player.session.apply(intent)?;
     if update.prepared_invalidated {
         invalidate_prepared_decoder(&player);
     }
-    apply_immediate_session_effect(&app, &player, update.effect.as_ref());
+    if let Some(PlaybackEffect::Load {
+        entry,
+        autoplay,
+        start_at,
+    }) = update.effect.as_ref()
+    {
+        let normalization_enabled = *player.normalization_enabled.lock();
+        let normalization_preamp_db = *player.normalization_preamp_db.lock();
+        set_normalization_factor(
+            &player,
+            entry.track_gain_db,
+            normalization_preamp_db,
+            entry.track_peak,
+            normalization_enabled,
+        );
+        let volume = *player.last_volume.lock() as f64;
+        if let Err(error) = load_track(
+            &app,
+            &player,
+            entry.path.clone(),
+            volume,
+            *start_at,
+            *autoplay,
+            entry.duration_hint,
+            Some(0.0),
+            Some(entry.id.clone()),
+        )
+        .await
+        {
+            let failed = player.session.set_playing(false);
+            apply_immediate_session_effect(&app, &player, failed.effect.as_ref());
+            emit_session_update(&app, &failed);
+            return Err(error);
+        }
+        if player.session.snapshot().revision != update.snapshot.revision {
+            // Another window changed the session while decoder setup was in
+            // flight. Audio generation already discarded the stale decoder;
+            // never publish its older snapshot back into the webviews.
+            return Ok(player.session.snapshot_update());
+        }
+    } else {
+        apply_immediate_session_effect(&app, &player, update.effect.as_ref());
+    }
     emit_session_update(&app, &update);
     Ok(update)
 }
@@ -1013,7 +1026,7 @@ pub(crate) fn init_audio_player() -> AudioPlayer {
         }
     });
 
-    // Wait for the initial device open so the first player_load sees a sink
+    // Wait for the initial device open so the first session load sees a sink
     // (or a definitive None when no output device exists).
     let _ = ready_rx.recv();
 
@@ -1030,8 +1043,6 @@ pub(crate) fn init_audio_player() -> AudioPlayer {
         prepared: Arc::new(Mutex::new(None)),
         preparing: Arc::new(Mutex::new(None)),
         session: session::PlaybackSession::default(),
-        transition_mode: Arc::new(Mutex::new("off".to_string())),
-        crossfade_secs: Arc::new(Mutex::new(6.0)),
         normalization_enabled: Arc::new(Mutex::new(false)),
         normalization_preamp_db: Arc::new(Mutex::new(0.0)),
         current_track: Arc::new(Mutex::new(None)),
@@ -1164,8 +1175,9 @@ pub(crate) fn spawn_player_ticker(app: AppHandle, player: AudioPlayer) {
                 }
             };
 
-            let mode = player.transition_mode.lock().clone();
-            let crossfade_secs = *player.crossfade_secs.lock();
+            let session_snapshot = player.session.snapshot();
+            let mode = session_snapshot.transition;
+            let crossfade_secs = session_snapshot.crossfade_secs;
 
             // --- True-gapless boundary: promote a queued next track ----------
             // When a next track was appended ahead onto the shared sink, watch
@@ -1201,18 +1213,13 @@ pub(crate) fn spawn_player_ticker(app: AppHandle, player: AudioPlayer) {
                         duration: q.duration,
                         start_time: Instant::now(),
                     });
-                    let session_update =
-                        player
-                            .session
-                            .promote_prepared(&q.token)
-                            .unwrap_or_else(|| {
-                                // The source was appended just before a queue edit.
-                                // Once it has audibly started, reconcile policy to
-                                // audio truth rather than emitting a path-only ghost.
-                                player
-                                    .session
-                                    .legacy_loaded(&q.path, Some(&q.token.entry_id), true)
-                            });
+                    let Some(session_update) = player.session.promote_prepared(&q.token) else {
+                        // The queue changed after this source was appended. Never
+                        // rewrite native policy to match stale audio.
+                        q.sink.stop();
+                        player.active.store(false, Ordering::SeqCst);
+                        continue;
+                    };
                     emit_session_update(&app, &session_update);
                     let _ = app.emit(
                         "track-changed",
@@ -1232,7 +1239,7 @@ pub(crate) fn spawn_player_ticker(app: AppHandle, player: AudioPlayer) {
                 }
             }
 
-            if mode == "crossfade"
+            if mode == TransitionMode::Crossfade
                 && (duration > crossfade_secs && position >= (duration - crossfade_secs) || empty)
             {
                 if transition_triggered_for_gen != current_gen {
@@ -1254,6 +1261,14 @@ pub(crate) fn spawn_player_ticker(app: AppHandle, player: AudioPlayer) {
                         {
                             if let Ok(Ok(new_sink)) = reply_rx.recv_timeout(Duration::from_secs(2))
                             {
+                                let prepared_token = prep.token.clone();
+                                let prepared_path = prep.path.clone();
+                                let Some(session_update) =
+                                    player.session.promote_prepared(&prepared_token)
+                                else {
+                                    new_sink.stop();
+                                    continue;
+                                };
                                 let mut current_guard = player.current_track.lock();
                                 if let Some(ref old_track) = *current_guard {
                                     let mut fading_guard = player.fading_tracks.lock();
@@ -1267,14 +1282,9 @@ pub(crate) fn spawn_player_ticker(app: AppHandle, player: AudioPlayer) {
                                 }
 
                                 let new_gen = player.generation.fetch_add(1, Ordering::SeqCst) + 1;
-                                // Mark the *outgoing* track's generation as handled — NOT the
-                                // new one. The new track starts via the `track-changed` event,
-                                // which the frontend handles with `skipNextLoad` and so never
-                                // calls `player_load` to bump the generation. Tagging `new_gen`
-                                // here left the guard equal to the new track's live generation
-                                // for its entire playback, blocking *its* transition — so
-                                // crossfade only fired on every other track. Keying on
-                                // `current_gen` lets each track transition exactly once.
+                                // Mark the outgoing generation as handled. The native
+                                // transition owns both audio promotion and session state;
+                                // the new generation must remain eligible for its own boundary.
                                 transition_triggered_for_gen = current_gen;
 
                                 let next_dur = prep.duration;
@@ -1297,9 +1307,6 @@ pub(crate) fn spawn_player_ticker(app: AppHandle, player: AudioPlayer) {
                                     1.0
                                 };
                                 *player.norm_factor.lock() = factor;
-
-                                let prepared_token = prep.token.clone();
-                                let prepared_path = prep.path.clone();
 
                                 let equalized =
                                     EqualizerSource::new(prep.decoder, player.equalizer.clone());
@@ -1324,16 +1331,6 @@ pub(crate) fn spawn_player_ticker(app: AppHandle, player: AudioPlayer) {
                                     start_time: Instant::now(),
                                 });
 
-                                let session_update = player
-                                    .session
-                                    .promote_prepared(&prepared_token)
-                                    .unwrap_or_else(|| {
-                                        player.session.legacy_loaded(
-                                            &prepared_path,
-                                            Some(&prepared_token.entry_id),
-                                            true,
-                                        )
-                                    });
                                 emit_session_update(&app, &session_update);
                                 let _ = app.emit(
                                     "track-changed",
@@ -1348,7 +1345,7 @@ pub(crate) fn spawn_player_ticker(app: AppHandle, player: AudioPlayer) {
                         }
                     }
                 }
-            } else if mode == "gapless"
+            } else if mode == TransitionMode::Gapless
                 && gapless_queued.is_none()
                 && transition_triggered_for_gen != current_gen
                 && ((duration > 0.0 && position >= (duration - GAPLESS_LEAD_SECS)) || empty)
@@ -1456,6 +1453,16 @@ const NORM_TARGET_LUFS: f64 = -18.0;
 #[tauri::command]
 pub(crate) fn player_set_normalization(
     player: State<AudioPlayer>,
+    gain_db: Option<f64>,
+    preamp_db: f64,
+    peak: Option<f64>,
+    enabled: bool,
+) {
+    set_normalization_factor(&player, gain_db, preamp_db, peak, enabled);
+}
+
+fn set_normalization_factor(
+    player: &AudioPlayer,
     gain_db: Option<f64>,
     preamp_db: f64,
     peak: Option<f64>,

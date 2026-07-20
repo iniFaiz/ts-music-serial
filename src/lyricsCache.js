@@ -1,5 +1,5 @@
 import { watch } from 'vue';
-import { invoke } from '@tauri-apps/api/core';
+import { invokeCommand as invoke } from './generated/ipc';
 import { store } from './store';
 
 watch(

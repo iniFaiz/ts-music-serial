@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   quality:
-    name: Lint, test, build, and Clippy
+    name: Linux / lint, test, build, and Clippy
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -52,6 +52,12 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Generate and verify IPC contract
+        run: |
+          cargo check --locked --lib
+          git diff --exit-code -- ../src/generated/ipc.ts
+        working-directory: src-tauri
+
       - name: Frontend lint
         run: npm run lint
 
@@ -70,6 +76,66 @@ jobs:
         working-directory: src-tauri
 
       - name: Clippy
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+        working-directory: src-tauri
+
+      - name: Rust build
+        run: cargo build --locked
+        working-directory: src-tauri
+
+  windows-quality:
+    name: Windows / clean test, Clippy, and build
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      CARGO_BUILD_JOBS: 2
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Generate and verify IPC contract
+        run: |
+          cargo check --locked --lib
+          git diff --exit-code -- ../src/generated/ipc.ts
+        working-directory: src-tauri
+
+      - name: Frontend lint and tests
+        run: |
+          npm run lint
+          npm test
+
+      - name: Frontend build
+        run: npm run build
+
+      - name: Clean Rust artifacts
+        run: cargo clean
+        working-directory: src-tauri
+
+      - name: Rust formatting
+        run: cargo fmt --all -- --check
+        working-directory: src-tauri
+
+      - name: Rust tests (Windows APIs and paths)
+        run: cargo test --locked --all-targets
+        working-directory: src-tauri
+
+      - name: Clippy (Windows targets)
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
         working-directory: src-tauri
 

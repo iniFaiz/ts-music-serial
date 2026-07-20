@@ -8,7 +8,7 @@
 // canvas fallback for the rare case the native call fails (or when only a URL,
 // not a track path, is available).
 
-import { invoke } from '@tauri-apps/api/core';
+import { invokeCommand as invoke } from './generated/ipc';
 
 const DEFAULT_PALETTE = ['#ff2d55', '#5856d6', '#007aff'];
 

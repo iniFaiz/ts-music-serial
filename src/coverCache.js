@@ -1,5 +1,6 @@
 import { ref } from 'vue';
-import { invoke, convertFileSrc } from '@tauri-apps/api/core';
+import { convertFileSrc } from '@tauri-apps/api/core';
+import { invokeCommand as invoke } from './generated/ipc';
 
 // Shared, module-level cover cache.
 //

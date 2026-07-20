@@ -619,7 +619,6 @@ fn now_ms() -> i64 {
 
 // Insert/update scanned tracks. Returns how many were newly inserted (existing
 // rows are refreshed but not counted, matching the old "new tracks" status text).
-#[tauri::command]
 pub fn db_upsert_tracks(db: State<Db>, tracks: Vec<MusicTrack>) -> Result<usize, String> {
     upsert_tracks(&db, tracks)
 }
@@ -749,7 +748,6 @@ pub fn db_remove_paths(db: State<Db>, paths: Vec<String>) -> Result<(), String> 
 // just scanned" — and migrate its play stats, favorite flag, playlist
 // memberships and original date_added onto the new row instead of losing them.
 // Returns the removed (old) paths so the frontend can drop them from the queue.
-#[tauri::command]
 pub fn db_prune_missing(db: State<Db>) -> Result<Vec<String>, String> {
     let mut conn = db.0.lock();
     let gone: Vec<(String, Option<String>)> = {
@@ -996,7 +994,6 @@ pub(crate) fn backfill_fingerprints(app: &AppHandle) {
 // normalised prefix match). Returns the removed paths so the frontend can drop
 // them from the queue / current playback. Also cascades to stats/favorites/
 // playlist items so nothing dangles.
-#[tauri::command]
 pub fn db_remove_under_root(db: State<Db>, root: String) -> Result<Vec<String>, String> {
     let mut conn = db.0.lock();
     let all: Vec<String> = {

@@ -25,6 +25,10 @@ pub(crate) struct QueueEntry {
     pub(crate) path: String,
     #[serde(default)]
     pub(crate) duration_hint: f64,
+    #[serde(default)]
+    pub(crate) track_gain_db: Option<f64>,
+    #[serde(default)]
+    pub(crate) track_peak: Option<f64>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -168,11 +172,10 @@ pub(crate) enum PlaybackSessionEvent {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ChangeReason {
     PlayQueue,
+    Select,
     Next,
     Previous,
     AutomaticTransition,
-    LegacyLoad,
-    Sync,
     Removed,
 }
 
@@ -199,22 +202,28 @@ pub(crate) enum PlaybackIntent {
         start_entry_id: Option<String>,
         #[serde(default = "default_true")]
         autoplay: bool,
+        #[serde(default)]
+        start_at: Option<f64>,
+        #[serde(default)]
+        shuffle: Option<bool>,
+        #[serde(default)]
+        repeat: Option<RepeatMode>,
+        #[serde(default)]
+        autoplay_mode: Option<bool>,
+        #[serde(default)]
+        sleep: Option<SleepMode>,
     },
-    /// Compatibility bridge while the Vue store still owns its presentation
-    /// copy of the queue.  It updates policy without causing an audio load.
-    SyncLegacy {
-        entries: Vec<QueueEntry>,
-        current_entry_id: Option<String>,
-        #[serde(default)]
-        shuffle: bool,
-        #[serde(default)]
-        repeat: RepeatMode,
-        #[serde(default)]
+    SelectEntry {
+        entry_id: String,
+        #[serde(default = "default_true")]
         autoplay: bool,
         #[serde(default)]
-        playing: bool,
+        start_at: Option<f64>,
+    },
+    Enqueue {
+        entries: Vec<QueueEntry>,
         #[serde(default)]
-        sleep: SleepMode,
+        after_current: bool,
     },
     Next {
         #[serde(default)]
@@ -231,6 +240,7 @@ pub(crate) enum PlaybackIntent {
     RemoveQueueItem {
         entry_id: String,
     },
+    ClearUpcoming,
     AppendAutoplay {
         entry: QueueEntry,
         #[serde(default = "default_true")]
@@ -551,9 +561,8 @@ impl SessionState {
     }
 }
 
-/// Cloneable handle embedded in `AudioPlayer`, so legacy and new commands both
-/// operate on exactly one session without adding another independently-managed
-/// Tauri state object.
+/// Cloneable handle embedded in `AudioPlayer`. Queue policy and playback state
+/// are mutated only through this state machine; the webview receives snapshots.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct PlaybackSession {
     inner: Arc<Mutex<SessionState>>,
@@ -562,6 +571,10 @@ pub(crate) struct PlaybackSession {
 impl PlaybackSession {
     pub(crate) fn snapshot(&self) -> PlaybackSessionSnapshot {
         self.inner.lock().snapshot()
+    }
+
+    pub(crate) fn snapshot_update(&self) -> PlaybackSessionUpdate {
+        self.inner.lock().update(Vec::new(), None, false)
     }
 
     pub(crate) fn apply(&self, intent: PlaybackIntent) -> Result<PlaybackSessionUpdate, String> {
@@ -575,6 +588,11 @@ impl PlaybackSession {
                 entries,
                 start_entry_id,
                 autoplay,
+                start_at,
+                shuffle,
+                repeat,
+                autoplay_mode,
+                sleep,
             } => {
                 let queue = state.normalize_entries(entries)?;
                 if queue.is_empty() {
@@ -593,7 +611,21 @@ impl PlaybackSession {
                     invalidated |= state.bump_policy_generation();
                     state.queue = queue;
                     state.playing = autoplay;
+                    if let Some(value) = shuffle {
+                        state.shuffle = value;
+                    }
+                    if let Some(value) = repeat {
+                        state.repeat = value;
+                    }
+                    if let Some(value) = autoplay_mode {
+                        state.autoplay = value;
+                    }
+                    if let Some(value) = sleep {
+                        state.sleep = value;
+                    }
                     events.push(PlaybackSessionEvent::QueueChanged);
+                    events.push(PlaybackSessionEvent::ModesChanged);
+                    events.push(PlaybackSessionEvent::SleepChanged);
                     events.extend(state.set_current(
                         Some(selected.clone()),
                         ChangeReason::PlayQueue,
@@ -603,69 +635,70 @@ impl PlaybackSession {
                     effect = state.entry(&selected).map(|entry| PlaybackEffect::Load {
                         entry,
                         autoplay,
-                        start_at: None,
+                        start_at: start_at.map(|position| position.max(0.0)),
                     });
                 }
             }
-            PlaybackIntent::SyncLegacy {
-                entries,
-                current_entry_id,
-                shuffle,
-                repeat,
+            PlaybackIntent::SelectEntry {
+                entry_id,
                 autoplay,
-                playing,
-                sleep,
+                start_at,
             } => {
-                let queue = state.normalize_entries(entries)?;
-                let selected =
-                    current_entry_id.filter(|id| queue.iter().any(|entry| &entry.id == id));
-                let queue_changed = state.queue != queue;
-                let modes_changed = state.shuffle != shuffle
-                    || state.repeat != repeat
-                    || state.autoplay != autoplay;
-                let sleep_changed = state.sleep != sleep;
-                let current_changed = state.current_entry_id != selected;
-                if queue_changed || modes_changed || sleep_changed || current_changed {
-                    invalidated |= state.bump_policy_generation();
-                }
-                if queue_changed {
-                    state.queue = queue;
-                    events.push(PlaybackSessionEvent::QueueChanged);
-                }
-                state.shuffle = shuffle;
-                state.repeat = repeat;
-                state.autoplay = autoplay;
-                state.playing = playing;
-                state.sleep = sleep;
-                if modes_changed {
-                    events.push(PlaybackSessionEvent::ModesChanged);
-                }
-                if sleep_changed {
-                    events.push(PlaybackSessionEvent::SleepChanged);
-                }
-                if current_changed {
-                    // `sync_legacy` mirrors presentation state before the
-                    // asynchronous decoder load completes. Account departure
-                    // here, but only emit PlayStarted after `legacy_loaded`
-                    // confirms that audio was actually installed.
-                    let requested_playing = state.playing;
-                    state.playing = false;
-                    events.extend(state.set_current(selected, ChangeReason::Sync, false));
-                    state.playing = requested_playing;
-                } else if playing && !state.accounting.play_started {
-                    state.accounting.play_started = true;
-                    if let Some(id) = state.current_entry_id.clone() {
-                        if let Some(entry) = state.entry(&id) {
-                            events.push(PlaybackSessionEvent::Accounting {
-                                kind: AccountingKind::PlayStarted,
-                                entry_id: id,
-                                path: entry.path,
-                                position: state.accounting.position,
-                            });
-                        }
+                let Some(entry) = state.entry(&entry_id) else {
+                    return Err(format!("Queue entry does not exist: {entry_id}"));
+                };
+                invalidated |= state.bump_policy_generation();
+                state.playing = autoplay;
+                if state.current_entry_id.as_deref() == Some(entry_id.as_str()) {
+                    events.extend(state.accounting_events_for_departure(false));
+                    if let Some(started) = state.start_accounting(&entry_id) {
+                        events.push(started);
                     }
+                } else {
+                    events.extend(state.set_current(Some(entry_id), ChangeReason::Select, false));
                 }
                 state.plan_next();
+                effect = Some(PlaybackEffect::Load {
+                    entry,
+                    autoplay,
+                    start_at: start_at.map(|position| position.max(0.0)),
+                });
+            }
+            PlaybackIntent::Enqueue {
+                entries,
+                after_current,
+            } => {
+                let mut additions = state.normalize_entries(entries)?;
+                let mut existing: HashSet<String> =
+                    state.queue.iter().map(|entry| entry.id.clone()).collect();
+                for entry in &mut additions {
+                    if existing.contains(&entry.id) {
+                        loop {
+                            entry.id = state.next_generated_id();
+                            if existing.insert(entry.id.clone()) {
+                                break;
+                            }
+                        }
+                    } else {
+                        existing.insert(entry.id.clone());
+                    }
+                }
+                if !additions.is_empty() {
+                    invalidated |= state.bump_policy_generation();
+                    let index = if after_current {
+                        state
+                            .current_entry_id
+                            .as_deref()
+                            .and_then(|id| state.index_of(id))
+                            .map(|index| index + 1)
+                            .unwrap_or(state.queue.len())
+                    } else {
+                        state.queue.len()
+                    };
+                    state.queue.splice(index..index, additions);
+                    state.plan_next();
+                    events.push(PlaybackSessionEvent::QueueChanged);
+                }
             }
             PlaybackIntent::Next { user_triggered } => {
                 if state.current_entry_id.is_none() || state.queue.is_empty() {
@@ -820,6 +853,21 @@ impl PlaybackSession {
                 }
                 state.plan_next();
             }
+            PlaybackIntent::ClearUpcoming => {
+                let retained = state
+                    .current_entry_id
+                    .as_deref()
+                    .and_then(|id| state.entry(id))
+                    .into_iter()
+                    .collect::<Vec<_>>();
+                if state.queue != retained {
+                    invalidated |= state.bump_policy_generation();
+                    state.queue = retained;
+                    state.history.clear();
+                    state.plan_next();
+                    events.push(PlaybackSessionEvent::QueueChanged);
+                }
+            }
             PlaybackIntent::AppendAutoplay { entry, play_now } => {
                 let mut normalized = state.normalize_entries(vec![entry])?;
                 let entry = normalized.remove(0);
@@ -947,8 +995,8 @@ impl PlaybackSession {
         Ok(state.update(events, effect, invalidated))
     }
 
-    /// Registers the decoder request against the current queue generation.  A
-    /// queue entry id is preferred; path fallback exists only for legacy UI.
+    /// Registers a decoder request only for the exact next entry planned by the
+    /// native session. A caller cannot prepare an arbitrary stale queue item.
     pub(crate) fn begin_prepare(
         &self,
         path: &str,
@@ -959,24 +1007,12 @@ impl PlaybackSession {
             state.prepared = None;
             return None;
         }
-        let id = queue_entry_id
-            .filter(|id| state.entry(id).as_ref().map(|e| e.path.as_str()) == Some(path))
-            .map(str::to_owned)
-            .or_else(|| {
-                state
-                    .next_entry_id
-                    .as_deref()
-                    .and_then(|id| state.entry(id))
-                    .filter(|entry| entry.path == path)
-                    .map(|entry| entry.id)
-            })
-            .or_else(|| {
-                state
-                    .queue
-                    .iter()
-                    .find(|entry| entry.path == path)
-                    .map(|entry| entry.id.clone())
-            })?;
+        let id = state.next_entry_id.clone()?;
+        if queue_entry_id.is_some_and(|requested| requested != id)
+            || state.entry(&id).as_ref().map(|entry| entry.path.as_str()) != Some(path)
+        {
+            return None;
+        }
         let token = PreparedToken {
             entry_id: id,
             path: path.to_string(),
@@ -1021,62 +1057,7 @@ impl PlaybackSession {
         Some(state.update(events, None, true))
     }
 
-    /// Synchronize a successful legacy `player_load` into the native session.
-    pub(crate) fn legacy_loaded(
-        &self,
-        path: &str,
-        queue_entry_id: Option<&str>,
-        autoplay: bool,
-    ) -> PlaybackSessionUpdate {
-        let mut state = self.inner.lock();
-        let id = queue_entry_id
-            .filter(|id| state.entry(id).as_ref().map(|e| e.path.as_str()) == Some(path))
-            .map(str::to_owned)
-            .or_else(|| {
-                state
-                    .queue
-                    .iter()
-                    .find(|entry| entry.path == path)
-                    .map(|entry| entry.id.clone())
-            })
-            .unwrap_or_else(|| {
-                let id = state.next_generated_id();
-                state.queue.push(QueueEntry {
-                    id: id.clone(),
-                    path: path.to_string(),
-                    duration_hint: 0.0,
-                });
-                id
-            });
-        let mut invalidated = state.bump_policy_generation();
-        // A successful load always consumes any old decoder target, even when
-        // there was no fully decoded value yet.
-        invalidated = invalidated || state.prepared.take().is_some();
-        state.playing = autoplay;
-        let mut events = state.set_current(Some(id), ChangeReason::LegacyLoad, false);
-        if autoplay && !state.accounting.play_started {
-            state.accounting.play_started = true;
-            if let Some(entry_id) = state.current_entry_id.clone() {
-                if let Some(entry) = state.entry(&entry_id) {
-                    events.push(PlaybackSessionEvent::Accounting {
-                        kind: AccountingKind::PlayStarted,
-                        entry_id,
-                        path: entry.path,
-                        position: state.accounting.position,
-                    });
-                }
-            }
-        }
-        state.plan_next();
-        if invalidated {
-            events.push(PlaybackSessionEvent::PreparedInvalidated {
-                generation: state.generation,
-            });
-        }
-        state.update(events, None, invalidated)
-    }
-
-    pub(crate) fn set_legacy_transition(
+    pub(crate) fn set_transition(
         &self,
         mode: TransitionMode,
         crossfade_secs: f64,
@@ -1117,6 +1098,8 @@ mod tests {
             id: id.to_string(),
             path: path.to_string(),
             duration_hint: 100.0,
+            track_gain_db: None,
+            track_peak: None,
         }
     }
 
@@ -1126,6 +1109,11 @@ mod tests {
                 entries,
                 start_entry_id: Some(id.to_string()),
                 autoplay: true,
+                start_at: None,
+                shuffle: None,
+                repeat: None,
+                autoplay_mode: None,
+                sleep: None,
             })
             .unwrap();
     }
@@ -1162,7 +1150,7 @@ mod tests {
             vec![entry("a", "a.flac"), entry("b", "b.flac")],
             "a",
         );
-        session.set_legacy_transition(TransitionMode::Gapless, 6.0);
+        session.set_transition(TransitionMode::Gapless, 6.0);
         let token = session.begin_prepare("b.flac", Some("b")).unwrap();
         assert!(session.is_prepare_current(&token));
 
@@ -1184,9 +1172,9 @@ mod tests {
             vec![entry("a", "a.flac"), entry("b", "b.flac")],
             "a",
         );
-        session.set_legacy_transition(TransitionMode::Crossfade, 4.0);
+        session.set_transition(TransitionMode::Crossfade, 4.0);
         let token = session.begin_prepare("b.flac", Some("b")).unwrap();
-        let update = session.set_legacy_transition(TransitionMode::Off, 4.0);
+        let update = session.set_transition(TransitionMode::Off, 4.0);
         assert!(update.prepared_invalidated);
         assert!(!session.is_prepare_current(&token));
         assert!(session.begin_prepare("b.flac", Some("b")).is_none());
@@ -1293,5 +1281,70 @@ mod tests {
                 ..
             }
         )));
+    }
+
+    #[test]
+    fn select_entry_returns_the_only_authorized_load_effect() {
+        let session = PlaybackSession::default();
+        play(
+            &session,
+            vec![entry("a", "a.flac"), entry("b", "b.flac")],
+            "a",
+        );
+        let update = session
+            .apply(PlaybackIntent::SelectEntry {
+                entry_id: "b".to_string(),
+                autoplay: false,
+                start_at: Some(12.5),
+            })
+            .unwrap();
+
+        assert_eq!(update.snapshot.current_entry_id.as_deref(), Some("b"));
+        assert!(!update.snapshot.playing);
+        assert!(matches!(
+            update.effect,
+            Some(PlaybackEffect::Load {
+                entry: QueueEntry { ref id, .. },
+                autoplay: false,
+                start_at: Some(position),
+            }) if id == "b" && (position - 12.5).abs() < f64::EPSILON
+        ));
+    }
+
+    #[test]
+    fn enqueue_and_clear_upcoming_preserve_current_identity() {
+        let session = PlaybackSession::default();
+        play(&session, vec![entry("a", "a.flac")], "a");
+        let queued = session
+            .apply(PlaybackIntent::Enqueue {
+                entries: vec![entry("b", "b.flac"), entry("c", "c.flac")],
+                after_current: true,
+            })
+            .unwrap();
+        assert_eq!(queued.snapshot.next_entry_id.as_deref(), Some("b"));
+        assert_eq!(queued.snapshot.queue.len(), 3);
+
+        let cleared = session.apply(PlaybackIntent::ClearUpcoming).unwrap();
+        assert_eq!(cleared.snapshot.current_entry_id.as_deref(), Some("a"));
+        assert_eq!(cleared.snapshot.queue, vec![entry("a", "a.flac")]);
+        assert!(cleared.snapshot.next_entry_id.is_none());
+    }
+
+    #[test]
+    fn prepare_rejects_any_entry_except_the_native_plan() {
+        let session = PlaybackSession::default();
+        play(
+            &session,
+            vec![
+                entry("a", "a.flac"),
+                entry("b", "b.flac"),
+                entry("c", "c.flac"),
+            ],
+            "a",
+        );
+        session.set_transition(TransitionMode::Gapless, 6.0);
+
+        assert!(session.begin_prepare("c.flac", Some("c")).is_none());
+        assert!(session.begin_prepare("b.flac", Some("b")).is_some());
     }
 }

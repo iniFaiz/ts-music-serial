@@ -101,7 +101,13 @@ fn remove_stale_sidecars(path: &Path) -> Result<(), String> {
 }
 
 fn sync_file(path: &Path) -> Result<(), String> {
-    File::open(path)
+    // FlushFileBuffers requires a write-capable handle on Windows; File::open
+    // creates a read-only handle and fails with ERROR_ACCESS_DENIED even for a
+    // file we own. These are same-directory staging/destination files.
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
         .and_then(|file| file.sync_all())
         .map_err(|error| format!("Failed to flush '{}': {error}", path.display()))
 }
