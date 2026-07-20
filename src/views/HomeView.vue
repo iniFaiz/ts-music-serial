@@ -1,5 +1,5 @@
 <script setup>
-import { computed } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { invokeCommand as invoke } from '../generated/ipc';
 import { useRouter } from 'vue-router';
 import { store } from '../store';
@@ -265,6 +265,27 @@ const goToArtist = (artist, event) => {
   if (art) navigateWithTransition(navigate, art, 'shared-cover', 'to-artist-transition');
   else navigate();
 };
+
+const recentShelfRef = ref(null);
+
+const isCurrentPlayingItem = (item) => {
+  if (!store.currentSong) return false;
+  if (item.kind === 'song' && item.song) {
+    return item.song.path === store.currentSong.path;
+  }
+  return false;
+};
+
+// Smoothly scroll shelf back to start when a new item is added/played
+watch(recentItems, (newItems, oldItems) => {
+  if (newItems && newItems.length && oldItems && oldItems.length) {
+    const getItemKey = (it) =>
+      it.kind + '-' + (it.id || it.key || it.name || (it.song && it.song.path));
+    if (getItemKey(newItems[0]) !== getItemKey(oldItems[0])) {
+      recentShelfRef.value?.scrollToStart();
+    }
+  }
+});
 </script>
 
 <template>
@@ -315,103 +336,133 @@ const goToArtist = (artist, event) => {
 
     <template v-else>
       <!-- Recently Played (mixed songs + playlists/stations/albums) -->
-      <Shelf v-if="recentItems.length" title="Recently Played" to="/collection/recently-played">
-        <div
-          v-for="item in recentItems"
-          :key="
-            item.kind + '-' + (item.id || item.key || item.name || (item.song && item.song.path))
-          "
-          class="rec-card shrink-0 w-40 group cursor-pointer"
-          :data-cover-key="item.kind === 'album' ? item.name : item.id || item.key || undefined"
-          :data-artist-key="item.kind === 'song' ? item.sub : undefined"
-          @click="onRecentClick(item, $event)"
+      <Shelf
+        v-if="recentItems.length"
+        ref="recentShelfRef"
+        title="Recently Played"
+        to="/collection/recently-played"
+      >
+        <TransitionGroup
+          name="recent-card"
+          tag="div"
+          class="flex gap-5 relative py-1"
         >
           <div
-            class="relative w-40 h-40 mb-2.5 shadow-lg group-hover:scale-[1.03] transition-transform duration-200 ease-out"
-            :class="item.kind === 'station' ? 'rounded-full' : 'rounded-xl'"
+            v-for="item in recentItems"
+            :key="
+              item.kind + '-' + (item.id || item.key || item.name || (item.song && item.song.path))
+            "
+            class="rec-card shrink-0 w-40 group cursor-pointer relative"
+            :data-cover-key="item.kind === 'album' ? item.name : item.id || item.key || undefined"
+            :data-artist-key="item.kind === 'song' ? item.sub : undefined"
+            @click="onRecentClick(item, $event)"
           >
-            <!-- Art per kind -->
-            <CoverImage
-              v-if="
-                item.kind === 'song' ||
-                item.kind === 'album' ||
-                (item.kind === 'station' && item.coverPath)
-              "
-              :path="
-                item.kind === 'station'
-                  ? item.coverPath
-                  : item.song
-                    ? item.song.path
-                    : item.coverPath
-              "
-              :class="
-                item.kind === 'station' ? 'w-full h-full !rounded-full' : 'w-full h-full rounded-xl'
-              "
-              className="bg-[#282828]"
-            />
-            <PlaylistCover
-              v-else-if="item.kind === 'playlist' || item.kind === 'smart'"
-              :name="item.title"
-              :cover="item.cover"
-              :size="160"
-              className="w-full h-full rounded-xl bg-[#282828] cover-image"
-            />
-            <SmartCover
-              v-else
-              :title="item.title"
-              :color="item.color || ''"
-              :cover="item.cover"
-              :icon="item.icon || (item.kind === 'station' ? 'radio' : 'bolt')"
-              :show-title="false"
-              :className="
-                (item.kind === 'station'
-                  ? 'w-full h-full rounded-full'
-                  : 'w-full h-full rounded-xl') + ' cover-image'
-              "
-            />
-
-            <!-- Play overlay -->
             <div
-              class="absolute inset-0 bg-black/25 opacity-0 group-hover:opacity-100 transition-opacity flex items-end justify-end p-2.5"
-              :class="item.kind === 'station' ? 'rounded-full' : 'rounded-xl'"
+              class="relative w-40 h-40 mb-2.5 shadow-lg group-hover:scale-[1.03] transition-transform duration-200 ease-out"
+              :class="[
+                item.kind === 'station' ? 'rounded-full' : 'rounded-xl',
+                isCurrentPlayingItem(item) && store.isPlaying
+                  ? 'ring-2 ring-[var(--accent-color)] shadow-[0_0_18px_rgba(250,45,72,0.45)]'
+                  : ''
+              ]"
             >
+              <!-- Art per kind -->
+              <CoverImage
+                v-if="
+                  item.kind === 'song' ||
+                  item.kind === 'album' ||
+                  (item.kind === 'station' && item.coverPath)
+                "
+                :path="
+                  item.kind === 'station'
+                    ? item.coverPath
+                    : item.song
+                      ? item.song.path
+                      : item.coverPath
+                "
+                :class="
+                  item.kind === 'station' ? 'w-full h-full !rounded-full' : 'w-full h-full rounded-xl'
+                "
+                className="bg-[#282828]"
+              />
+              <PlaylistCover
+                v-else-if="item.kind === 'playlist' || item.kind === 'smart'"
+                :name="item.title"
+                :cover="item.cover"
+                :size="160"
+                className="w-full h-full rounded-xl bg-[#282828] cover-image"
+              />
+              <SmartCover
+                v-else
+                :title="item.title"
+                :color="item.color || ''"
+                :cover="item.cover"
+                :icon="item.icon || (item.kind === 'station' ? 'radio' : 'bolt')"
+                :show-title="false"
+                :className="
+                  (item.kind === 'station'
+                    ? 'w-full h-full rounded-full'
+                    : 'w-full h-full rounded-xl') + ' cover-image'
+                "
+              />
+
+              <!-- Active Playing Equalizer Badge -->
               <div
-                @click.stop="onRecentPlay(item)"
-                class="bg-[var(--accent-color)] text-white rounded-full p-2.5 shadow-xl translate-y-2 opacity-0 group-hover:translate-y-0 group-hover:opacity-100 transition-all duration-300 hover:scale-110 hover:bg-red-500"
+                v-if="isCurrentPlayingItem(item) && store.isPlaying"
+                class="absolute top-2 right-2 bg-black/60 backdrop-blur-md rounded-full px-2.5 h-[22px] flex items-end justify-center pb-[3px] gap-[2.5px] border border-white/10 z-10 shadow-lg pointer-events-none"
+                title="Now Playing"
               >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  width="18"
-                  height="18"
-                  viewBox="0 0 24 24"
-                  fill="currentColor"
-                  stroke="none"
+                <span class="eq-bar eq-bar-1 bg-[var(--accent-color)] w-[2.5px] rounded-full"></span>
+                <span class="eq-bar eq-bar-2 bg-[var(--accent-color)] w-[2.5px] rounded-full"></span>
+                <span class="eq-bar eq-bar-3 bg-[var(--accent-color)] w-[2.5px] rounded-full"></span>
+              </div>
+
+              <!-- Play overlay -->
+              <div
+                class="absolute inset-0 bg-black/25 opacity-0 group-hover:opacity-100 transition-opacity flex items-end justify-end p-2.5"
+                :class="item.kind === 'station' ? 'rounded-full' : 'rounded-xl'"
+              >
+                <div
+                  @click.stop="onRecentPlay(item)"
+                  class="bg-[var(--accent-color)] text-white rounded-full p-2.5 shadow-xl translate-y-2 opacity-0 group-hover:translate-y-0 group-hover:opacity-100 transition-all duration-300 hover:scale-110 hover:bg-red-500"
                 >
-                  <polygon points="5 3 19 12 5 21 5 3" />
-                </svg>
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="18"
+                    height="18"
+                    viewBox="0 0 24 24"
+                    fill="currentColor"
+                    stroke="none"
+                  >
+                    <polygon points="5 3 19 12 5 21 5 3" />
+                  </svg>
+                </div>
               </div>
             </div>
-          </div>
-          <div
-            class="text-[13px] font-semibold text-white truncate leading-tight"
-            :class="item.kind === 'station' ? 'text-center' : ''"
-          >
-            {{ item.title }}
-          </div>
-          <div
-            class="text-[12px] text-[var(--text-secondary)] truncate"
-            :class="item.kind === 'station' ? 'text-center' : ''"
-          >
-            <span
-              v-if="item.kind === 'song'"
-              @click.stop="goToArtist(item.sub, $event)"
-              class="hover:text-[var(--accent-color)] hover:underline cursor-pointer transition-colors"
+            <div
+              class="text-[13px] font-semibold text-white truncate leading-tight transition-colors"
+              :class="[
+                item.kind === 'station' ? 'text-center' : '',
+                isCurrentPlayingItem(item) ? 'text-[var(--accent-color)]' : ''
+              ]"
             >
-              {{ item.sub }}
-            </span>
-            <span v-else>{{ item.sub }}</span>
+              {{ item.title }}
+            </div>
+            <div
+              class="text-[12px] text-[var(--text-secondary)] truncate"
+              :class="item.kind === 'station' ? 'text-center' : ''"
+            >
+              <span
+                v-if="item.kind === 'song'"
+                @click.stop="goToArtist(item.sub, $event)"
+                class="hover:text-[var(--accent-color)] hover:underline cursor-pointer transition-colors"
+              >
+                {{ item.sub }}
+              </span>
+              <span v-else>{{ item.sub }}</span>
+            </div>
           </div>
-        </div>
+        </TransitionGroup>
       </Shelf>
 
       <!-- Top Picks (big gradient cards) -->
@@ -667,3 +718,57 @@ const goToArtist = (artist, event) => {
     </template>
   </div>
 </template>
+
+<style scoped>
+.recent-card-move {
+  transition: transform 0.48s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.recent-card-enter-active {
+  transition: all 0.48s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.recent-card-leave-active {
+  position: absolute !important;
+  transition: all 0.38s cubic-bezier(0.16, 1, 0.3, 1);
+  pointer-events: none;
+}
+
+.recent-card-enter-from {
+  opacity: 0;
+  transform: scale(0.78) translateY(-14px) translateX(-18px);
+  filter: blur(4px);
+}
+
+.recent-card-leave-to {
+  opacity: 0;
+  transform: scale(0.78) translateY(14px);
+  filter: blur(4px);
+}
+
+/* Equalizer Bars Animation for Now Playing card */
+.eq-bar {
+  display: inline-block;
+  height: 12px;
+  transform-origin: bottom;
+}
+
+.eq-bar-1 {
+  animation: eq-bounce 0.75s ease-in-out infinite alternate;
+}
+.eq-bar-2 {
+  animation: eq-bounce 0.75s ease-in-out 0.22s infinite alternate;
+}
+.eq-bar-3 {
+  animation: eq-bounce 0.75s ease-in-out 0.44s infinite alternate;
+}
+
+@keyframes eq-bounce {
+  0% {
+    transform: scaleY(0.25);
+  }
+  100% {
+    transform: scaleY(1);
+  }
+}
+</style>

@@ -164,11 +164,16 @@ const bumpVolume = (delta) => {
 
 const openVinylScratchWindow = async () => {
   try {
-    const existing = await WebviewWindow.getByLabel('vinyl-scratch');
+    let existing = null;
+    try {
+      existing = await WebviewWindow.getByLabel('vinyl-scratch');
+    } catch {
+      existing = null;
+    }
     if (existing) {
-      await existing.show();
-      await existing.unminimize();
-      await existing.setFocus();
+      await existing.show().catch(() => {});
+      await existing.unminimize().catch(() => {});
+      await existing.setFocus().catch(() => {});
       return;
     }
 

@@ -38,6 +38,14 @@ const scrollBy = (dir) => {
   el.scrollBy({ left: dir * el.clientWidth * 0.85, behavior: 'smooth' });
 };
 
+const scrollToStart = () => {
+  const el = scroller.value;
+  if (!el) return;
+  el.scrollTo({ left: 0, behavior: 'smooth' });
+};
+
+defineExpose({ scrollToStart, scroller });
+
 let ro = null;
 onMounted(async () => {
   await nextTick();

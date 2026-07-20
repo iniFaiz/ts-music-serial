@@ -244,6 +244,11 @@ export const store = reactive({
       this.statsVersion++;
     }, 1500);
   },
+  bumpStatsImmediate() {
+    if (statsVersionTimer) clearTimeout(statsVersionTimer);
+    statsVersionTimer = null;
+    this.statsVersion++;
+  },
 
   // Reload the small caches the UI reads synchronously: favorite paths (for
   // isFavorite checks), playlist metadata, and recent containers. The heavy
@@ -1419,6 +1424,7 @@ export const store = reactive({
       }
     }
     if (!this.currentSong) return;
+    this.recordPlayStart(this.currentSong.path);
     const autoplay = options.autoplay !== false;
     this.isPlaying = autoplay;
     this.playbackFinished = false;
@@ -1888,6 +1894,7 @@ export const store = reactive({
   recordPlayStart(path) {
     if (!path) return;
     invoke('db_record_play_start', { path }).catch(() => {});
+    this.bumpStatsImmediate();
   },
 
   // Count a completed/substantial listen toward the play count.

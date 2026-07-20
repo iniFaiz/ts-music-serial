@@ -252,7 +252,6 @@ const finishScratch = async (event = null) => {
 
   const pointerId = scratchPointerId;
   scratchPointerId = null;
-  scratchActive.value = false;
   endingScratch = true;
   pendingGrainPosition = null;
   if (grainScheduleTimer) clearTimeout(grainScheduleTimer);
@@ -262,21 +261,25 @@ const finishScratch = async (event = null) => {
     discRef.value.releasePointerCapture(pointerId);
   }
 
-  if (scratchPausePromise) await scratchPausePromise;
-  scratchPausePromise = null;
-  if (grainPromise) await grainPromise.catch(() => {});
-  stopGrainTimer();
-  await invoke('player_pause').catch(() => {});
-  await invoke('player_seek', { position: player.position }).catch(() => {});
+  try {
+    if (scratchPausePromise) await scratchPausePromise;
+    scratchPausePromise = null;
+    if (grainPromise) await grainPromise.catch(() => {});
+    stopGrainTimer();
+    await invoke('player_pause').catch(() => {});
+    await invoke('player_seek', { position: player.position }).catch(() => {});
 
-  if (scratchShouldResume && needleDropped.value) {
-    await invoke('player_resume').catch(() => {});
-    setPlaybackState(true);
-  } else {
-    setPlaybackState(false);
+    if (scratchShouldResume && needleDropped.value) {
+      await invoke('player_resume').catch(() => {});
+      setPlaybackState(true, player.position);
+    } else {
+      setPlaybackState(false, player.position);
+    }
+  } finally {
+    scratchActive.value = false;
+    scratchShouldResume = false;
+    endingScratch = false;
   }
-  scratchShouldResume = false;
-  endingScratch = false;
 };
 
 const tonearmPointerAngle = (event) => {
@@ -321,28 +324,31 @@ const finishTonearmDrag = async (event) => {
   if (!tonearmDragging.value || event.pointerId !== tonearmPointerId) return;
   const pointerId = tonearmPointerId;
   tonearmPointerId = null;
-  tonearmDragging.value = false;
 
   if (event.currentTarget.hasPointerCapture(pointerId)) {
     event.currentTarget.releasePointerCapture(pointerId);
   }
 
-  if (tonearmPausePromise) await tonearmPausePromise;
-  tonearmPausePromise = null;
+  try {
+    if (tonearmPausePromise) await tonearmPausePromise;
+    tonearmPausePromise = null;
 
-  if (hasTrack.value && tonearmAngle.value >= TONEARM_DROP_THRESHOLD) {
-    const landedAngle = clamp(tonearmAngle.value, TONEARM_OUTER_ANGLE, TONEARM_INNER_ANGLE);
-    player.position = tonearmProgressFromAngle(landedAngle) * player.duration;
-    needleDropped.value = true;
-    tonearmAngle.value = landedAngle;
-    await invoke('player_seek', { position: player.position }).catch(() => {});
-    await invoke('player_resume').catch(() => {});
-    setPlaybackState(true);
-  } else {
-    needleDropped.value = false;
-    tonearmAngle.value = TONEARM_REST_ANGLE;
-    await invoke('player_pause').catch(() => {});
-    setPlaybackState(false);
+    if (hasTrack.value && tonearmAngle.value >= TONEARM_DROP_THRESHOLD) {
+      const landedAngle = clamp(tonearmAngle.value, TONEARM_OUTER_ANGLE, TONEARM_INNER_ANGLE);
+      player.position = tonearmProgressFromAngle(landedAngle) * player.duration;
+      needleDropped.value = true;
+      tonearmAngle.value = landedAngle;
+      await invoke('player_seek', { position: player.position }).catch(() => {});
+      await invoke('player_resume').catch(() => {});
+      setPlaybackState(true, player.position);
+    } else {
+      needleDropped.value = false;
+      tonearmAngle.value = TONEARM_REST_ANGLE;
+      await invoke('player_pause').catch(() => {});
+      setPlaybackState(false, 0);
+    }
+  } finally {
+    tonearmDragging.value = false;
   }
 };
 
