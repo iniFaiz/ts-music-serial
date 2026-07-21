@@ -62,6 +62,7 @@ const filteredAndSortedAlbums = computed(() => {
 });
 
 function openAlbum(albumName, event) {
+  if (event && (event.button !== 0 || event.which === 3)) return;
   store.selectedAlbum = albumName;
   const coverEl = event.currentTarget.querySelector('.cover-image');
   navigateWithTransition(
@@ -94,6 +95,128 @@ function goToArtist(artistName, event = null) {
     navigate();
   }
 }
+
+// Context Menu State & Actions
+const menuState = ref({
+  open: false,
+  x: 0,
+  y: 0,
+  album: null,
+});
+
+const openContextMenu = (album, e) => {
+  if (e) {
+    e.preventDefault();
+    e.stopPropagation();
+  }
+  const menuWidth = 224;
+  const menuHeight = 320;
+  let x = e ? e.clientX : 0;
+  let y = e ? e.clientY : 0;
+  if (x + menuWidth > window.innerWidth) {
+    x = window.innerWidth - menuWidth - 10;
+  }
+  if (y + menuHeight > window.innerHeight) {
+    y = window.innerHeight - menuHeight - 10;
+  }
+  menuState.value = {
+    open: true,
+    x: Math.max(10, x),
+    y: Math.max(10, y),
+    album,
+  };
+};
+
+const closeContextMenu = () => {
+  menuState.value.open = false;
+};
+
+const onWindowClick = (e) => {
+  if (!menuState.value.open) return;
+  const menuEl = document.querySelector('.context-menu-container');
+  if (menuEl && menuEl.contains(e.target)) return;
+  closeContextMenu();
+};
+
+import { onMounted, onUnmounted } from 'vue';
+onMounted(() => window.addEventListener('click', onWindowClick));
+onUnmounted(() => window.removeEventListener('click', onWindowClick));
+
+const handleMenuPlayAll = async () => {
+  const album = menuState.value.album;
+  closeContextMenu();
+  if (!album) return;
+  await playAlbum(album.name);
+};
+
+const handleMenuShuffle = async () => {
+  const album = menuState.value.album;
+  closeContextMenu();
+  if (!album) return;
+  const songs = await fetchAlbumTracks(album.name);
+  if (songs.length > 0) {
+    store.recordRecent('album', album.name);
+    store.shuffleMode = true;
+    const r = Math.floor(Math.random() * songs.length);
+    store.playSong(songs[r], songs);
+  }
+};
+
+const handleMenuPlayNext = async () => {
+  const album = menuState.value.album;
+  closeContextMenu();
+  if (!album) return;
+  const songs = await fetchAlbumTracks(album.name);
+  if (songs.length > 0) {
+    store.playNextSongs(songs);
+  }
+};
+
+const handleMenuAddToQueue = async () => {
+  const album = menuState.value.album;
+  closeContextMenu();
+  if (!album) return;
+  const songs = await fetchAlbumTracks(album.name);
+  if (songs.length > 0) {
+    store.addToQueue(songs);
+  }
+};
+
+const handleMenuNewPlaylist = async () => {
+  const album = menuState.value.album;
+  closeContextMenu();
+  if (!album) return;
+  const songs = await fetchAlbumTracks(album.name);
+  const paths = songs.map((s) => s.path);
+  store.openPlaylistModal(paths);
+};
+
+const handleMenuAddToExistingPlaylist = async (playlistId) => {
+  const album = menuState.value.album;
+  closeContextMenu();
+  if (!album) return;
+  const songs = await fetchAlbumTracks(album.name);
+  const paths = songs.map((s) => s.path);
+  store.addToPlaylist(playlistId, paths);
+};
+
+const handleMenuDelete = async () => {
+  const album = menuState.value.album;
+  closeContextMenu();
+  if (!album) return;
+  store.showConfirm({
+    title: 'Delete Album',
+    message: `Are you sure you want to delete all songs from "${album.name}"?`,
+    confirmText: 'Delete',
+    cancelText: 'Cancel',
+    onConfirm: async () => {
+      const songs = await fetchAlbumTracks(album.name);
+      for (const song of songs) {
+        await store.deleteSong(song.path).catch(() => {});
+      }
+    },
+  });
+};
 </script>
 
 <template>
@@ -234,6 +357,8 @@ function goToArtist(artistName, event = null) {
         :data-cover-key="album.name"
         :data-artist-key="album.artist"
         @click="openAlbum(album.name, $event)"
+        @contextmenu.prevent.stop="openContextMenu(album, $event)"
+        @mousedown.right.prevent.stop="openContextMenu(album, $event)"
         class="cursor-pointer group"
       >
         <!-- Album Art -->
@@ -298,6 +423,73 @@ function goToArtist(artistName, event = null) {
       <p class="text-sm font-medium text-white/80">No albums found</p>
       <p class="text-xs text-gray-500 mt-1">Try searching for something else</p>
     </div>
+
+    <!-- Right-click Context Menu -->
+    <Teleport to="body">
+      <div
+        v-if="menuState.open"
+        class="fixed z-[250] w-56 bg-[#282828] border border-[#3a3a3a] rounded-md shadow-2xl py-1 text-sm text-white select-none context-menu-container"
+        :style="{ left: menuState.x + 'px', top: menuState.y + 'px' }"
+        @click.stop
+        @contextmenu.prevent
+      >
+        <button
+          @click="handleMenuPlayAll"
+          class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors"
+        >
+          Play all
+        </button>
+        <button
+          @click="handleMenuShuffle"
+          class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors"
+        >
+          Shuffle
+        </button>
+        <button
+          @click="handleMenuPlayNext"
+          class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors"
+        >
+          Play next
+        </button>
+        <button
+          @click="handleMenuAddToQueue"
+          class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors"
+        >
+          Add to queue
+        </button>
+
+        <div class="border-t border-[#3a3a3a] my-1"></div>
+
+        <div class="px-4 py-1 text-[11px] uppercase tracking-wide text-gray-500 font-medium">
+          Add to playlist
+        </div>
+        <div class="max-h-40 overflow-auto scrollbar-thin">
+          <button
+            v-for="pl in store.normalPlaylists"
+            :key="pl.id"
+            @click="handleMenuAddToExistingPlaylist(pl.id)"
+            class="w-full text-left px-4 py-1.5 hover:bg-[#3a3a3a] transition-colors truncate"
+          >
+            {{ pl.name }}
+          </button>
+        </div>
+        <button
+          @click="handleMenuNewPlaylist"
+          class="w-full text-left px-4 py-2 text-[var(--accent-color)] hover:bg-[#3a3a3a] transition-colors font-medium"
+        >
+          + New playlist
+        </button>
+
+        <div class="border-t border-[#3a3a3a] my-1"></div>
+
+        <button
+          @click="handleMenuDelete"
+          class="w-full text-left px-4 py-2 text-red-500 hover:bg-[#3a3a3a] transition-colors font-medium"
+        >
+          Delete Album
+        </button>
+      </div>
+    </Teleport>
   </div>
 </template>
 
