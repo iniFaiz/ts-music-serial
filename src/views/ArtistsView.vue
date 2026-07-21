@@ -117,6 +117,18 @@ const onWindowClick = (e) => {
   closeContextMenu();
 };
 
+const onBeforeLeave = (el) => {
+  const width = el.offsetWidth;
+  const height = el.offsetHeight;
+  const left = el.offsetLeft;
+  const top = el.offsetTop;
+
+  el.style.width = `${width}px`;
+  el.style.height = `${height}px`;
+  el.style.left = `${left}px`;
+  el.style.top = `${top}px`;
+};
+
 import { onMounted, onUnmounted } from 'vue';
 onMounted(() => window.addEventListener('click', onWindowClick));
 onUnmounted(() => window.removeEventListener('click', onWindowClick));
@@ -328,7 +340,8 @@ const handleMenuDelete = async () => {
       v-else
       name="grid"
       tag="div"
-      class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-x-6 gap-y-10"
+      @before-leave="onBeforeLeave"
+      class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-x-6 gap-y-10 relative"
     >
       <div
         v-for="artist in filteredAndSortedArtists"
@@ -463,22 +476,30 @@ const handleMenuDelete = async () => {
 
 <style scoped>
 .grid-move {
-  transition: transform 0.4s cubic-bezier(0.25, 0.8, 0.25, 1);
+  transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1);
 }
-.grid-enter-active,
+
+.grid-enter-active {
+  transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
 .grid-leave-active {
-  transition:
-    opacity 0.3s cubic-bezier(0.25, 0.8, 0.25, 1),
-    transform 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+  transition: opacity 0.38s cubic-bezier(0.16, 1, 0.3, 1), transform 0.38s cubic-bezier(0.16, 1, 0.3, 1) !important;
+  position: absolute !important;
+  z-index: 0;
+  pointer-events: none;
 }
-.grid-enter-from,
+
+.grid-enter-from {
+  opacity: 0;
+  transform: scale(0.9) translateY(12px);
+}
+
 .grid-leave-to {
   opacity: 0;
-  transform: translateY(12px) scale(0.96);
+  transform: scale(0.85);
 }
-.grid-leave-active {
-  position: absolute;
-}
+
 .animate-fade-in {
   animation: fadeIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }

@@ -10,7 +10,18 @@ defineOptions({ name: 'PlaylistsView' });
 
 const router = useRouter();
 
+const searchQuery = ref('');
 const playlists = computed(() => store.playlists);
+
+const filteredPlaylists = computed(() => {
+  let list = playlists.value || [];
+  const q = searchQuery.value.trim().toLowerCase();
+  if (q) {
+    list = list.filter((pl) => pl.name && pl.name.toLowerCase().includes(q));
+  }
+  return list;
+});
+
 const loading = computed(() => !store.libraryReady);
 // db_playlists returns a live track_count for every row (item count for normal
 // playlists, evaluated-rule count for smart ones).
@@ -197,17 +208,63 @@ onUnmounted(() => {
 
 <template>
   <div class="h-full overflow-auto px-8 pt-8 pb-12">
-    <div class="flex items-center justify-between mb-6">
+    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
       <h1 class="text-3xl font-bold tracking-tight text-white">Playlists</h1>
-      <div class="flex items-center gap-2.5">
+      <div class="flex items-center gap-2.5 flex-wrap">
+        <!-- Search Bar -->
+        <div class="relative flex-1 sm:w-60 sm:flex-none">
+          <span class="absolute text-gray-500 -translate-y-1/2 left-3 top-1/2">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="3"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <circle cx="11" cy="11" r="8"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            </svg>
+          </span>
+          <input
+            v-model="searchQuery"
+            type="text"
+            placeholder="Search playlists..."
+            class="w-full h-[32px] bg-[#2a2a2a] text-xs text-white rounded-md pl-9 pr-8 focus:outline-none focus:ring-1 focus:ring-[var(--accent-color)] placeholder-gray-500"
+          />
+          <button
+            v-if="searchQuery"
+            @click="searchQuery = ''"
+            class="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
+        </div>
+
         <button
           @click="newSmartPlaylist"
-          class="bg-[#2c2c2e] text-white px-5 py-1.5 rounded-[4px] text-xs font-semibold hover:bg-[#3a3a3c] transition flex items-center gap-1.5 shadow-lg"
+          class="h-[32px] bg-[#2c2c2e] text-white px-4 rounded-md text-xs font-semibold hover:bg-[#3a3a3c] transition inline-flex items-center gap-1.5 shadow-lg shrink-0"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"
-            width="13"
-            height="13"
+            width="14"
+            height="14"
             viewBox="0 0 24 24"
             fill="currentColor"
             stroke="none"
@@ -219,7 +276,7 @@ onUnmounted(() => {
         </button>
         <button
           @click="newPlaylist"
-          class="bg-[var(--accent-color)] text-white px-5 py-1.5 rounded-[4px] text-xs font-semibold hover:bg-red-500 transition flex items-center gap-1.5 shadow-lg"
+          class="h-[32px] bg-[var(--accent-color)] text-white px-4 rounded-md text-xs font-semibold hover:bg-red-500 transition inline-flex items-center gap-1.5 shadow-lg shrink-0"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -243,7 +300,7 @@ onUnmounted(() => {
     <LibraryGridSkeleton v-if="loading" label="Loading playlists" />
 
     <TransitionGroup
-      v-else-if="playlists.length > 0"
+      v-else-if="filteredPlaylists.length > 0"
       ref="gridContainer"
       name="plgrid"
       tag="div"
@@ -251,7 +308,7 @@ onUnmounted(() => {
       class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-x-6 gap-y-10 relative"
     >
       <div
-        v-for="(pl, plIdx) in playlists"
+        v-for="(pl, plIdx) in filteredPlaylists"
         :key="pl.id"
         :data-cover-key="pl.id"
         :data-pl-grid-idx="plIdx"
@@ -318,6 +375,11 @@ onUnmounted(() => {
         <p class="text-[13px] text-[var(--text-secondary)] truncate">{{ cardCount(pl) }} songs</p>
       </div>
     </TransitionGroup>
+
+    <div v-else-if="playlists.length > 0 && filteredPlaylists.length === 0" class="p-20 text-center text-gray-600">
+      <div class="text-4xl mb-4 opacity-20">🔍</div>
+      <p>No playlists found matching "{{ searchQuery }}".</p>
+    </div>
 
     <div v-else class="p-20 text-center text-gray-600">
       <div class="text-4xl mb-4 opacity-20">♪</div>
