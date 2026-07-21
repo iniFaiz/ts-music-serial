@@ -88,6 +88,18 @@ const deletePlaylistConfirm = (pl) => {
   });
 };
 
+const onBeforeLeave = (el) => {
+  const width = el.offsetWidth;
+  const height = el.offsetHeight;
+  const left = el.offsetLeft;
+  const top = el.offsetTop;
+
+  el.style.width = `${width}px`;
+  el.style.height = `${height}px`;
+  el.style.left = `${left}px`;
+  el.style.top = `${top}px`;
+};
+
 onMounted(() => {
   window.addEventListener('click', closeContextMenu);
 });
@@ -235,7 +247,8 @@ onUnmounted(() => {
       ref="gridContainer"
       name="plgrid"
       tag="div"
-      class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-x-6 gap-y-10"
+      @before-leave="onBeforeLeave"
+      class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-x-6 gap-y-10 relative"
     >
       <div
         v-for="(pl, plIdx) in playlists"
@@ -361,8 +374,29 @@ onUnmounted(() => {
   border-radius: 8px;
 }
 
-/* FLIP reorder animation for grid cards */
+/* FLIP reorder & enter/leave animations for grid cards */
 .plgrid-move {
-  transition: transform 0.35s cubic-bezier(0.22, 0.61, 0.36, 1);
+  transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.plgrid-enter-active {
+  transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.plgrid-leave-active {
+  transition: opacity 0.38s cubic-bezier(0.16, 1, 0.3, 1), transform 0.38s cubic-bezier(0.16, 1, 0.3, 1) !important;
+  position: absolute !important;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.plgrid-enter-from {
+  opacity: 0;
+  transform: scale(0.9) translateY(12px);
+}
+
+.plgrid-leave-to {
+  opacity: 0;
+  transform: scale(0.85);
 }
 </style>

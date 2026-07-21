@@ -26,6 +26,7 @@ const { data: songs, loading } = useQuery(() => fetchPlaylistTracks(playlistId.v
 
 const suggestedSongs = ref([]);
 const isRefreshingSuggestions = ref(false);
+const isBulkRefreshing = ref(false);
 const addingSongPath = ref(null);
 const recentlyAddedPath = ref(null);
 
@@ -46,7 +47,7 @@ const removePlaylist = () => {
     cancelText: 'Cancel',
     onConfirm: () => {
       store.deletePlaylist(playlist.value.id);
-      router.push('/songs');
+      router.push('/playlists');
     },
   });
 };
@@ -96,6 +97,7 @@ const exportM3u = () => {
 const getSuggestions = async () => {
   if (isRefreshingSuggestions.value) return;
   isRefreshingSuggestions.value = true;
+  isBulkRefreshing.value = true;
   try {
     const currentPaths = new Set((songs.value || []).map((s) => s.path));
     const seen = new Set(currentPaths);
@@ -117,6 +119,9 @@ const getSuggestions = async () => {
     setTimeout(() => {
       isRefreshingSuggestions.value = false;
     }, 400);
+    setTimeout(() => {
+      isBulkRefreshing.value = false;
+    }, 450);
   }
 };
 
@@ -418,6 +423,7 @@ const addAndRemoveFromSuggestions = async (songPath) => {
             name="rec-song"
             tag="div"
             class="space-y-2 relative"
+            :class="{ 'is-bulk-refreshing': isBulkRefreshing }"
           >
             <div
               v-for="song in suggestedSongs"
@@ -523,6 +529,34 @@ const addAndRemoveFromSuggestions = async (songPath) => {
   margin-top: 0px;
   margin-bottom: 0px;
   transform: translateX(24px) scale(0.94);
+}
+
+/* Bulk refresh in-place crossfade mode */
+.is-bulk-refreshing .rec-song-leave-active {
+  position: absolute !important;
+  left: 0;
+  right: 0;
+  width: 100%;
+  max-height: none !important;
+}
+
+.is-bulk-refreshing .rec-song-enter-active {
+  max-height: none !important;
+}
+
+.is-bulk-refreshing .rec-song-enter-from {
+  max-height: none !important;
+  padding-top: 8px !important;
+  padding-bottom: 8px !important;
+  margin-top: 0px !important;
+}
+
+.is-bulk-refreshing .rec-song-leave-to {
+  max-height: none !important;
+  padding-top: 8px !important;
+  padding-bottom: 8px !important;
+  margin-top: 0px !important;
+  transform: translateY(-6px) scale(0.96) !important;
 }
 
 /* Recommended Widget Fade/Scale transition */

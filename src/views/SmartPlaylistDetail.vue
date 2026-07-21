@@ -49,7 +49,7 @@ const removeSmart = () => {
     cancelText: 'Cancel',
     onConfirm: () => {
       store.deleteSmartPlaylist(sp.value.id);
-      router.push('/songs');
+      router.push('/playlists');
     },
   });
 };
