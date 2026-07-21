@@ -43,7 +43,9 @@ const goToArtist = (artist, event) => {
     <div
       v-for="(song, idx) in shown()"
       :key="song.path"
+      :data-song-path="song.path"
       :data-artist-key="song.artist"
+      :data-album-key="song.album"
       class="song-card shrink-0 w-40 group cursor-pointer"
       @click="play(song)"
     >

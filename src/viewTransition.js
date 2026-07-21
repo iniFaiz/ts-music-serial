@@ -55,7 +55,7 @@ export async function navigateWithTransition(
     });
     // Tag the clicked element so we can uniquely find it on back transition
     sourceEl.setAttribute('data-last-clicked', 'true');
-    lastClickedSongPath = sourceEl.closest('.song-row')?.dataset.songPath || null;
+    lastClickedSongPath = sourceEl.closest('.song-row, [data-song-path]')?.dataset.songPath || null;
   } else {
     lastClickedSongPath = null;
   }
@@ -199,7 +199,7 @@ function findCoverByKey(key, kind = 'cover') {
 
 function findCoverBySongPath(path, key, kind) {
   if (!path) return null;
-  const rows = document.querySelectorAll('.song-row[data-song-path]');
+  const rows = document.querySelectorAll('.song-row[data-song-path], [data-song-path]');
   for (const row of rows) {
     if (row.dataset.songPath === path && datasetMatchesKey(row.dataset, key, kind)) {
       return row.querySelector('.cover-image') || row;
@@ -326,12 +326,11 @@ export async function goBackWithTransition(router, name = 'shared-cover') {
     }
   }
 
-  // Returning from an album to its artist's song list must land on the exact
-  // song row that opened the album, even when many rows share that album.
-  const preferredSongPath =
-    from?.name === 'AlbumDetail' && backRoute?.name === 'ArtistDetail'
-      ? lastClickedSongPath
-      : null;
+  // On the Album main page (AlbumDetail), back transitions always morph to/from
+  // the main big album header cover image, instead of targeting an individual song row.
+  // For playlists and other track lists, we retarget to the exact clicked song row.
+  const isTargetingAlbumMainPage = backRoute?.name === 'AlbumDetail';
+  const preferredSongPath = isTargetingAlbumMainPage ? null : lastClickedSongPath;
 
   document.documentElement.classList.add(transitionClass);
   let tagged = null;

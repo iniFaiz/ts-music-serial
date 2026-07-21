@@ -124,6 +124,8 @@ const goToArtist = () => {
       <div
         ref="coverRef"
         :data-artist-key="albumInfo.artist"
+        :data-album-key="albumName"
+        :data-cover-key="albumName"
         class="relative shadow-2xl h-52 w-52 shrink-0 group"
       >
         <CoverImage
