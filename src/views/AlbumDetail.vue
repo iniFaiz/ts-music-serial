@@ -121,7 +121,11 @@ const goToArtist = () => {
     <!-- Header -->
     <div class="p-8 flex gap-8 items-end bg-gradient-to-b from-[#2a2a2a] to-[var(--app-bg)]">
       <!-- Cover -->
-      <div ref="coverRef" class="relative shadow-2xl h-52 w-52 shrink-0 group">
+      <div
+        ref="coverRef"
+        :data-artist-key="albumInfo.artist"
+        class="relative shadow-2xl h-52 w-52 shrink-0 group"
+      >
         <CoverImage
           :path="albumInfo.coverPath"
           className="h-full w-full rounded-md shadow-lg"

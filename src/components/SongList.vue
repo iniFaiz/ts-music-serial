@@ -22,6 +22,9 @@ const props = defineProps({
   // Bumped by the parent only when a *fresh* result set replaces the list
   // (search / sort) — not on scroll-append — to trigger the result crossfade.
   swapSignal: { type: Number, default: 0 },
+  // The Artist Detail page passes its own name so its song rows do not offer a
+  // redundant link back to the artist page that is already open.
+  activeArtist: { type: String, default: '' },
 });
 const emit = defineEmits(['sort-change']);
 
@@ -351,6 +354,16 @@ const navigateToAlbum = (albumName, event = null) => {
   } else {
     navigate();
   }
+};
+
+const isActiveArtist = (artistName) => {
+  const activeArtist = props.activeArtist.trim().toLowerCase();
+  if (!activeArtist || !artistName) return false;
+
+  const artists = String(artistName)
+    .split(/[,;/&]|\bfeat(?:uring)?\b|\bft\b/i)
+    .map((name) => name.trim().toLowerCase());
+  return artists.includes(activeArtist) || String(artistName).trim().toLowerCase() === activeArtist;
 };
 
 // ---- Hover Tooltips ----
@@ -930,8 +943,12 @@ onUnmounted(() => {
           @mouseleave="hideTooltip"
         >
           <span
-            @click.stop="navigateToArtist(song.artist, $event)"
-            class="hover:text-[var(--accent-color)] hover:underline cursor-pointer transition-colors"
+            @click.stop="isActiveArtist(song.artist) ? null : navigateToArtist(song.artist, $event)"
+            :class="
+              isActiveArtist(song.artist)
+                ? 'cursor-default'
+                : 'hover:text-[var(--accent-color)] hover:underline cursor-pointer transition-colors'
+            "
           >
             {{ song.artist }}
           </span>

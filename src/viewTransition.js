@@ -6,6 +6,10 @@ import { nextTick } from 'vue';
 // intent at click time. Card clicks set the key; section "see all" headers set
 // null so those pages just cross-fade (there's no single card to morph from/to).
 let morphCollectionKey = null;
+// A detail page is recreated on back navigation, so its clicked song row is no
+// longer in the DOM. Remember its stable track path long enough to retarget the
+// return morph to that exact row instead of the first row from the same album.
+let lastClickedSongPath = null;
 export function setMorphCollectionKey(key) {
   morphCollectionKey = key;
 }
@@ -51,6 +55,9 @@ export async function navigateWithTransition(
     });
     // Tag the clicked element so we can uniquely find it on back transition
     sourceEl.setAttribute('data-last-clicked', 'true');
+    lastClickedSongPath = sourceEl.closest('.song-row')?.dataset.songPath || null;
+  } else {
+    lastClickedSongPath = null;
   }
 
   if (typeof document === 'undefined' || !document.startViewTransition) {
@@ -190,6 +197,17 @@ function findCoverByKey(key, kind = 'cover') {
   return null;
 }
 
+function findCoverBySongPath(path, key, kind) {
+  if (!path) return null;
+  const rows = document.querySelectorAll('.song-row[data-song-path]');
+  for (const row of rows) {
+    if (row.dataset.songPath === path && datasetMatchesKey(row.dataset, key, kind)) {
+      return row.querySelector('.cover-image') || row;
+    }
+  }
+  return null;
+}
+
 // Song rows are painted with `content-visibility: auto`. During a back
 // navigation the (keep-alive) list has only just been reattached while the View
 // Transition API has rendering paused, so the browser can still consider the
@@ -220,7 +238,7 @@ function forceRowRenderable(el) {
 // carrying elements exist but none match (list rendered, item genuinely absent
 // or virtualized out of the window), give up quickly so a no-morph back doesn't
 // feel sluggish.
-async function waitForMorphTarget(key, kind) {
+async function waitForMorphTarget(key, kind, preferredSongPath = null) {
   const deadline = performance.now() + 400;
   let triesAfterRendered = 2;
   for (;;) {
@@ -231,6 +249,7 @@ async function waitForMorphTarget(key, kind) {
         el = null; // Mismatch, fall back to the generic finder
       }
     }
+    if (!el && preferredSongPath) el = findCoverBySongPath(preferredSongPath, key, kind);
     if (!el) el = findCoverByKey(key, kind);
     if (el) return el;
 
@@ -281,6 +300,7 @@ export async function goBackWithTransition(router, name = 'shared-cover') {
   }
 
   const backPath = window.history.state && window.history.state.back;
+  let backRoute = null;
   // Pick the morph shape from the cover we're leaving first (an artist cover is
   // circular), then fall back to the destination — so artist back-navigation
   // animates the same way no matter where it was opened from.
@@ -289,14 +309,29 @@ export async function goBackWithTransition(router, name = 'shared-cover') {
     transitionClass = 'to-artist-transition';
   } else if (backPath) {
     try {
-      const resolved = router.resolve(backPath);
-      if (resolved && (resolved.name === 'ArtistDetail' || resolved.name === 'ArtistsView')) {
+      backRoute = router.resolve(backPath);
+      if (backRoute && (backRoute.name === 'ArtistDetail' || backRoute.name === 'ArtistsView')) {
         transitionClass = 'to-artist-transition';
       }
     } catch {
       // ignore
     }
   }
+
+  if (!backRoute && backPath) {
+    try {
+      backRoute = router.resolve(backPath);
+    } catch {
+      // ignore
+    }
+  }
+
+  // Returning from an album to its artist's song list must land on the exact
+  // song row that opened the album, even when many rows share that album.
+  const preferredSongPath =
+    from?.name === 'AlbumDetail' && backRoute?.name === 'ArtistDetail'
+      ? lastClickedSongPath
+      : null;
 
   document.documentElement.classList.add(transitionClass);
   let tagged = null;
@@ -315,7 +350,7 @@ export async function goBackWithTransition(router, name = 'shared-cover') {
     });
     await nextTick();
 
-    const el = await waitForMorphTarget(key, kind);
+    const el = await waitForMorphTarget(key, kind, preferredSongPath);
     if (el) {
       tagged = el;
       tagged.dataset._prevVt = el.style.getPropertyValue('view-transition-name') || '';
@@ -338,6 +373,7 @@ export async function goBackWithTransition(router, name = 'shared-cover') {
     }
     releaseName();
     restoreRow();
+    lastClickedSongPath = null;
     document.documentElement.classList.remove(transitionClass);
   }
 }

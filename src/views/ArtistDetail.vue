@@ -107,7 +107,7 @@ const shuffleArtist = () => {
 
     <div class="px-2 py-6">
       <h2 class="px-6 text-xl font-bold text-white mb-4">Popular Songs</h2>
-      <SongList :songs="artistSongs" :loading="loading" />
+      <SongList :songs="artistSongs" :loading="loading" :active-artist="artistName" />
     </div>
   </div>
 </template>

@@ -360,6 +360,7 @@ let unlistenVinylPlayback = null;
 const scrollContainer = ref(null);
 const scrollPositions = new Map();
 const horizontalScrollPositions = new Map();
+let restoreScrollOnBackTo = null;
 
 function firstTracksPage() {
   const params = {
@@ -395,6 +396,15 @@ watch(
 );
 
 router.beforeEach((to, from) => {
+  // On a history back navigation Vue Router has already moved the browser
+  // history entry, whose `forward` route is the page we are leaving. Keep this
+  // intent so detail pages can restore their previous reading position instead
+  // of being treated like a newly opened detail page.
+  const historyState = window.history.state;
+  const isHistoryBack =
+    historyState?.current === to.fullPath && historyState?.forward === from.fullPath;
+  restoreScrollOnBackTo = isHistoryBack ? to.fullPath : null;
+
   if (scrollContainer.value) {
     const container =
       scrollContainer.value.querySelector('.overflow-auto') || scrollContainer.value;
@@ -470,6 +480,9 @@ router.beforeResolve(async (to) => {
 });
 
 router.afterEach((to) => {
+  const shouldRestoreScroll = restoreScrollOnBackTo === to.fullPath;
+  restoreScrollOnBackTo = null;
+
   nextTick(() => {
     if (scrollContainer.value) {
       const container =
@@ -483,7 +496,7 @@ router.afterEach((to) => {
         'SmartPlaylistDetail',
         'CollectionDetail',
       ].includes(to.name);
-      const pos = isDetailPage ? 0 : scrollPositions.get(to.fullPath) || 0;
+      const pos = isDetailPage && !shouldRestoreScroll ? 0 : scrollPositions.get(to.fullPath) || 0;
 
       const originalBehavior = container.style.scrollBehavior;
       container.style.scrollBehavior = 'auto';
