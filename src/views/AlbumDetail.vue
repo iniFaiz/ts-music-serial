@@ -128,7 +128,7 @@ const goToArtist = () => {
       >
         <CoverImage
           :path="albumInfo.coverPath"
-          className="h-full w-full rounded-md shadow-lg"
+          className="h-full w-full rounded-2xl shadow-lg"
           transitionName="shared-cover"
         />
       </div>

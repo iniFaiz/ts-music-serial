@@ -199,7 +199,7 @@ const addAndRemoveFromSuggestions = async (songPath) => {
         :name="playlist.name"
         :cover="playlist.cover"
         :size="208"
-        className="h-52 w-52 rounded-md shadow-2xl"
+        className="h-52 w-52 rounded-2xl shadow-2xl"
         style="view-transition-name: shared-cover"
       />
 

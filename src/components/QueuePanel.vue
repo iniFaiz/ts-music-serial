@@ -128,6 +128,7 @@ const navigateToArtist = (artistName) => {
     <aside
       v-if="store.queuePanelOpen"
       class="absolute top-0 right-0 h-full w-80 bg-[#181818] border-l border-[var(--border-color)] flex flex-col shadow-2xl z-40"
+      style="view-transition-name: queue-panel"
     >
       <!-- Header -->
       <div

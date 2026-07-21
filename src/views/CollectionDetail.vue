@@ -56,7 +56,7 @@ const shuffleAll = () => {
         :color="collection.color"
         :icon="collection.icon"
         :show-title="false"
-        className="h-52 w-52 rounded-md shadow-2xl shrink-0"
+        className="h-52 w-52 rounded-2xl shadow-2xl shrink-0"
         :style="morphable ? 'view-transition-name: shared-cover' : undefined"
       />
 

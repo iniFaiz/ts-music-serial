@@ -270,6 +270,7 @@ function seekToLine(line) {
     <aside
       v-if="store.lyricsPanelOpen"
       class="group absolute top-0 right-0 h-full w-80 bg-[#161616] border-l border-[var(--border-color)] flex flex-col shadow-2xl z-40"
+      style="view-transition-name: lyrics-panel"
     >
       <!-- Romaji toggle: revealed on hover, top-right (Apple Music style) -->
       <button

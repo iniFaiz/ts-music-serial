@@ -143,7 +143,7 @@ onUnmounted(() => {
     <div
       ref="scroller"
       @scroll="updateArrows"
-      class="flex gap-5 overflow-x-auto px-8 pb-2 shelf-row"
+      class="flex gap-5 overflow-x-auto px-8 pt-3 pb-3 -mt-1 shelf-row"
     >
       <slot />
     </div>

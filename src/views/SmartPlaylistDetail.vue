@@ -88,7 +88,7 @@ onUnmounted(() => window.removeEventListener('click', closeMenu));
         :name="sp.name"
         :cover="sp.cover"
         :size="208"
-        className="h-52 w-52 rounded-md shadow-2xl shrink-0"
+        className="h-52 w-52 rounded-2xl shadow-2xl shrink-0"
         style="view-transition-name: shared-cover"
       />
 
