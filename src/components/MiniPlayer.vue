@@ -402,12 +402,21 @@ const isCurrent = (s) =>
 const keyMap = new WeakMap();
 let keySeq = 0;
 const keyFor = (item) => {
+  if (!item) return ++keySeq;
+  if (item.queueId) return item.queueId;
   let k = keyMap.get(item);
   if (k === undefined) {
     k = ++keySeq;
     keyMap.set(item, k);
   }
   return k;
+};
+
+const onQueueLeave = (el) => {
+  const { offsetTop, offsetLeft, offsetWidth } = el;
+  el.style.top = `${offsetTop}px`;
+  el.style.left = `${offsetLeft}px`;
+  el.style.width = `${offsetWidth}px`;
 };
 
 const disableQueueTransition = ref(false);
@@ -815,6 +824,7 @@ onUnmounted(() => {
                 v-else
                 name="queue"
                 :css="!disableQueueTransition"
+                @leave="onQueueLeave"
                 tag="div"
                 class="space-y-1"
               >
@@ -1695,7 +1705,6 @@ onUnmounted(() => {
 .queue-leave-active {
   transition: opacity 0.2s ease;
   position: absolute;
-  width: calc(100% - 1rem);
 }
 .queue-leave-to {
   opacity: 0;

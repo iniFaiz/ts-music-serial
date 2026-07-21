@@ -1464,7 +1464,11 @@ export const store = reactive({
   // Insert right after the current track so it plays next. Clone so the same
   // song queued twice stays a distinct entry (stable, unique key for the UI).
   playNext(song) {
-    const entry = { ...song, queueId: song.queueId || Math.random().toString(36).substring(2, 9) };
+    const queueId =
+      song.queueId && !this.queue.some((e) => e.queueId === song.queueId)
+        ? song.queueId
+        : Math.random().toString(36).substring(2, 9);
+    const entry = { ...song, queueId };
     if (this.queue.length === 0) {
       if (this.currentSong) {
         if (!this.currentSong.queueId) {
@@ -1488,10 +1492,13 @@ export const store = reactive({
   },
 
   playNextSongs(songs) {
-    const list = songs.map((s) => ({
-      ...s,
-      queueId: s.queueId || Math.random().toString(36).substring(2, 9),
-    }));
+    const list = songs.map((s) => {
+      const queueId =
+        s.queueId && !this.queue.some((e) => e.queueId === s.queueId)
+          ? s.queueId
+          : Math.random().toString(36).substring(2, 9);
+      return { ...s, queueId };
+    });
     if (this.queue.length === 0) {
       if (this.currentSong) {
         if (!this.currentSong.queueId) {
@@ -1515,10 +1522,13 @@ export const store = reactive({
   },
 
   addToQueue(songs) {
-    const list = (Array.isArray(songs) ? songs : [songs]).map((s) => ({
-      ...s,
-      queueId: s.queueId || Math.random().toString(36).substring(2, 9),
-    }));
+    const list = (Array.isArray(songs) ? songs : [songs]).map((s) => {
+      const queueId =
+        s.queueId && !this.queue.some((e) => e.queueId === s.queueId)
+          ? s.queueId
+          : Math.random().toString(36).substring(2, 9);
+      return { ...s, queueId };
+    });
     if (this.queue.length === 0 && this.currentSong) {
       if (!this.currentSong.queueId) {
         this.currentSong.queueId = Math.random().toString(36).substring(2, 9);
