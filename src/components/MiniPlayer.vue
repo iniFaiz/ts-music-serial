@@ -14,6 +14,7 @@
 // top window controls and bottom transport stay usable.
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { useWindowDrag } from '../useWindowDrag';
 import { useRouter } from 'vue-router';
 import { store } from '../store';
 import { loadCover, getCachedCover, hasCachedCover } from '../coverCache';
@@ -485,12 +486,7 @@ const expandToFull = () => {
 };
 
 const appWindow = getCurrentWindow();
-
-const startDrag = (e) => {
-  if (e.button !== 0) return;
-  if (e.target.closest('button, a, input, select, textarea, [role="button"]')) return;
-  appWindow.startDragging().catch(() => {});
-};
+const { beginWindowDrag } = useWindowDrag(appWindow);
 
 const closeWindow = () => {
   store.exitMiniPlayer().finally(() => {
@@ -610,7 +606,7 @@ onUnmounted(() => {
       <!-- ============================ TOP CHROME ======================== -->
       <div
         ref="topChromeEl"
-        @mousedown="startDrag"
+        @mousedown="beginWindowDrag"
         class="z-20 flex items-start gap-3 px-3 pt-3 pb-2 shrink-0 transition-opacity duration-300 select-none cursor-default"
         :class="[
           isArtwork

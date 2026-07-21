@@ -754,13 +754,13 @@ watch(recentItems, (newItems, oldItems) => {
 }
 
 .eq-bar-1 {
-  animation: eq-bounce 0.75s ease-in-out infinite alternate;
+  animation: eq-bounce 0.75s ease-in-out 0s infinite alternate both;
 }
 .eq-bar-2 {
-  animation: eq-bounce 0.75s ease-in-out 0.22s infinite alternate;
+  animation: eq-bounce 0.75s ease-in-out 0.22s infinite alternate both;
 }
 .eq-bar-3 {
-  animation: eq-bounce 0.75s ease-in-out 0.44s infinite alternate;
+  animation: eq-bounce 0.75s ease-in-out 0.44s infinite alternate both;
 }
 
 @keyframes eq-bounce {

@@ -3,6 +3,7 @@ import { ref, watch, onMounted, onUnmounted } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { smartBack } from '../viewTransition';
+import { useWindowDrag } from '../useWindowDrag';
 import TsLogo from './TsLogo.vue';
 
 const router = useRouter();
@@ -49,25 +50,14 @@ const goBack = () => {
 const minimize = () => appWindow.minimize().catch(() => {});
 const toggleMaximize = () => appWindow.toggleMaximize().catch(() => {});
 const close = () => appWindow.close().catch(() => {});
-
-const startDrag = (e) => {
-  if (e.button !== 0) return;
-  if (e.target.closest('button, a, input, select, textarea, [role="button"]')) return;
-  appWindow.startDragging().catch(() => {});
-};
-
-const onTitleDblClick = (e) => {
-  if (e.target.closest('button, a, input, select, textarea, [role="button"]')) return;
-  toggleMaximize();
-};
+const { beginWindowDrag } = useWindowDrag(appWindow, { onDoubleClick: toggleMaximize });
 </script>
 
 <template>
   <!-- Custom title bar: draggable, with the brand on the left and the OS window
        controls on the right (the native frame is disabled in tauri.conf.json). -->
   <div
-    @mousedown="startDrag"
-    @dblclick="onTitleDblClick"
+    @mousedown="beginWindowDrag"
     class="h-10 shrink-0 flex items-center justify-between bg-[var(--sidebar-bg)] border-b border-[var(--border-color)] select-none cursor-default"
     style="view-transition-name: title-bar"
   >
