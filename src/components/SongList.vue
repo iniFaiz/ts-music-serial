@@ -25,6 +25,8 @@ const props = defineProps({
   // The Artist Detail page passes its own name so its song rows do not offer a
   // redundant link back to the artist page that is already open.
   activeArtist: { type: String, default: '' },
+  // Path of a newly added track to trigger a smooth highlight animation.
+  highlightPath: { type: String, default: '' },
 });
 const emit = defineEmits(['sort-change']);
 
@@ -873,6 +875,7 @@ onUnmounted(() => {
           'pl-drop-target-below':
             canReorder && plOverIndex === index && plDragIndex !== index && plDragIndex < index,
           'song-row-swap-in': serverSort && animateSwap,
+          'song-row-just-added': highlightPath && song.path === highlightPath,
         }"
       >
         <div class="text-xs text-gray-500 text-center flex justify-center items-center h-full">
@@ -1686,9 +1689,61 @@ onUnmounted(() => {
   color: #4b5563;
 }
 
-/* Playlist song list reorder FLIP animation */
+/* Playlist song list reorder & item add/remove FLIP animations */
 .song-list-move {
-  transition: transform 0.3s cubic-bezier(0.22, 0.61, 0.36, 1);
+  transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.song-list-enter-active {
+  transition: all 0.45s cubic-bezier(0.16, 1, 0.3, 1);
+  overflow: hidden;
+  max-height: 60px;
+}
+
+.song-list-leave-active {
+  transition: all 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+  overflow: hidden;
+  max-height: 60px;
+  pointer-events: none;
+}
+
+.song-list-enter-from {
+  opacity: 0;
+  max-height: 0px;
+  padding-top: 0px;
+  padding-bottom: 0px;
+  margin-top: 0px;
+  margin-bottom: 0px;
+  transform: translateY(-10px) scale(0.98);
+}
+
+.song-list-leave-to {
+  opacity: 0;
+  max-height: 0px;
+  padding-top: 0px;
+  padding-bottom: 0px;
+  margin-top: 0px;
+  margin-bottom: 0px;
+  transform: translateX(-20px) scale(0.95);
+}
+
+/* Highlight effect when a track is newly added */
+@keyframes songRowJustAdded {
+  0% {
+    background-color: color-mix(in srgb, var(--accent-color) 35%, #2a2a2a);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-color) 60%, transparent);
+  }
+  60% {
+    background-color: color-mix(in srgb, var(--accent-color) 15%, #2a2a2a);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: inset 0 0 0 transparent;
+  }
+}
+
+.song-row-just-added {
+  animation: songRowJustAdded 2.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
 /* Search / sort result animation (server-sort lists): rows ease up + fade in when

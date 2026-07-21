@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, onUnmounted } from 'vue';
+import { computed, ref, onMounted, onUnmounted } from 'vue';
 import { store } from '../store';
 import { useRouter } from 'vue-router';
 import PlaylistCover from '../components/PlaylistCover.vue';
@@ -45,6 +45,52 @@ function playPlaylist(id) {
 function newPlaylist() {
   store.openPlaylistModal();
 }
+
+// Context Menu state & handlers
+const menuState = ref({
+  open: false,
+  x: 0,
+  y: 0,
+  playlist: null,
+});
+
+const openContextMenu = (pl, e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  menuState.value = {
+    open: true,
+    x: Math.min(e.clientX, window.innerWidth - 200),
+    y: Math.min(e.clientY, window.innerHeight - 170),
+    playlist: pl,
+  };
+};
+
+const closeContextMenu = () => {
+  menuState.value.open = false;
+};
+
+const deletePlaylistConfirm = (pl) => {
+  closeContextMenu();
+  if (!pl) return;
+  const isSmart = store.isSmart(pl);
+  store.showConfirm({
+    title: isSmart ? 'Delete Smart Playlist' : 'Delete Playlist',
+    message: `Are you sure you want to delete "${pl.name}"? This action cannot be undone.`,
+    confirmText: 'Delete',
+    cancelText: 'Cancel',
+    onConfirm: () => {
+      if (isSmart) {
+        store.deleteSmartPlaylist(pl.id);
+      } else {
+        store.deletePlaylist(pl.id);
+      }
+    },
+  });
+};
+
+onMounted(() => {
+  window.addEventListener('click', closeContextMenu);
+});
 
 // ---- Drag-to-reorder playlists in the grid ----
 const dragIndex = ref(-1);
@@ -129,6 +175,7 @@ const onCardMouseDown = (index, e) => {
 };
 
 onUnmounted(() => {
+  window.removeEventListener('click', closeContextMenu);
   document.removeEventListener('mousemove', onMouseMove);
   document.removeEventListener('mouseup', onMouseUp);
   document.body.style.userSelect = '';
@@ -196,6 +243,7 @@ onUnmounted(() => {
         :data-cover-key="pl.id"
         :data-pl-grid-idx="plIdx"
         @click="openPlaylist(pl, $event)"
+        @contextmenu="openContextMenu(pl, $event)"
         @mousedown="onCardMouseDown(plIdx, $event)"
         class="cursor-pointer group transition-all duration-200"
         :class="{
@@ -262,6 +310,45 @@ onUnmounted(() => {
       <div class="text-4xl mb-4 opacity-20">♪</div>
       <p>No playlists created yet.</p>
       <p class="text-xs mt-2">Click "New Playlist" or "New Smart Playlist" above to get started.</p>
+    </div>
+
+    <!-- Right-click Context Menu -->
+    <div
+      v-if="menuState.open"
+      class="fixed z-[250] w-48 rounded-lg bg-[#282828] border border-[#3a3a3a] py-1.5 shadow-2xl text-xs text-white"
+      :style="{ top: `${menuState.y}px`, left: `${menuState.x}px` }"
+      @click.stop
+    >
+      <button
+        @click="openPlaylist(menuState.playlist, $event); closeContextMenu();"
+        class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors"
+      >
+        Open
+      </button>
+      <button
+        @click="playCard(menuState.playlist); closeContextMenu();"
+        class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors"
+      >
+        Play
+      </button>
+      <button
+        @click="
+          store.isSmart(menuState.playlist)
+            ? store.openSmartModal('edit', menuState.playlist.id)
+            : store.openPlaylistModal(null, 'edit', menuState.playlist.id);
+          closeContextMenu();
+        "
+        class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors"
+      >
+        Edit
+      </button>
+      <div class="border-t border-[#3a3a3a] my-1"></div>
+      <button
+        @click="deletePlaylistConfirm(menuState.playlist)"
+        class="w-full text-left px-4 py-2 text-red-500 hover:bg-[#3a3a3a] transition-colors font-medium"
+      >
+        Delete Playlist
+      </button>
     </div>
   </div>
 </template>

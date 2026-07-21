@@ -40,10 +40,18 @@ const shuffleAll = () => {
 const edit = () => store.openSmartModal('edit', smartId.value);
 
 const removeSmart = () => {
-  if (sp.value) {
-    store.deleteSmartPlaylist(sp.value.id);
-    router.push('/home');
-  }
+  menuOpen.value = false;
+  if (!sp.value) return;
+  store.showConfirm({
+    title: 'Delete Smart Playlist',
+    message: `Are you sure you want to delete smart playlist "${sp.value.name}"? This action cannot be undone.`,
+    confirmText: 'Delete',
+    cancelText: 'Cancel',
+    onConfirm: () => {
+      store.deleteSmartPlaylist(sp.value.id);
+      router.push('/songs');
+    },
+  });
 };
 
 const playNext = () => {
