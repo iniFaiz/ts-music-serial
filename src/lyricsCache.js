@@ -156,3 +156,87 @@ export function clearLyricsCache() {
   cache.clear();
   inflight.clear();
 }
+
+/**
+ * Process raw lyric lines to automatically insert gap placeholders ('• • •')
+ * whenever the time difference between consecutive lyric lines (or intro/outro)
+ * is detected to be greater than 10 seconds (10,000ms), as well as handling
+ * explicit empty lines/notes.
+ */
+export function processLyricLines(rawLines, synced = true, songDurationMs = 0) {
+  if (!rawLines || rawLines.length === 0) return [];
+  if (!synced) return rawLines;
+
+  const GAP_THRESHOLD_MS = 10000; // 10 seconds threshold
+  const result = [];
+
+  // 1. Check if there's an intro gap before the first line (> 6 seconds)
+  if (rawLines[0] && rawLines[0].time_ms > 6000) {
+    result.push({
+      isGap: true,
+      time_ms: 2000,
+      endTimeMs: rawLines[0].time_ms - 1000,
+      text: '• • •',
+    });
+  }
+
+  for (let i = 0; i < rawLines.length; i++) {
+    const currentLine = rawLines[i];
+    const textTrimmed = (currentLine.text || '').trim();
+    const isEmptyOrNote = textTrimmed === '' || textTrimmed === '♪' || textTrimmed === '🎵';
+
+    if (isEmptyOrNote) {
+      const nextLine = rawLines[i + 1];
+      // Skip gap at end of song (no next line)
+      if (!nextLine) continue;
+      const gapStart = currentLine.time_ms;
+      const gapEnd = nextLine.time_ms - 1000;
+      if (gapEnd > gapStart) {
+        result.push({
+          isGap: true,
+          time_ms: gapStart,
+          endTimeMs: gapEnd,
+          text: '• • •',
+        });
+      }
+    } else {
+      result.push(currentLine);
+
+      const nextLine = rawLines[i + 1];
+      if (nextLine && nextLine.time_ms != null && currentLine.time_ms != null) {
+        const nextTextTrimmed = (nextLine.text || '').trim();
+        const nextIsEmptyOrNote =
+          nextTextTrimmed === '' || nextTextTrimmed === '♪' || nextTextTrimmed === '🎵';
+
+        // Only insert auto gap if next line is not an empty line / note (which will turn into a gap in next iteration)
+        if (!nextIsEmptyOrNote) {
+          const gapDuration = nextLine.time_ms - currentLine.time_ms;
+          if (gapDuration > GAP_THRESHOLD_MS) {
+            // Estimate when current line's vocal ends
+            let lineVocalEnd = currentLine.time_ms + 3500;
+            if (currentLine.words && currentLine.words.length > 0) {
+              const lastWord = currentLine.words[currentLine.words.length - 1];
+              if (lastWord.time_ms != null && lastWord.duration_ms != null) {
+                lineVocalEnd = Math.max(lineVocalEnd, lastWord.time_ms + lastWord.duration_ms + 500);
+              }
+            }
+
+            const gapStart = Math.min(lineVocalEnd, nextLine.time_ms - 3000);
+            const gapEnd = nextLine.time_ms - 1000;
+
+            if (gapEnd > gapStart) {
+              result.push({
+                isGap: true,
+                time_ms: gapStart,
+                endTimeMs: gapEnd,
+                text: '• • •',
+              });
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return result;
+}

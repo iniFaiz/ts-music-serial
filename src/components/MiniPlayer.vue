@@ -18,7 +18,7 @@ import { useWindowDrag } from '../useWindowDrag';
 import { useRouter } from 'vue-router';
 import { store } from '../store';
 import { loadCover, getCachedCover, hasCachedCover } from '../coverCache';
-import { loadLyrics, activeLineIndex } from '../lyricsCache';
+import { loadLyrics, activeLineIndex, processLyricLines } from '../lyricsCache';
 import { extractColorsForPath, defaultPalette } from '../colorExtract';
 import LyricContent from './LyricContent.vue';
 import LosslessBadge from './LosslessBadge.vue';
@@ -218,34 +218,7 @@ const hasRomaji = computed(() => !!(lyrics.value && lyrics.value.has_romaji));
 
 const lines = computed(() => {
   const rawLines = (lyrics.value && lyrics.value.lines) || [];
-  if (!synced.value || rawLines.length === 0) return rawLines;
-
-  const result = [];
-  if (rawLines[0] && rawLines[0].time_ms > 6000) {
-    result.push({
-      isGap: true,
-      time_ms: 2000,
-      endTimeMs: rawLines[0].time_ms - 1000,
-      text: '• • •',
-    });
-  }
-  for (let i = 0; i < rawLines.length; i++) {
-    const currentLine = rawLines[i];
-    const t = currentLine.text.trim();
-    const isEmptyOrNote = t === '' || t === '♪' || t === '🎵';
-    if (isEmptyOrNote) {
-      const nextLine = rawLines[i + 1];
-      if (!nextLine) continue;
-      const gapStart = currentLine.time_ms;
-      const gapEnd = nextLine.time_ms - 1000;
-      if (gapEnd > gapStart) {
-        result.push({ isGap: true, time_ms: gapStart, endTimeMs: gapEnd, text: '• • •' });
-      }
-    } else {
-      result.push(currentLine);
-    }
-  }
-  return result;
+  return processLyricLines(rawLines, synced.value, songDurationMs.value);
 });
 
 const currentMs = computed(() => (store.currentTime || 0) * 1000 + 50 + store.lyricsOffsetMs);

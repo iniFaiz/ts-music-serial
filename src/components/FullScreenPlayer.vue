@@ -4,7 +4,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useWindowDrag } from '../useWindowDrag';
 import { store } from '../store';
 import { loadCover, getCachedCover, hasCachedCover } from '../coverCache';
-import { loadLyrics, activeLineIndex } from '../lyricsCache';
+import { loadLyrics, activeLineIndex, processLyricLines } from '../lyricsCache';
 import { useRouter } from 'vue-router';
 import LyricContent from './LyricContent.vue';
 import { extractColorsForPath, defaultPalette } from '../colorExtract';
@@ -122,47 +122,7 @@ const hasRomaji = computed(() => !!(lyrics.value && lyrics.value.has_romaji));
 
 const lines = computed(() => {
   const rawLines = (lyrics.value && lyrics.value.lines) || [];
-  if (!synced.value || rawLines.length === 0) {
-    return rawLines;
-  }
-
-  const result = [];
-
-  // 1. Check if there's an intro gap before the first line
-  if (rawLines[0] && rawLines[0].time_ms > 6000) {
-    result.push({
-      isGap: true,
-      time_ms: 2000,
-      endTimeMs: rawLines[0].time_ms - 1000,
-      text: '• • •',
-    });
-  }
-
-  for (let i = 0; i < rawLines.length; i++) {
-    const currentLine = rawLines[i];
-    const textTrimmed = currentLine.text.trim();
-    const isEmptyOrNote = textTrimmed === '' || textTrimmed === '♪' || textTrimmed === '🎵';
-
-    if (isEmptyOrNote) {
-      const nextLine = rawLines[i + 1];
-      // Skip gap at end of song (no next line)
-      if (!nextLine) continue;
-      const gapStart = currentLine.time_ms;
-      const gapEnd = nextLine.time_ms - 1000;
-      if (gapEnd > gapStart) {
-        result.push({
-          isGap: true,
-          time_ms: gapStart,
-          endTimeMs: gapEnd,
-          text: '• • •',
-        });
-      }
-    } else {
-      result.push(currentLine);
-    }
-  }
-
-  return result;
+  return processLyricLines(rawLines, synced.value, songDurationMs.value);
 });
 
 // +50ms lookahead: compensates for the ~50ms average lag from the 100ms poll interval

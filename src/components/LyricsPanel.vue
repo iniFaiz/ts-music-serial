@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, watch, nextTick, onUnmounted } from 'vue';
 import { store } from '../store';
-import { loadLyrics, activeLineIndex } from '../lyricsCache';
+import { loadLyrics, activeLineIndex, processLyricLines } from '../lyricsCache';
 import LyricContent from './LyricContent.vue';
 
 const lyrics = ref(null);
@@ -55,47 +55,9 @@ const currentTimeMs = computed(
 
 const panelLines = computed(() => {
   const rawLines = (lyrics.value && lyrics.value.lines) || [];
-  if (!lyrics.value || !lyrics.value.synced || rawLines.length === 0) {
-    return rawLines;
-  }
-
-  const result = [];
-
-  // 1. Check if there's an intro gap before the first line
-  if (rawLines[0] && rawLines[0].time_ms > 6000) {
-    result.push({
-      isGap: true,
-      time_ms: 2000,
-      endTimeMs: rawLines[0].time_ms - 1000,
-      text: '• • •',
-    });
-  }
-
-  for (let i = 0; i < rawLines.length; i++) {
-    const currentLine = rawLines[i];
-    const textTrimmed = currentLine.text.trim();
-    const isEmptyOrNote = textTrimmed === '' || textTrimmed === '♪' || textTrimmed === '🎵';
-
-    if (isEmptyOrNote) {
-      const nextLine = rawLines[i + 1];
-      // Skip gap at end of song (no next line)
-      if (!nextLine) continue;
-      const gapStart = currentLine.time_ms;
-      const gapEnd = nextLine.time_ms - 1000;
-      if (gapEnd > gapStart) {
-        result.push({
-          isGap: true,
-          time_ms: gapStart,
-          endTimeMs: gapEnd,
-          text: '• • •',
-        });
-      }
-    } else {
-      result.push(currentLine);
-    }
-  }
-
-  return result;
+  const isSynced = !!(lyrics.value && lyrics.value.synced);
+  const durationMs = (store.duration || 0) * 1000;
+  return processLyricLines(rawLines, isSynced, durationMs);
 });
 
 const hasLyrics = computed(() => {
