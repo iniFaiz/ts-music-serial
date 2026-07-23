@@ -70,6 +70,43 @@ function cacheEntry(cacheKey) {
   return { key, entry };
 }
 
+function isItemEqual(a, b) {
+  if (a === b) return true;
+  if (!a || !b || typeof a !== 'object' || typeof b !== 'object') return a === b;
+  const keysA = Object.keys(a);
+  const keysB = Object.keys(b);
+  if (keysA.length !== keysB.length) return false;
+  for (const k of keysA) {
+    const valA = a[k];
+    const valB = b[k];
+    if (valA === valB) continue;
+    if (Array.isArray(valA) && Array.isArray(valB)) {
+      if (!isEqualData(valA, valB)) return false;
+    } else if (valA && valB && typeof valA === 'object' && typeof valB === 'object') {
+      if (!isItemEqual(valA, valB)) return false;
+    } else {
+      return false;
+    }
+  }
+  return true;
+}
+
+export function isEqualData(a, b) {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  if (Array.isArray(a) && Array.isArray(b)) {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      if (!isItemEqual(a[i], b[i])) return false;
+    }
+    return true;
+  }
+  if (typeof a === 'object' && typeof b === 'object') {
+    return isItemEqual(a, b);
+  }
+  return a === b;
+}
+
 // Return the last successful value even if a newer library version exists. A
 // stale value is useful as an instant placeholder while it refreshes silently.
 export function getCachedQuery(cacheKey) {
@@ -102,7 +139,9 @@ export function prefetchQuery(
       // A newer refresh may have started while this request was running. Only
       // the newest request is allowed to replace the cache entry.
       if (entry.promise === promise) {
-        entry.data = result;
+        if (!isEqualData(entry.data, result)) {
+          entry.data = result;
+        }
         entry.error = null;
         entry.hasResolved = true;
         entry.version = wantedVersion;
@@ -168,7 +207,9 @@ export function useQuery(
       hasResolved = cached !== undefined;
       data.value = hasResolved ? cached : initial;
     } else if (cached !== undefined) {
-      data.value = cached;
+      if (!isEqualData(data.value, cached)) {
+        data.value = cached;
+      }
       hasResolved = true;
     }
 
@@ -185,7 +226,9 @@ export function useQuery(
           })
         : await fetcher();
       if (mine === token) {
-        data.value = result;
+        if (!isEqualData(data.value, result)) {
+          data.value = result;
+        }
         hasResolved = true;
       }
     } catch (e) {

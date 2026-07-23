@@ -52,6 +52,24 @@ export function getCachedCover(path) {
   return cache.get(path) ?? null;
 }
 
+export async function prewarmCovers(paths, awaitCount = 0) {
+  if (!Array.isArray(paths)) return;
+  const promises = [];
+  const limit = Math.min(paths.length, 120);
+  for (let i = 0; i < limit; i++) {
+    const p = paths[i];
+    if (p && !cache.has(p)) {
+      const promise = loadCover(p).catch(() => {});
+      if (i < awaitCount) {
+        promises.push(promise);
+      }
+    }
+  }
+  if (promises.length > 0) {
+    await Promise.all(promises);
+  }
+}
+
 export async function loadCover(path) {
   if (!path) return null;
   if (cache.has(path)) {

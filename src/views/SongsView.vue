@@ -39,6 +39,10 @@ watch(
 // Bumped on every reset so a slow in-flight request from a previous query can't
 // clobber the results of a newer one.
 let reqToken = 0;
+let initialLoadDone = false;
+let prevSearch = search.value;
+let prevSortBy = sortBy.value;
+let prevOrder = order.value;
 
 async function loadPage(reset = false) {
   if (!store.libraryReady) {
@@ -83,7 +87,16 @@ async function loadPage(reset = false) {
     songs.value = reset ? page.tracks : songs.value.concat(page.tracks);
     offset.value = songs.value.length;
     if (reset) {
-      swapSignal.value += 1; // signal SongList to crossfade the new results
+      const searchOrSortChanged =
+        search.value !== prevSearch || sortBy.value !== prevSortBy || order.value !== prevOrder;
+      prevSearch = search.value;
+      prevSortBy = sortBy.value;
+      prevOrder = order.value;
+
+      if (initialLoadDone && searchOrSortChanged) {
+        swapSignal.value += 1; // signal SongList to crossfade the new results
+      }
+      initialLoadDone = true;
       if (scrollEl.value) scrollEl.value.scrollTop = 0;
     }
   } catch (e) {

@@ -508,15 +508,15 @@ const handleMenuDelete = async () => {
 
 <style scoped>
 .grid-move {
-  transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .grid-enter-active {
-  transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: opacity 0.25s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .grid-leave-active {
-  transition: opacity 0.38s cubic-bezier(0.16, 1, 0.3, 1), transform 0.38s cubic-bezier(0.16, 1, 0.3, 1) !important;
+  transition: opacity 0.25s cubic-bezier(0.16, 1, 0.3, 1) !important;
   position: absolute !important;
   z-index: 0;
   pointer-events: none;
@@ -524,12 +524,10 @@ const handleMenuDelete = async () => {
 
 .grid-enter-from {
   opacity: 0;
-  transform: scale(0.9) translateY(12px);
 }
 
 .grid-leave-to {
   opacity: 0;
-  transform: scale(0.85);
 }
 
 .animate-fade-in {

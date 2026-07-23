@@ -390,7 +390,6 @@ export const store = reactive({
       await Promise.all([this.refreshFavorites(), this.refreshPlaylists(), this.refreshRecents()]);
       this.refreshMusixmatchStatus();
       this.libraryReady = true;
-      this.bumpLibrary();
       await this.restoreState();
       // If the app was launched by double-clicking an audio file, play it now —
       // after restoreState so it overrides the restored (paused) session.
