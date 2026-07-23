@@ -10,11 +10,62 @@ let morphCollectionKey = null;
 // longer in the DOM. Remember its stable track path long enough to retarget the
 // return morph to that exact row instead of the first row from the same album.
 let lastClickedSongPath = null;
+const MORPH_RADIUS_FROM = '--shared-cover-radius-from';
+const MORPH_RADIUS_TO = '--shared-cover-radius-to';
+
 export function setMorphCollectionKey(key) {
   morphCollectionKey = key;
 }
 export function getMorphCollectionKey() {
   return morphCollectionKey;
+}
+
+// Read the real corner shape from both matched covers. A fixed transition
+// radius makes a 16px detail cover snap to the 6px grid card or 4px song cover
+// only after the transition overlay disappears.
+function readCornerRadius(el) {
+  if (!el || typeof getComputedStyle !== 'function') return '';
+  const style = getComputedStyle(el);
+  return style.borderTopLeftRadius || style.borderRadius || '';
+}
+
+function findTransitionElement(name, exclude = null) {
+  if (typeof document === 'undefined') return null;
+  const nodes = document.querySelectorAll('[style*="view-transition-name"]');
+  for (const node of nodes) {
+    if (node === exclude) continue;
+    if ((node.style.getPropertyValue('view-transition-name') || '').trim() === name) {
+      return node;
+    }
+  }
+  return null;
+}
+
+function trackMorphRadii(sourceEl) {
+  const rootStyle = document.documentElement.style;
+  const previousFrom = rootStyle.getPropertyValue(MORPH_RADIUS_FROM);
+  const previousTo = rootStyle.getPropertyValue(MORPH_RADIUS_TO);
+  const sourceRadius = readCornerRadius(sourceEl);
+  if (sourceRadius) rootStyle.setProperty(MORPH_RADIUS_FROM, sourceRadius);
+
+  return {
+    setTarget(targetEl) {
+      const targetRadius = readCornerRadius(targetEl);
+      if (targetRadius) rootStyle.setProperty(MORPH_RADIUS_TO, targetRadius);
+    },
+    restore() {
+      if (previousFrom) {
+        rootStyle.setProperty(MORPH_RADIUS_FROM, previousFrom);
+      } else {
+        rootStyle.removeProperty(MORPH_RADIUS_FROM);
+      }
+      if (previousTo) {
+        rootStyle.setProperty(MORPH_RADIUS_TO, previousTo);
+      } else {
+        rootStyle.removeProperty(MORPH_RADIUS_TO);
+      }
+    },
+  };
 }
 
 // A plain cross-fade route change (no shared-element morph). Used by section
@@ -79,6 +130,7 @@ export async function navigateWithTransition(
   }
 
   document.documentElement.classList.add(transitionClass);
+  const radiusTracker = trackMorphRadii(sourceEl);
   const prev = sourceEl.style.getPropertyValue('view-transition-name') || '';
   sourceEl.style.setProperty('view-transition-name', name);
 
@@ -113,6 +165,7 @@ export async function navigateWithTransition(
       // Wait for Vue to flush the new page into the DOM before the API snapshots
       // the destination state.
       await nextTick();
+      radiusTracker.setTarget(findTransitionElement(name, sourceEl));
     });
     await transition.finished;
   } finally {
@@ -134,6 +187,7 @@ export async function navigateWithTransition(
         item.el.style.setProperty('view-transition-name', item.prevName);
       }
     }
+    radiusTracker.restore();
     document.documentElement.classList.remove(transitionClass);
   }
 }
@@ -333,6 +387,7 @@ export async function goBackWithTransition(router, name = 'shared-cover') {
   const preferredSongPath = isTargetingAlbumMainPage ? null : lastClickedSongPath;
 
   document.documentElement.classList.add(transitionClass);
+  const radiusTracker = trackMorphRadii(findTransitionElement(name));
   let tagged = null;
   let restoreRow = () => {};
   let releaseName = () => {};
@@ -356,6 +411,7 @@ export async function goBackWithTransition(router, name = 'shared-cover') {
       el.style.setProperty('view-transition-name', name);
       releaseName = claimSharedName(el, name);
       restoreRow = forceRowRenderable(el);
+      radiusTracker.setTarget(el);
     }
   });
 
@@ -372,6 +428,7 @@ export async function goBackWithTransition(router, name = 'shared-cover') {
     }
     releaseName();
     restoreRow();
+    radiusTracker.restore();
     lastClickedSongPath = null;
     document.documentElement.classList.remove(transitionClass);
   }
@@ -453,6 +510,7 @@ export async function goForwardWithTransition(router, name = 'shared-cover') {
     releaseName = claimSharedName(tagged, name);
     restoreRow = forceRowRenderable(tagged);
   }
+  const radiusTracker = trackMorphRadii(tagged);
 
   const transition = document.startViewTransition(async () => {
     await new Promise((resolve) => {
@@ -464,6 +522,7 @@ export async function goForwardWithTransition(router, name = 'shared-cover') {
       setTimeout(resolve, 500);
     });
     await nextTick();
+    radiusTracker.setTarget(findTransitionElement(name, tagged));
   });
 
   try {
@@ -478,6 +537,7 @@ export async function goForwardWithTransition(router, name = 'shared-cover') {
     }
     releaseName();
     restoreRow();
+    radiusTracker.restore();
     document.documentElement.classList.remove(transitionClass);
   }
 }

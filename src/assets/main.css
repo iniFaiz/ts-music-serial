@@ -58,8 +58,6 @@ body {
 ::view-transition-group(shared-cover) {
   animation-duration: 0.42s;
   animation-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
-  overflow: hidden;
-  border-radius: 16px;
   z-index: 10 !important;
 }
 
@@ -87,22 +85,16 @@ body {
   z-index: 999 !important;
 }
 
-/* Custom keyframes for border-radius morphing */
-@keyframes morph-to-circle {
+/* Interpolate the actual source and destination corners. These values are read
+   from the matched DOM covers before every shared-cover transition. */
+@keyframes morph-shared-radius {
   from {
-    border-radius: 16px;
+    border-radius: var(--shared-cover-radius-from);
+    clip-path: inset(0 round var(--shared-cover-radius-from));
   }
   to {
-    border-radius: 50%;
-  }
-}
-
-@keyframes morph-to-rounded {
-  from {
-    border-radius: 50%;
-  }
-  to {
-    border-radius: 16px;
+    border-radius: var(--shared-cover-radius-to);
+    clip-path: inset(0 round var(--shared-cover-radius-to));
   }
 }
 
@@ -124,39 +116,46 @@ body {
   }
 }
 
-/* Custom View Transitions for morphing shape (square to circle or rounded) */
-.to-artist-transition ::view-transition-group(shared-cover),
+/* Keep the existing morph timing, easing and cross-fade. The class values are
+   fallbacks; JavaScript replaces them with the covers' exact computed radii. */
+.to-artist-transition {
+  --shared-cover-radius-from: 16px;
+  --shared-cover-radius-to: 50%;
+}
+
+.to-album-transition {
+  --shared-cover-radius-from: 50%;
+  --shared-cover-radius-to: 16px;
+}
+
 .to-artist-transition ::view-transition-old(shared-cover),
 .to-artist-transition ::view-transition-new(shared-cover) {
-  border-radius: 50% !important;
   overflow: hidden !important;
 }
 
 .to-artist-transition ::view-transition-old(shared-cover) {
   animation:
     fade-out-vt 0.42s both,
-    morph-to-circle 0.42s cubic-bezier(0.32, 0.72, 0, 1) both;
+    morph-shared-radius 0.42s cubic-bezier(0.32, 0.72, 0, 1) both;
 }
 .to-artist-transition ::view-transition-new(shared-cover) {
   animation:
     fade-in-vt 0.42s both,
-    morph-to-circle 0.42s cubic-bezier(0.32, 0.72, 0, 1) both;
+    morph-shared-radius 0.42s cubic-bezier(0.32, 0.72, 0, 1) both;
 }
 
-.to-album-transition ::view-transition-group(shared-cover),
 .to-album-transition ::view-transition-old(shared-cover),
 .to-album-transition ::view-transition-new(shared-cover) {
-  border-radius: 16px !important;
   overflow: hidden !important;
 }
 
 .to-album-transition ::view-transition-old(shared-cover) {
   animation:
     fade-out-vt 0.42s both,
-    morph-to-rounded 0.42s cubic-bezier(0.32, 0.72, 0, 1) both;
+    morph-shared-radius 0.42s cubic-bezier(0.32, 0.72, 0, 1) both;
 }
 .to-album-transition ::view-transition-new(shared-cover) {
   animation:
     fade-in-vt 0.42s both,
-    morph-to-rounded 0.42s cubic-bezier(0.32, 0.72, 0, 1) both;
+    morph-shared-radius 0.42s cubic-bezier(0.32, 0.72, 0, 1) both;
 }
