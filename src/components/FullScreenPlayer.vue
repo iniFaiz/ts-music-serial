@@ -1,6 +1,5 @@
 <script setup>
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useWindowDrag } from '../useWindowDrag';
 import { store } from '../store';
 import { loadCover, getCachedCover, hasCachedCover } from '../coverCache';
@@ -306,8 +305,7 @@ watch(
   { immediate: true }
 );
 
-const appWindow = getCurrentWindow();
-const { beginWindowDrag } = useWindowDrag(appWindow);
+const { beginWindowDrag } = useWindowDrag();
 
 const close = () => {
   store.exitFullscreenWithTransition();

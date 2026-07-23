@@ -1,13 +1,16 @@
 import { onUnmounted } from 'vue';
+import { invokeCommand as invoke } from './generated/ipc';
 
 const INTERACTIVE_SELECTOR = 'button, a, input, select, textarea, [role="button"]';
-const DRAG_THRESHOLD_PX = 3;
+// One pixel filters a stationary click without adding a noticeable drag dead-zone.
+const DRAG_THRESHOLD_PX = 1;
 
-// Calling Tauri's startDragging for every mousedown can race a quick mouseup on
-// Windows. If the native command lands after the button is released, Windows can
-// keep the move loop alive until the next click. Begin the native move only once
-// the user has actually moved the pointer with the primary button held down.
-export const useWindowDrag = (appWindow, { onDoubleClick } = {}) => {
+// Starting a native drag is asynchronous from the webview's point of view. The
+// backend command performs the final physical-button check on Windows so a
+// delayed IPC request cannot enter the native move loop after mouseup.
+const startNativeWindowDrag = () => invoke('start_window_drag');
+
+export const useWindowDrag = ({ onDoubleClick, startDragging = startNativeWindowDrag } = {}) => {
   let removePendingListeners = () => {};
 
   const cancelPendingDrag = () => {
@@ -18,11 +21,11 @@ export const useWindowDrag = (appWindow, { onDoubleClick } = {}) => {
     if (event.button !== 0 || event.buttons !== 1) return;
     if (event.target.closest(INTERACTIVE_SELECTOR)) return;
 
-    // `mousedown.detail` is already 2 on the second press. Handling it here
-    // avoids beginning a drag before the separate dblclick event is delivered.
-    if (event.detail === 2) {
+    // `mousedown.detail` is already 2 on the second press and keeps increasing
+    // for rapid subsequent clicks. None of those presses should begin a drag.
+    if (event.detail > 1) {
       cancelPendingDrag();
-      onDoubleClick?.();
+      if (event.detail === 2) onDoubleClick?.();
       return;
     }
 
@@ -53,7 +56,7 @@ export const useWindowDrag = (appWindow, { onDoubleClick } = {}) => {
       }
 
       removeListeners();
-      appWindow.startDragging().catch(() => {});
+      startDragging().catch(() => {});
     };
 
     removePendingListeners = removeListeners;

@@ -99,6 +99,7 @@ export const COMMAND_NAMES = [
   'set_wasapi_exclusive',
   'smtc_set_metadata',
   'smtc_set_playback',
+  'start_window_drag',
   'take_pending_open_files',
   'watch_roots',
   'write_track_tags',
@@ -203,6 +204,7 @@ export interface CommandArgs {
   'set_wasapi_exclusive': { enabled: boolean };
   'smtc_set_metadata': { title: string; artist: string; album: string; duration: number; path: string };
   'smtc_set_playback': { playing: boolean; position: number };
+  'start_window_drag': undefined;
   'take_pending_open_files': undefined;
   'watch_roots': undefined;
   'write_track_tags': { path: string; edits: unknown /* Rust: TagEdits */; coverPath?: string | null; removeCover: boolean };
@@ -305,6 +307,7 @@ export interface CommandResult {
   'set_wasapi_exclusive': void;
   'smtc_set_metadata': void;
   'smtc_set_playback': void;
+  'start_window_drag': boolean;
   'take_pending_open_files': string[];
   'watch_roots': void;
   'write_track_tags': unknown /* Rust: MusicTrack */;
@@ -414,6 +417,7 @@ export const ipc = {
   setWasapiExclusive: (args: CommandArgs['set_wasapi_exclusive']) => invokeCommand('set_wasapi_exclusive', args),
   smtcSetMetadata: (args: CommandArgs['smtc_set_metadata']) => invokeCommand('smtc_set_metadata', args),
   smtcSetPlayback: (args: CommandArgs['smtc_set_playback']) => invokeCommand('smtc_set_playback', args),
+  startWindowDrag: () => invokeCommand('start_window_drag', undefined),
   takePendingOpenFiles: () => invokeCommand('take_pending_open_files', undefined),
   watchRoots: () => invokeCommand('watch_roots', undefined),
   writeTrackTags: (args: CommandArgs['write_track_tags']) => invokeCommand('write_track_tags', args),

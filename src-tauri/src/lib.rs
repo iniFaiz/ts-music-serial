@@ -30,6 +30,7 @@ mod playlist_io;
 mod thumbbar;
 mod tray;
 mod waveform;
+mod window_drag;
 
 #[cfg(test)]
 mod ipc_contract_tests;
@@ -798,6 +799,7 @@ pub fn run() {
             get_track_palette,
             get_waveform,
             restore_roots,
+            window_drag::start_window_drag,
             player_prepare_next,
             player_pause,
             player_resume,

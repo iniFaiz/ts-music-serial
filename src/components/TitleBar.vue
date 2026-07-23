@@ -50,7 +50,7 @@ const goBack = () => {
 const minimize = () => appWindow.minimize().catch(() => {});
 const toggleMaximize = () => appWindow.toggleMaximize().catch(() => {});
 const close = () => appWindow.close().catch(() => {});
-const { beginWindowDrag } = useWindowDrag(appWindow, { onDoubleClick: toggleMaximize });
+const { beginWindowDrag } = useWindowDrag({ onDoubleClick: toggleMaximize });
 </script>
 
 <template>

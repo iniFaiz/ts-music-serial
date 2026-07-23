@@ -468,7 +468,7 @@ const expandToFull = () => {
 };
 
 const appWindow = getCurrentWindow();
-const { beginWindowDrag } = useWindowDrag(appWindow);
+const { beginWindowDrag } = useWindowDrag();
 
 const closeWindow = () => {
   store.exitMiniPlayer().finally(() => {

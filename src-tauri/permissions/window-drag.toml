@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "window-drag"
+description = "Start a native window drag after validating the physical mouse-button state."
+commands.allow = ["start_window_drag"]
