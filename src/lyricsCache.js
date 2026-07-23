@@ -163,7 +163,7 @@ export function clearLyricsCache() {
  * is detected to be greater than 10 seconds (10,000ms), as well as handling
  * explicit empty lines/notes.
  */
-export function processLyricLines(rawLines, synced = true, songDurationMs = 0) {
+export function processLyricLines(rawLines, synced = true, _songDurationMs = 0) {
   if (!rawLines || rawLines.length === 0) return [];
   if (!synced) return rawLines;
 

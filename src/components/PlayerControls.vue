@@ -639,15 +639,15 @@ const formatTime = (seconds) => {
               <button
                 ref="playerCoverRef"
                 @click="openFullScreen()"
-                class="shrink-0 rounded overflow-hidden relative group focus:outline-none"
+                class="shrink-0 rounded-md overflow-hidden relative group focus:outline-none transition-all duration-300 ease-out hover:scale-105 active:scale-95 hover:shadow-lg hover:shadow-black/60 hover:ring-1 hover:ring-white/30 cursor-pointer"
                 title="Open full screen (Ctrl+Shift+F)"
               >
                 <CoverImage
                   :path="store.currentSong.path"
-                  className="h-8 w-8 md:h-10 md:w-10 rounded shadow-sm bg-[#333]"
+                  className="h-8 w-8 md:h-10 md:w-10 rounded-md shadow-sm bg-[#333] transition-transform duration-300 ease-out group-hover:scale-110"
                 />
                 <div
-                  class="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none"
+                  class="absolute inset-0 bg-black/50 backdrop-blur-[1px] flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all duration-300 ease-out pointer-events-none"
                 >
                   <svg
                     xmlns="http://www.w3.org/2000/svg"
@@ -659,7 +659,7 @@ const formatTime = (seconds) => {
                     stroke-width="2.5"
                     stroke-linecap="round"
                     stroke-linejoin="round"
-                    class="text-white"
+                    class="text-white transform scale-75 group-hover:scale-100 transition-all duration-300 ease-out drop-shadow"
                   >
                     <polyline points="15 3 21 3 21 9" />
                     <polyline points="9 21 3 21 3 15" />
@@ -918,6 +918,31 @@ const formatTime = (seconds) => {
               />
             </svg>
           </span>
+        </button>
+
+        <!-- Fullscreen toggle -->
+        <button
+          v-if="store.currentSong"
+          @click="openFullScreen()"
+          class="transition text-gray-400 hover:text-white hover:scale-110 active:scale-95 shrink-0 cursor-pointer hidden xs:flex items-center justify-center"
+          title="Open full screen (Ctrl+Shift+F)"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="17"
+            height="17"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <polyline points="15 3 21 3 21 9"></polyline>
+            <polyline points="9 21 3 21 3 15"></polyline>
+            <line x1="21" y1="3" x2="14" y2="10"></line>
+            <line x1="3" y1="21" x2="10" y2="14"></line>
+          </svg>
         </button>
         <button
           @click="store.toggleMute()"

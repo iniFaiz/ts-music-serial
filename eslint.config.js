@@ -23,6 +23,7 @@ export default [
       // Single-word view/component names (SongsView, etc.) are intentional here.
       'vue/multi-word-component-names': 'off',
       'no-empty': ['error', { allowEmptyCatch: true }],
+      'no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
     },
   },
 ];
