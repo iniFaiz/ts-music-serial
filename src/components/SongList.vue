@@ -888,7 +888,7 @@ onUnmounted(() => {
           />
           <span
             v-else-if="isCurrentSong(song) && store.isPlaying"
-            class="text-[var(--accent-color)] animate-pulse"
+            class="text-[var(--accent-color)]"
           >
             <svg
               xmlns="http://www.w3.org/2000/svg"

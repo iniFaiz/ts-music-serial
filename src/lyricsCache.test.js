@@ -9,7 +9,7 @@ vi.mock('./store', async () => {
   };
 });
 
-import { processLyricLines } from './lyricsCache';
+import { processLyricLines, activeLineIndex } from './lyricsCache';
 
 describe('processLyricLines', () => {
   it('returns raw lines as-is when not synced or empty', () => {
@@ -64,5 +64,18 @@ describe('processLyricLines', () => {
     const res = processLyricLines(raw, true, 30000);
     expect(res).toHaveLength(1);
     expect(res[0].text).toBe('Last line');
+  });
+});
+
+describe('activeLineIndex', () => {
+  it('turns off (-1) after the last plain lyric line finishes', () => {
+    const lines = [
+      { time_ms: 10000, text: 'Line 1' },
+      { time_ms: 15000, text: 'Line 2' },
+      { time_ms: 20000, text: 'Last line' },
+    ];
+    // avg duration = 5000ms. Last line starts at 20000ms -> ends around 20000 + 5000 + 1500 = 26500ms
+    expect(activeLineIndex(lines, 21000, 60000)).toBe(2);
+    expect(activeLineIndex(lines, 27000, 60000)).toBe(-1);
   });
 });
