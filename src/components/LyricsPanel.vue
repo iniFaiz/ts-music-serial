@@ -140,10 +140,32 @@ function scrollToLine(idx) {
   if (!el) return;
 
   const containerH = container.clientHeight;
-  const elTop = el.offsetTop;
-  const elH = el.offsetHeight;
+  const currentLine = panelLines.value[idx];
+
+  let targetTop = el.offsetTop;
+  let targetH = el.offsetHeight;
+
+  if (currentLine && currentLine.isGap) {
+    const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+    targetH = 2.2 * rem;
+  } else if (idx > 0) {
+    for (let k = 0; k < idx; k++) {
+      if (panelLines.value[k] && panelLines.value[k].isGap) {
+        const gapEl = container.querySelector(`[data-line="${k}"]`);
+        if (gapEl) {
+          const gapH = gapEl.offsetHeight;
+          if (gapH > 0) {
+            const style = window.getComputedStyle(gapEl);
+            const mb = parseFloat(style.marginBottom) || 0;
+            targetTop -= gapH + mb;
+          }
+        }
+      }
+    }
+  }
+
   // Center the active line vertically inside the scroll area
-  const target = Math.max(0, elTop - containerH / 2 + elH / 2);
+  const target = Math.max(0, targetTop - containerH / 2 + targetH / 2);
   smoothScrollTo(container, target, 600);
 }
 
@@ -158,50 +180,11 @@ function onScroll() {
 }
 
 // Trigger scroll whenever the active line changes
-watch(activeIdx, async (idx, oldIdx) => {
+watch(activeIdx, async (idx) => {
   if (idx < 0 || idx === lastScrolledIdx) return;
   if (Date.now() < userPausedUntil) return; // user is in control
   lastScrolledIdx = idx;
 
-  const currentLine = panelLines.value[idx];
-
-  // If current line is a gap, scroll to it immediately
-  if (currentLine && currentLine.isGap) {
-    await nextTick();
-    scrollToLine(idx);
-    return;
-  }
-
-  // If previous line was a gap, wait for its collapse transition to finish
-  // so the layout is stable before we calculate scroll position
-  const prevLine =
-    oldIdx >= 0 && oldIdx < panelLines.value.length ? panelLines.value[oldIdx] : null;
-  if (prevLine && prevLine.isGap) {
-    await nextTick();
-    const container = scrollRef.value;
-    if (!container) return;
-    const gapEl = container.querySelector(`[data-line="${oldIdx}"]`);
-    if (gapEl) {
-      let done = false;
-      const doScroll = () => {
-        if (done) return;
-        done = true;
-        gapEl.removeEventListener('transitionend', onEnd);
-        scrollToLine(idx);
-      };
-      const onEnd = (e) => {
-        if (e.propertyName === 'height') doScroll();
-      };
-      gapEl.addEventListener('transitionend', onEnd);
-      // Safety fallback if transitionend doesn't fire
-      setTimeout(doScroll, 500);
-    } else {
-      scrollToLine(idx);
-    }
-    return;
-  }
-
-  // Normal scroll
   await nextTick();
   scrollToLine(idx);
 });

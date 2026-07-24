@@ -184,54 +184,41 @@ function npScrollToLine(idx) {
 
   const el = container.querySelector(`[data-line="${idx}"]`);
   if (!el) return;
-  const h = container.clientHeight;
-  const target = Math.max(0, el.offsetTop - h / 2 + el.offsetHeight / 2);
+
+  const containerH = container.clientHeight;
+  const currentLine = lines.value[idx];
+
+  let targetTop = el.offsetTop;
+  let targetH = el.offsetHeight;
+
+  if (currentLine && currentLine.isGap) {
+    const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+    targetH = 4.5 * rem; // 3.5rem height + 1rem margin-bottom
+  } else if (idx > 0) {
+    for (let k = 0; k < idx; k++) {
+      if (lines.value[k] && lines.value[k].isGap) {
+        const gapEl = container.querySelector(`[data-line="${k}"]`);
+        if (gapEl) {
+          const gapH = gapEl.offsetHeight;
+          if (gapH > 0) {
+            const style = window.getComputedStyle(gapEl);
+            const mb = parseFloat(style.marginBottom) || 0;
+            targetTop -= gapH + mb;
+          }
+        }
+      }
+    }
+  }
+
+  const target = Math.max(0, targetTop - containerH / 2 + targetH / 2);
   npSmoothScrollTo(container, target, 650);
 }
 
-watch(activeIdx, (idx, oldIdx) => {
+watch(activeIdx, (idx) => {
   if (idx < 0 || idx === npLastScrolledIdx) return;
   if (Date.now() < npUserPausedUntil) return;
   npLastScrolledIdx = idx;
 
-  const currentLine = lines.value[idx];
-
-  // If current line is a gap, scroll to it immediately
-  if (currentLine && currentLine.isGap) {
-    nextTick(() => npScrollToLine(idx));
-    return;
-  }
-
-  // If previous line was a gap, wait for its collapse transition to finish
-  // so the layout is stable before we calculate scroll position
-  const prevLine = oldIdx >= 0 && oldIdx < lines.value.length ? lines.value[oldIdx] : null;
-  if (prevLine && prevLine.isGap) {
-    nextTick(() => {
-      const container = linesEl.value;
-      if (!container) return;
-      const gapEl = container.querySelector(`[data-line="${oldIdx}"]`);
-      if (gapEl) {
-        let done = false;
-        const doScroll = () => {
-          if (done) return;
-          done = true;
-          gapEl.removeEventListener('transitionend', onEnd);
-          npScrollToLine(idx);
-        };
-        const onEnd = (e) => {
-          if (e.propertyName === 'height') doScroll();
-        };
-        gapEl.addEventListener('transitionend', onEnd);
-        // Safety fallback if transitionend doesn't fire
-        setTimeout(doScroll, 500);
-      } else {
-        npScrollToLine(idx);
-      }
-    });
-    return;
-  }
-
-  // Normal scroll
   nextTick(() => npScrollToLine(idx));
 });
 

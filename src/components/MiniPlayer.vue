@@ -275,10 +275,36 @@ function mpSmoothScrollTo(container, target, duration = 600) {
 function mpScrollToLine(idx) {
   const container = linesEl.value;
   if (!container) return;
+
   const el = container.querySelector(`[data-line="${idx}"]`);
   if (!el) return;
-  const h = container.clientHeight;
-  const target = Math.max(0, el.offsetTop - h / 2 + el.offsetHeight / 2);
+
+  const containerH = container.clientHeight;
+  const currentLine = lines.value[idx];
+
+  let targetTop = el.offsetTop;
+  let targetH = el.offsetHeight;
+
+  if (currentLine && currentLine.isGap) {
+    const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+    targetH = 3.25 * rem; // 2.5rem height + 0.75rem margin-bottom
+  } else if (idx > 0) {
+    for (let k = 0; k < idx; k++) {
+      if (lines.value[k] && lines.value[k].isGap) {
+        const gapEl = container.querySelector(`[data-line="${k}"]`);
+        if (gapEl) {
+          const gapH = gapEl.offsetHeight;
+          if (gapH > 0) {
+            const style = window.getComputedStyle(gapEl);
+            const mb = parseFloat(style.marginBottom) || 0;
+            targetTop -= gapH + mb;
+          }
+        }
+      }
+    }
+  }
+
+  const target = Math.max(0, targetTop - containerH / 2 + targetH / 2);
   mpSmoothScrollTo(container, target, 600);
 }
 
