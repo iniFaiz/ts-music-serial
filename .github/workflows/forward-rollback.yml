@@ -1,0 +1,59 @@
+name: Forward rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: 'Known-good commit SHA or tag to rebuild'
+        required: true
+        type: string
+      new_version:
+        description: 'New stable SemVer greater than the current release, for example 1.4.1'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  prepare:
+    name: Create auditable rollback release commit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.source_ref }}
+          fetch-depth: 0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 'lts/*'
+          cache: npm
+      - name: Validate monotonic rollback version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEW_VERSION: ${{ inputs.new_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          CURRENT_TAG="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq '.tagName')"
+          node scripts/release-version.mjs --assert-newer "$NEW_VERSION" "$CURRENT_TAG"
+      - name: Create rollback commit and release tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEW_VERSION: ${{ inputs.new_version }}
+          SOURCE_REF: ${{ inputs.source_ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/release-version.mjs --set "$NEW_VERSION"
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          BRANCH="release/rollback-v$NEW_VERSION"
+          git switch -c "$BRANCH"
+          git add package.json package-lock.json src-tauri/Cargo.toml src-tauri/Cargo.lock src-tauri/tauri.conf.json
+          git commit -m "release: forward rollback $SOURCE_REF as v$NEW_VERSION"
+          git tag -a "v$NEW_VERSION" -m "Forward rollback to $SOURCE_REF"
+          git push origin "HEAD:refs/heads/$BRANCH"
+          git push origin "v$NEW_VERSION"
+          gh workflow run release.yml --ref "v$NEW_VERSION"

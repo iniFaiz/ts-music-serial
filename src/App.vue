@@ -3,7 +3,7 @@ import { ref, onMounted, onUnmounted, nextTick, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { listen } from '@tauri-apps/api/event';
-import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
+import { invoke } from '@tauri-apps/api/core';
 import { store } from './store';
 import PlayerControls from './components/PlayerControls.vue';
 import QueuePanel from './components/QueuePanel.vue';
@@ -164,42 +164,7 @@ const bumpVolume = (delta) => {
 
 const openVinylScratchWindow = async () => {
   try {
-    let existing = null;
-    try {
-      existing = await WebviewWindow.getByLabel('vinyl-scratch');
-    } catch {
-      existing = null;
-    }
-    if (existing) {
-      await existing.show().catch(() => {});
-      await existing.unminimize().catch(() => {});
-      await existing.setFocus().catch(() => {});
-      return;
-    }
-
-    const vinylWindow = new WebviewWindow('vinyl-scratch', {
-      url: '/?tsWindow=vinyl-scratch',
-      title: 'TS Music Vinyl Scratch',
-      width: 680,
-      height: 620,
-      minWidth: 500,
-      minHeight: 470,
-      center: true,
-      focus: true,
-      resizable: true,
-      maximizable: false,
-      minimizable: true,
-      decorations: true,
-      shadow: true,
-      skipTaskbar: false,
-      backgroundColor: '#111113',
-      dragDropEnabled: false,
-    });
-
-    vinylWindow.once('tauri://error', (event) => {
-      console.error('Failed to open vinyl scratch window', event.payload);
-      store.statusMessage = `Could not open Vinyl Scratch: ${event.payload}`;
-    });
+    await invoke('open_vinyl_scratch_window');
   } catch (error) {
     console.error('Failed to open vinyl scratch window', error);
     store.statusMessage = `Could not open Vinyl Scratch: ${error}`;

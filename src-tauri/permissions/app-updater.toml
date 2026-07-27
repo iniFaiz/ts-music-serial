@@ -1,0 +1,8 @@
+[[permission]]
+identifier = "app-updater"
+description = "Check and install only the signed release exposed by the Rust updater facade."
+commands.allow = [
+  "updater_status",
+  "updater_check",
+  "updater_install",
+]

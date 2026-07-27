@@ -4,7 +4,7 @@ use rusqlite::{params, Connection};
 use serde_json::Value;
 use tauri::State;
 
-use crate::MusicTrack;
+use crate::{limits, MusicTrack};
 
 use super::{
     collect_tracks, library_fingerprint, now_ms, smart_count, smart_eval, Db, OptionalString,
@@ -222,6 +222,40 @@ pub fn db_upsert_playlist(
     limit_n: Option<i64>,
     live_update: Option<bool>,
 ) -> Result<(), String> {
+    limits::validate_text(&id, "Playlist ID", 128)?;
+    limits::validate_text(&name, "Playlist name", 200)?;
+    limits::validate_text(&description, "Playlist description", 2_000)?;
+    if name.trim().is_empty() {
+        return Err("Playlist name cannot be empty".to_string());
+    }
+    if let Some(color) = color.as_deref() {
+        limits::validate_text(color, "Playlist color", 32)?;
+    }
+    if let Some(cover) = cover.as_deref() {
+        limits::validate_text(cover, "Playlist cover", 2 * 1024 * 1024)?;
+        if !cover.starts_with("data:image/") {
+            return Err("Playlist cover must be an image data URL".to_string());
+        }
+    }
+    if let Some(rules) = rules.as_ref() {
+        limits::validate_json(
+            rules,
+            "Smart-playlist rules",
+            limits::MAX_RULES_BYTES,
+            limits::MAX_JSON_DEPTH,
+        )?;
+    }
+    if let Some(sort_by) = sort_by.as_deref() {
+        limits::validate_text(sort_by, "Smart-playlist sort", 32)?;
+    }
+    if let Some(sort_order) = sort_order.as_deref() {
+        if !matches!(sort_order, "asc" | "desc") {
+            return Err("Smart-playlist sort order must be asc or desc".to_string());
+        }
+    }
+    if limit_n.is_some_and(|limit| !(0..=100_000).contains(&limit)) {
+        return Err("Smart-playlist limit must be between 0 and 100000".to_string());
+    }
     let conn = db.0.lock();
     let rules_str = rules.map(|v| v.to_string());
     // Preserve existing position on update; append to the end on insert.
@@ -260,7 +294,18 @@ pub fn db_upsert_playlist(
 }
 
 #[tauri::command]
-pub fn db_delete_playlist(db: State<Db>, id: String) -> Result<(), String> {
+pub fn db_delete_playlist(
+    db: State<Db>,
+    consent: State<crate::security::DestructiveConsentState>,
+    id: String,
+    consent_token: String,
+) -> Result<(), String> {
+    limits::validate_text(&id, "Playlist ID", 128)?;
+    consent.consume(
+        &consent_token,
+        crate::security::ConsentAction::DeletePlaylist,
+        Some(&id),
+    )?;
     let mut conn = db.0.lock();
     let tx = conn.transaction().map_err(|e| e.to_string())?;
     tx.execute(
@@ -306,6 +351,8 @@ pub fn db_move_playlist_order(db: State<Db>, from: i64, to: i64) -> Result<(), S
 
 #[tauri::command]
 pub fn db_playlist_add(db: State<Db>, id: String, paths: Vec<String>) -> Result<(), String> {
+    limits::validate_text(&id, "Playlist ID", 128)?;
+    limits::validate_paths(&paths, limits::MAX_BATCH_PATHS)?;
     let mut conn = db.0.lock();
     let tx = conn.transaction().map_err(|e| e.to_string())?;
     let mut next: i64 = tx
@@ -332,6 +379,8 @@ pub fn db_playlist_add(db: State<Db>, id: String, paths: Vec<String>) -> Result<
 
 #[tauri::command]
 pub fn db_playlist_remove(db: State<Db>, id: String, path: String) -> Result<(), String> {
+    limits::validate_text(&id, "Playlist ID", 128)?;
+    limits::validate_text(&path, "Track path", limits::MAX_PATH_BYTES)?;
     let conn = db.0.lock();
     conn.execute(
         "DELETE FROM playlist_items WHERE playlist_id = ?1 AND path = ?2",
@@ -343,6 +392,7 @@ pub fn db_playlist_remove(db: State<Db>, id: String, path: String) -> Result<(),
 
 #[tauri::command]
 pub fn db_playlist_move_item(db: State<Db>, id: String, from: i64, to: i64) -> Result<(), String> {
+    limits::validate_text(&id, "Playlist ID", 128)?;
     let mut conn = db.0.lock();
     let mut paths: Vec<String> = {
         let mut stmt = conn

@@ -1,4 +1,4 @@
 [[permission]]
 identifier = "window-drag"
-description = "Start a native window drag after validating the physical mouse-button state."
-commands.allow = ["start_window_drag"]
+description = "Narrow native window operations with fixed Rust-side behavior."
+commands.allow = ["start_window_drag", "open_vinyl_scratch_window"]

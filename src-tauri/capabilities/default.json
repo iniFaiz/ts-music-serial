@@ -8,6 +8,7 @@
     "playback",
     "library-write",
     "destructive",
+    "app-updater",
     "window-drag",
     "core:event:allow-listen",
     "core:event:allow-unlisten",
@@ -32,9 +33,6 @@
     "core:window:allow-outer-size",
     "core:window:allow-show",
     "core:window:allow-unminimize",
-    "core:window:allow-set-focus",
-    "core:webview:allow-create-webview-window",
-    "core:webview:allow-get-all-webviews",
-    "core:window:allow-get-all-windows"
+    "core:window:allow-set-focus"
   ]
 }

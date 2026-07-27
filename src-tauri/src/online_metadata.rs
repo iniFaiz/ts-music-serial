@@ -23,7 +23,8 @@ use serde_json::Value;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::{
-    build_decoder, compute_fingerprint, db, parse_metadata, resolve_allowed_audio, MusicTrack,
+    build_decoder, compute_fingerprint, db, limits, parse_metadata, resolve_allowed_audio,
+    security, MusicTrack,
 };
 
 static RUN_ID: AtomicU64 = AtomicU64::new(0);
@@ -379,7 +380,8 @@ async fn musicbrainz_search(
         .map_err(|e| e.to_string())?
         .error_for_status()
         .map_err(|e| e.to_string())?;
-    let value: Value = response.json().await.map_err(|e| e.to_string())?;
+    let value: Value =
+        limits::response_json_limited(response, limits::MAX_NETWORK_JSON_BYTES).await?;
     let recordings = value
         .get("recordings")
         .and_then(Value::as_array)
@@ -474,7 +476,8 @@ async fn acoustid_lookup(
         .map_err(|e| e.to_string())?
         .error_for_status()
         .map_err(|e| e.to_string())?;
-    let value: Value = response.json().await.map_err(|e| e.to_string())?;
+    let value: Value =
+        limits::response_json_limited(response, limits::MAX_NETWORK_JSON_BYTES).await?;
     if value.get("status").and_then(Value::as_str) != Some("ok") {
         return Err(value
             .get("error")
@@ -515,7 +518,8 @@ async fn musicbrainz_recording(
         .map_err(|e| e.to_string())?
         .error_for_status()
         .map_err(|e| e.to_string())?;
-    let value: Value = response.json().await.map_err(|e| e.to_string())?;
+    let value: Value =
+        limits::response_json_limited(response, limits::MAX_NETWORK_JSON_BYTES).await?;
     Ok(Some(match_from_recording(&value, album_hint)))
 }
 
@@ -526,20 +530,15 @@ async fn download_cover(client: &Client, matched: &Match) -> Option<Vec<u8>> {
         let id = matched.release_group_id.as_deref()?;
         format!("https://coverartarchive.org/release-group/{id}/front-500")
     };
-    let response = client.get(url).send().await.ok()?.error_for_status().ok()?;
-    if response
-        .content_length()
-        .is_some_and(|n| n > 12 * 1024 * 1024)
-    {
-        return None;
-    }
-    let bytes = response.bytes().await.ok()?;
-    (bytes.len() <= 12 * 1024 * 1024).then(|| bytes.to_vec())
+    let response = client.get(url).send().await.ok()?;
+    limits::response_bytes_limited(response, limits::MAX_COVER_BYTES)
+        .await
+        .ok()
 }
 
 fn cover_picture(bytes: Vec<u8>) -> Result<Picture, String> {
     let format = image::guess_format(&bytes).map_err(|_| "Invalid cover image".to_string())?;
-    let image = image::load_from_memory(&bytes).map_err(|_| "Invalid cover image".to_string())?;
+    let image = limits::decode_image_limited(&bytes)?;
     let (data, mime) = match format {
         image::ImageFormat::Jpeg => (bytes, MimeType::Jpeg),
         image::ImageFormat::Png => (bytes, MimeType::Png),
@@ -683,8 +682,18 @@ pub fn cancel_online_metadata() {
 pub async fn import_online_metadata(
     app: AppHandle,
     db: State<'_, db::Db>,
+    consent: State<'_, security::DestructiveConsentState>,
     paths: Option<Vec<String>>,
+    consent_token: String,
 ) -> Result<ImportSummary, String> {
+    if let Some(paths) = paths.as_ref() {
+        limits::validate_paths(paths, limits::MAX_BATCH_PATHS)?;
+    }
+    consent.consume(
+        &consent_token,
+        security::ConsentAction::ImportOnlineMetadata,
+        None,
+    )?;
     let run_id = RUN_ID.fetch_add(1, Ordering::SeqCst) + 1;
     let indexed_paths: HashSet<String> = db::all_track_paths(&db)?.into_iter().collect();
     let requested = paths.unwrap_or_else(|| indexed_paths.iter().cloned().collect());

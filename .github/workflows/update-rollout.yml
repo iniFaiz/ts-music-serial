@@ -1,0 +1,81 @@
+name: Update rollout
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Published release tag, for example v1.2.0'
+        required: true
+        type: string
+      percentage:
+        description: 'Percentage of stable install cohorts that receive the update'
+        required: true
+        default: '10'
+        type: choice
+        options:
+          - '0'
+          - '10'
+          - '25'
+          - '50'
+          - '100'
+
+concurrency:
+  group: updater-rollout
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  rollout:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate target is the latest published release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+          PERCENTAGE: ${{ inputs.percentage }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          RELEASE_JSON="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease,tagName)"
+          test "$(jq -r '.isDraft' <<< "$RELEASE_JSON")" = "false" || {
+            echo "Publish the draft release before starting its rollout."
+            exit 1
+          }
+          test "$(jq -r '.isPrerelease' <<< "$RELEASE_JSON")" = "false" || {
+            echo "Prereleases cannot become the stable updater feed."
+            exit 1
+          }
+          LATEST_TAG="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq '.tagName')"
+          test "$TAG" = "$LATEST_TAG" || {
+            echo "$TAG is not the latest published release ($LATEST_TAG)."
+            exit 1
+          }
+          mkdir release-metadata
+          gh release download "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern 'latest.json' \
+            --pattern 'SHA256SUMS.txt' \
+            --dir release-metadata
+          jq --argjson percentage "$PERCENTAGE" \
+            '.rolloutPercentage = $percentage' \
+            release-metadata/latest.json > release-metadata/latest.updated.json
+          mv release-metadata/latest.updated.json release-metadata/latest.json
+          MANIFEST_HASH="$(sha256sum release-metadata/latest.json | cut -d' ' -f1)"
+          sed -i.bak \
+            -E "s|^[0-9a-fA-F]{64}  latest\\.json$|${MANIFEST_HASH}  latest.json|" \
+            release-metadata/SHA256SUMS.txt
+          rm release-metadata/SHA256SUMS.txt.bak
+          gh release upload "$TAG" \
+            release-metadata/latest.json \
+            release-metadata/SHA256SUMS.txt \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
+
+      - name: Attest updated rollout manifest
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
+        with:
+          subject-path: release-metadata/latest.json

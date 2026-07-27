@@ -17,7 +17,6 @@ commands.allow = [
   "db_toggle_favorite",
   "db_move_favorite",
   "db_upsert_playlist",
-  "db_delete_playlist",
   "db_move_playlist_order",
   "db_playlist_add",
   "db_playlist_remove",
@@ -25,4 +24,3 @@ commands.allow = [
   "db_record_recent",
   "db_kv_set",
 ]
-

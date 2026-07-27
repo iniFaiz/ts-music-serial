@@ -4,7 +4,7 @@ use rusqlite::{params, params_from_iter};
 use serde_json::Value;
 use tauri::State;
 
-use crate::MusicTrack;
+use crate::{limits, MusicTrack};
 
 use super::{
     collect_tracks, dir, fts_query, row_to_track, smart_eval, sort_col, AlbumRow, ArtistRow, Db,
@@ -22,6 +22,14 @@ pub fn db_tracks_page(
     offset: i64,
     limit: i64,
 ) -> Result<Page, String> {
+    limits::validate_text(&sort_by, "Track sort", 32)?;
+    limits::validate_text(&order, "Track sort order", 8)?;
+    if let Some(search) = search.as_deref() {
+        limits::validate_text(search, "Track search", 512)?;
+    }
+    if offset < 0 || limit <= 0 || limit > 1_000 {
+        return Err("Invalid track page bounds".to_string());
+    }
     let conn = db.0.lock();
     let d = dir(&order);
     let query = search.as_deref().and_then(fts_query);
@@ -56,6 +64,10 @@ pub fn db_tracks_page(
 
 #[tauri::command]
 pub fn db_search(db: State<Db>, query: String, limit: i64) -> Result<Vec<MusicTrack>, String> {
+    limits::validate_text(&query, "Search query", 512)?;
+    if !(1..=100).contains(&limit) {
+        return Err("Search limit must be between 1 and 100".to_string());
+    }
     let conn = db.0.lock();
     match fts_query(&query) {
         None => Ok(Vec::new()),
@@ -73,6 +85,7 @@ pub fn db_search(db: State<Db>, query: String, limit: i64) -> Result<Vec<MusicTr
 // to rebuild the play queue and playlist views from stored paths).
 #[tauri::command]
 pub fn db_tracks_by_paths(db: State<Db>, paths: Vec<String>) -> Result<Vec<MusicTrack>, String> {
+    limits::validate_paths(&paths, limits::MAX_QUEUE_ENTRIES)?;
     if paths.is_empty() {
         return Ok(Vec::new());
     }
@@ -212,6 +225,11 @@ pub fn db_station_tracks(
     kind: String,
     key: String,
 ) -> Result<Vec<MusicTrack>, String> {
+    limits::validate_text(&kind, "Station kind", 16)?;
+    limits::validate_text(&key, "Station key", 1_024)?;
+    if !matches!(kind.as_str(), "genre" | "artist") {
+        return Err("Station kind must be genre or artist".to_string());
+    }
     let conn = db.0.lock();
     let sql = if kind == "genre" {
         format!("SELECT {TRACK_COLS} FROM tracks WHERE genre = ?1")
@@ -244,6 +262,23 @@ pub fn db_smart_tracks(
     sort_order: Option<String>,
     limit: Option<i64>,
 ) -> Result<Vec<MusicTrack>, String> {
+    limits::validate_json(
+        &rules,
+        "Smart-playlist rules",
+        limits::MAX_RULES_BYTES,
+        limits::MAX_JSON_DEPTH,
+    )?;
+    if let Some(sort_by) = sort_by.as_deref() {
+        limits::validate_text(sort_by, "Smart-playlist sort", 32)?;
+    }
+    if let Some(sort_order) = sort_order.as_deref() {
+        if !matches!(sort_order, "asc" | "desc") {
+            return Err("Smart-playlist sort order must be asc or desc".to_string());
+        }
+    }
+    if limit.is_some_and(|limit| !(0..=100_000).contains(&limit)) {
+        return Err("Smart-playlist limit must be between 0 and 100000".to_string());
+    }
     let conn = db.0.lock();
     smart_eval(
         &conn,

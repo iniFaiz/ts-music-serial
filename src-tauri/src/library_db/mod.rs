@@ -27,7 +27,7 @@ use serde::Serialize;
 use serde_json::Value;
 use tauri::{AppHandle, Manager, State};
 
-use crate::MusicTrack;
+use crate::{limits, security, MusicTrack};
 
 // Memoized smart-playlist counts, guarded alongside the connection. Keyed by
 // playlist id → (library fingerprint, rules JSON, count). The fingerprint is a
@@ -724,11 +724,11 @@ fn upsert_tracks_with_options(
     Ok(new_count)
 }
 
-#[tauri::command]
-pub fn db_remove_paths(db: State<Db>, paths: Vec<String>) -> Result<(), String> {
+pub(crate) fn remove_paths(db: &Db, paths: &[String]) -> Result<(), String> {
+    limits::validate_paths(&paths, limits::MAX_BATCH_PATHS)?;
     let mut conn = db.0.lock();
     let tx = conn.transaction().map_err(|e| e.to_string())?;
-    for p in &paths {
+    for p in paths {
         tx.execute("DELETE FROM tracks WHERE path = ?1", params![p])
             .map_err(|e| e.to_string())?;
         tx.execute("DELETE FROM stats WHERE path = ?1", params![p])
@@ -740,6 +740,37 @@ pub fn db_remove_paths(db: State<Db>, paths: Vec<String>) -> Result<(), String> 
     }
     tx.commit().map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[tauri::command]
+pub fn db_remove_paths(
+    app: AppHandle,
+    db: State<Db>,
+    consent: State<security::DestructiveConsentState>,
+    paths: Vec<String>,
+    consent_token: String,
+) -> Result<(), String> {
+    limits::validate_paths(&paths, limits::MAX_BATCH_PATHS)?;
+    let canonical = paths
+        .iter()
+        .map(|path| {
+            crate::resolve_allowed_audio(&app, Path::new(path))
+                .map(|path| path.to_string_lossy().to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    for path in &canonical {
+        if tracks::db_track(db.clone(), path.clone())?.is_none() {
+            return Err("Track is not present in the library".to_string());
+        }
+    }
+    for path in &canonical {
+        consent.consume(
+            &consent_token,
+            security::ConsentAction::RemoveLibraryTracks,
+            Some(path),
+        )?;
+    }
+    remove_paths(db.inner(), &canonical)
 }
 
 // Remove every track whose file no longer exists on disk. Before deleting,
@@ -1044,7 +1075,12 @@ pub fn db_count(db: State<Db>) -> Result<i64, String> {
 // Wipe the entire library (tracks, stats, favorites, playlists, roots, recents).
 // Settings/playback in `kv` are left intact.
 #[tauri::command]
-pub fn db_reset(db: State<Db>) -> Result<(), String> {
+pub fn db_reset(
+    db: State<Db>,
+    consent: State<security::DestructiveConsentState>,
+    consent_token: String,
+) -> Result<(), String> {
+    consent.consume(&consent_token, security::ConsentAction::ResetLibrary, None)?;
     let conn = db.0.lock();
     conn.execute_batch(
         "DELETE FROM tracks; DELETE FROM stats; DELETE FROM favorites;
@@ -1119,6 +1155,9 @@ pub(crate) mod playlists;
 
 #[tauri::command]
 pub fn db_kv_get(db: State<Db>, key: String) -> Result<Option<Value>, String> {
+    if !matches!(key.as_str(), "settings" | "playback") {
+        return Err("Unsupported settings key".to_string());
+    }
     let conn = db.0.lock();
     let raw: Option<String> = conn
         .query_row("SELECT v FROM kv WHERE k = ?1", params![key], |r| r.get(0))
@@ -1128,6 +1167,10 @@ pub fn db_kv_get(db: State<Db>, key: String) -> Result<Option<Value>, String> {
 
 #[tauri::command]
 pub fn db_kv_set(db: State<Db>, key: String, value: Value) -> Result<(), String> {
+    if !matches!(key.as_str(), "settings" | "playback") {
+        return Err("Unsupported settings key".to_string());
+    }
+    limits::validate_json(&value, "Settings value", limits::MAX_KV_BYTES, 12)?;
     let conn = db.0.lock();
     conn.execute(
         "INSERT INTO kv(k, v) VALUES (?1, ?2) ON CONFLICT(k) DO UPDATE SET v = ?2",
@@ -1148,9 +1191,47 @@ pub(crate) mod backup;
 pub fn db_import(
     db: State<Db>,
     tracks: Vec<MusicTrack>,
-    _roots: Vec<String>,
+    roots: Vec<String>,
     state: Value,
 ) -> Result<(), String> {
+    {
+        let conn = db.0.lock();
+        let has_existing: bool = conn
+            .query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM tracks
+                    UNION ALL SELECT 1 FROM playlists
+                    UNION ALL SELECT 1 FROM favorites
+                    UNION ALL SELECT 1 FROM stats
+                    UNION ALL SELECT 1 FROM roots
+                )",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())?;
+        if has_existing {
+            return Err("Legacy import is allowed only into a new empty library".to_string());
+        }
+    }
+    if tracks.len() > 200_000 {
+        return Err("Legacy import contains too many tracks (max 200000)".to_string());
+    }
+    limits::validate_paths(&roots, 256)?;
+    limits::validate_json(
+        &state,
+        "Legacy state",
+        16 * 1024 * 1024,
+        limits::MAX_JSON_DEPTH,
+    )?;
+    for track in &tracks {
+        limits::validate_text(&track.path, "Track path", limits::MAX_PATH_BYTES)?;
+        limits::validate_text(&track.title, "Track title", 1_024)?;
+        limits::validate_text(&track.artist, "Track artist", 1_024)?;
+        limits::validate_text(&track.album, "Track album", 1_024)?;
+        if let Some(genre) = track.genre.as_deref() {
+            limits::validate_text(genre, "Track genre", 256)?;
+        }
+    }
     // Legacy roots came from webview-controlled IndexedDB/localStorage.  They
     // are intentionally not restored as filesystem authority; the user can
     // re-authorise those folders once through the native folder picker.

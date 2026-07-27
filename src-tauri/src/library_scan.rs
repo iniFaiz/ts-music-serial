@@ -13,7 +13,7 @@ use lofty::probe::Probe;
 use lofty::tag::ItemKey;
 use parking_lot::Mutex;
 use serde::Serialize;
-use tauri::{AppHandle, Manager, Runtime};
+use tauri::{AppHandle, Manager, Runtime, State};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::{library_db as db, library_index, MusicTrack};
@@ -104,15 +104,6 @@ pub(crate) fn canonicalize_directory(path: &Path) -> Result<PathBuf, String> {
         ));
     }
     Ok(canonical)
-}
-
-// Allow a trusted, canonical directory through the asset protocol.  This scope
-// is for media/cover delivery only; it is never consulted as filesystem
-// authority by destructive audio commands.
-pub(crate) fn allow_root<R: Runtime>(app: &AppHandle<R>, path: &Path) -> Result<(), String> {
-    app.asset_protocol_scope()
-        .allow_directory(path, true)
-        .map_err(|error| format!("Failed to scope library root '{}': {error}", path.display()))
 }
 
 // Generic picker-authorised paths (backup files, playlist files, cover images)
@@ -323,6 +314,18 @@ pub(crate) fn compute_fingerprint(path: &Path) -> Option<String> {
 
 // Extract metadata for a single file.
 pub(crate) fn parse_metadata(path: &Path) -> Option<MusicTrack> {
+    fn bounded_tag(mut value: String, max_bytes: usize) -> String {
+        if value.len() <= max_bytes {
+            return value;
+        }
+        let mut end = max_bytes;
+        while !value.is_char_boundary(end) {
+            end -= 1;
+        }
+        value.truncate(end);
+        value
+    }
+
     let path_str = path.to_string_lossy().to_string();
 
     // Date created (falling back to modified) as a unix timestamp.
@@ -340,27 +343,36 @@ pub(crate) fn parse_metadata(path: &Path) -> Option<MusicTrack> {
         .or_else(|| tagged_file.first_tag());
     let properties = tagged_file.properties();
 
-    let title = tag
-        .and_then(|t| t.title().map(|s| s.to_string()))
-        .unwrap_or_else(|| {
-            path.file_stem()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string()
-        });
-    let artist = tag
-        .and_then(|t| t.artist().map(|s| s.to_string()))
-        .unwrap_or_else(|| "Unknown Artist".to_string());
-    let album = tag
-        .and_then(|t| t.album().map(|s| s.to_string()))
-        .unwrap_or_else(|| "Unknown Album".to_string());
+    let title = bounded_tag(
+        tag.and_then(|t| t.title().map(|s| s.to_string()))
+            .unwrap_or_else(|| {
+                path.file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string()
+            }),
+        1_024,
+    );
+    let artist = bounded_tag(
+        tag.and_then(|t| t.artist().map(|s| s.to_string()))
+            .unwrap_or_else(|| "Unknown Artist".to_string()),
+        1_024,
+    );
+    let album = bounded_tag(
+        tag.and_then(|t| t.album().map(|s| s.to_string()))
+            .unwrap_or_else(|| "Unknown Album".to_string()),
+        1_024,
+    );
     // Genre is optional — many files lack it. Trimmed so blank tags become None,
     // which lets the frontend's smart-playlist genre rules ignore them cleanly.
     let genre = tag
         .and_then(|t| t.genre().map(|s| s.trim().to_string()))
-        .filter(|s| !s.is_empty());
-    let year = tag.and_then(|t| t.year());
-    let track_number = tag.and_then(|t| t.track());
+        .filter(|s| !s.is_empty())
+        .map(|genre| bounded_tag(genre, 256));
+    let year = tag.and_then(|t| t.year()).filter(|year| *year <= 9_999);
+    let track_number = tag
+        .and_then(|t| t.track())
+        .filter(|track| (1..=9_999).contains(track));
     let duration_secs = properties.duration().as_secs();
     let has_cover = tag.as_ref().is_some_and(|t| !t.pictures().is_empty());
 
@@ -404,9 +416,9 @@ fn canonical_root_strings(paths: impl IntoIterator<Item = PathBuf>) -> Vec<Strin
 }
 
 /// Register trusted roots as one logical operation.  The database is updated
-/// first, the watcher is rebuilt from that database state, and the media scope
-/// is widened last. If watcher/scope setup fails, the previous DB root set and
-/// watcher are restored before returning the error.
+/// first and the watcher is rebuilt from that database state. Library roots are
+/// deliberately never added to the webview asset-protocol scope; playback and
+/// metadata access stay behind path-authorized Rust commands.
 pub(crate) fn register_library_roots(
     app: &AppHandle,
     roots: &[PathBuf],
@@ -424,13 +436,6 @@ pub(crate) fn register_library_roots(
         let _ = db::replace_roots(database.inner(), &previous);
         let _ = crate::reconfigure_watcher(app);
         return Err(error);
-    }
-    for root in &canonical {
-        if let Err(error) = allow_root(app, root) {
-            let _ = db::replace_roots(database.inner(), &previous);
-            let _ = crate::reconfigure_watcher(app);
-            return Err(error);
-        }
     }
     Ok(new_roots)
 }
@@ -471,10 +476,9 @@ pub(crate) async fn add_library_root(
     .map_err(|error| format!("Add-library-root task failed: {error}"))?
 }
 
-/// Rebuild in-memory scope and watcher state only from SQLite. Existing roots
-/// are upgraded to canonical spellings. Missing/offline roots remain persisted
-/// (for removable drives) but receive no scope and are not watched or indexed
-/// until they again resolve to a real directory.
+/// Rebuild watcher state only from SQLite. Existing roots are upgraded to
+/// canonical spellings. Missing/offline roots remain persisted (for removable
+/// drives) but are not watched or indexed until they resolve again.
 #[tauri::command]
 pub(crate) fn restore_roots(app: AppHandle) -> Result<Vec<String>, String> {
     let database = app.state::<db::Db>();
@@ -498,16 +502,18 @@ pub(crate) fn restore_roots(app: AppHandle) -> Result<Vec<String>, String> {
         let _ = crate::reconfigure_watcher(&app);
         return Err(error);
     }
-    for root in &canonical {
-        allow_root(&app, root)?;
-    }
     Ok(roots)
 }
 
 /// Removing is destructive, but it can only target an exact root that already
 /// exists in the trusted root table; this command cannot introduce authority.
 #[tauri::command]
-pub(crate) fn remove_library_root(app: AppHandle, root: String) -> Result<Vec<String>, String> {
+pub(crate) fn remove_library_root(
+    app: AppHandle,
+    consent: State<'_, crate::security::DestructiveConsentState>,
+    root: String,
+    consent_token: String,
+) -> Result<Vec<String>, String> {
     let database = app.state::<db::Db>();
     let stored = db::roots(database.inner())?;
     let requested_canonical = canonicalize_directory(Path::new(&root)).ok();
@@ -523,6 +529,11 @@ pub(crate) fn remove_library_root(app: AppHandle, root: String) -> Result<Vec<St
         .cloned()
         .ok_or_else(|| "Library root is not registered".to_string())?;
 
+    consent.consume(
+        &consent_token,
+        crate::security::ConsentAction::RemoveLibraryRoot,
+        Some(&existing),
+    )?;
     if !db::delete_root(database.inner(), &existing)? {
         return Err("Library root is not registered".to_string());
     }

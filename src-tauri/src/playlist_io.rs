@@ -13,7 +13,7 @@ use std::path::PathBuf;
 
 use tauri::{AppHandle, Runtime, State};
 
-use crate::db::Db;
+use crate::{db::Db, limits};
 
 fn authorize_playlist_file<R: Runtime>(
     app: &AppHandle<R>,
@@ -42,6 +42,7 @@ pub fn export_m3u(
     dest: String,
     playlist_id: String,
 ) -> Result<usize, String> {
+    limits::validate_text(&playlist_id, "Playlist ID", 128)?;
     let dest_path = PathBuf::from(&dest);
     authorize_playlist_file(&app, &dest_path)?;
 
@@ -61,15 +62,29 @@ pub fn export_m3u(
 pub fn import_m3u(app: AppHandle, db: State<Db>, src: String) -> Result<Vec<String>, String> {
     let src_path = PathBuf::from(&src);
     authorize_playlist_file(&app, &src_path)?;
+    let metadata = fs::metadata(&src_path).map_err(|error| error.to_string())?;
+    if metadata.len() > limits::MAX_M3U_BYTES {
+        return Err(format!(
+            "Playlist file is too large (max {} MB)",
+            limits::MAX_M3U_BYTES / 1024 / 1024
+        ));
+    }
     let content = fs::read_to_string(&src_path).map_err(|e| e.to_string())?;
     let base = src_path.parent().map(|p| p.to_path_buf());
 
     let mut tracks: Vec<crate::MusicTrack> = Vec::new();
-    for line in content.lines() {
+    for (index, line) in content.lines().enumerate() {
+        if index >= limits::MAX_M3U_LINES {
+            return Err(format!(
+                "Playlist contains too many lines (max {})",
+                limits::MAX_M3U_LINES
+            ));
+        }
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
+        limits::validate_text(line, "Playlist entry", limits::MAX_PATH_BYTES)?;
         let raw = PathBuf::from(line);
         let resolved = if raw.is_absolute() {
             raw

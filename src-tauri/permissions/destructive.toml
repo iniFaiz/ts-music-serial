@@ -2,12 +2,14 @@
 identifier = "destructive"
 description = "Explicitly destructive file, tag, root, reset, migration, and database restore operations."
 commands.allow = [
+  "request_destructive_consent",
   "remove_library_root",
   "player_delete_file",
   "write_track_tags",
   "import_online_metadata",
   "db_import",
   "db_remove_paths",
+  "db_delete_playlist",
   "db_reset",
   "db_import_backup",
   "db_relocate_root",

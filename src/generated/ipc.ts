@@ -72,6 +72,7 @@ export const COMMAND_NAMES = [
   'index_library',
   'list_output_devices',
   'musixmatch_token_status',
+  'open_vinyl_scratch_window',
   'playback_session_intent',
   'playback_session_snapshot',
   'player_delete_file',
@@ -92,6 +93,7 @@ export const COMMAND_NAMES = [
   'preview_image',
   'probe_files',
   'remove_library_root',
+  'request_destructive_consent',
   'restore_roots',
   'set_close_to_tray',
   'set_musixmatch_token',
@@ -101,6 +103,9 @@ export const COMMAND_NAMES = [
   'smtc_set_playback',
   'start_window_drag',
   'take_pending_open_files',
+  'updater_check',
+  'updater_install',
+  'updater_status',
   'watch_roots',
   'write_track_tags',
 ] as const;
@@ -116,14 +121,14 @@ export interface CommandArgs {
   'db_artist_tracks': { artist: string };
   'db_artists': { search?: string | null };
   'db_count': undefined;
-  'db_delete_playlist': { id: string };
+  'db_delete_playlist': { id: string; consentToken: string };
   'db_export_backup': { dest: string };
   'db_favorite_paths': undefined;
   'db_favorites': undefined;
   'db_genres': { search?: string | null };
   'db_has_genre': undefined;
   'db_import': { tracks: unknown /* Rust: MusicTrack */[]; roots: string[]; state: unknown };
-  'db_import_backup': { src: string };
+  'db_import_backup': { src: string; consentToken: string };
   'db_insight_counts': undefined;
   'db_kv_get': { key: string };
   'db_kv_set': { key: string; value: unknown };
@@ -147,8 +152,8 @@ export interface CommandArgs {
   'db_record_skip': { path: string };
   'db_rediscover': { limit: number };
   'db_relocate_root': { oldRoot: string };
-  'db_remove_paths': { paths: string[] };
-  'db_reset': undefined;
+  'db_remove_paths': { paths: string[]; consentToken: string };
+  'db_reset': { consentToken: string };
   'db_roots': undefined;
   'db_search': { query: string; limit: number };
   'db_smart_tracks': { rules: unknown; sortBy?: string | null; sortOrder?: string | null; limit?: number | null };
@@ -173,13 +178,14 @@ export interface CommandArgs {
   'get_track_palette': { path: string };
   'get_waveform': { path: string };
   'import_m3u': { src: string };
-  'import_online_metadata': { paths?: string[] | null };
+  'import_online_metadata': { paths?: string[] | null; consentToken: string };
   'index_library': { useParallelism: boolean; pruneMissing: boolean; dndGrant?: string | null };
   'list_output_devices': undefined;
   'musixmatch_token_status': undefined;
+  'open_vinyl_scratch_window': undefined;
   'playback_session_intent': { intent: unknown /* Rust: PlaybackIntent */ };
   'playback_session_snapshot': undefined;
-  'player_delete_file': { path: string };
+  'player_delete_file': { path: string; consentToken: string };
   'player_pause': undefined;
   'player_prepare_next': { path: string; durationHint?: number | null; queueEntryId?: string | null };
   'player_resume': undefined;
@@ -196,7 +202,8 @@ export interface CommandArgs {
   'player_stop': undefined;
   'preview_image': { path: string };
   'probe_files': { paths: string[] };
-  'remove_library_root': { root: string };
+  'remove_library_root': { root: string; consentToken: string };
+  'request_destructive_consent': { action: string; targets: string[] };
   'restore_roots': undefined;
   'set_close_to_tray': { enabled: boolean };
   'set_musixmatch_token': { token: string };
@@ -206,8 +213,11 @@ export interface CommandArgs {
   'smtc_set_playback': { playing: boolean; position: number };
   'start_window_drag': undefined;
   'take_pending_open_files': undefined;
+  'updater_check': undefined;
+  'updater_install': { expectedVersion: string };
+  'updater_status': undefined;
   'watch_roots': undefined;
-  'write_track_tags': { path: string; edits: unknown /* Rust: TagEdits */; coverPath?: string | null; removeCover: boolean };
+  'write_track_tags': { path: string; edits: unknown /* Rust: TagEdits */; coverPath?: string | null; removeCover: boolean; consentToken: string };
 }
 
 export interface CommandResult {
@@ -280,6 +290,7 @@ export interface CommandResult {
   'index_library': unknown /* Rust: IndexSummary */;
   'list_output_devices': unknown /* Rust: OutputDeviceInfo */[];
   'musixmatch_token_status': boolean;
+  'open_vinyl_scratch_window': void;
   'playback_session_intent': unknown /* Rust: PlaybackSessionUpdate */;
   'playback_session_snapshot': unknown /* Rust: PlaybackSessionSnapshot */;
   'player_delete_file': void;
@@ -300,6 +311,7 @@ export interface CommandResult {
   'preview_image': string;
   'probe_files': unknown /* Rust: MusicTrack */[];
   'remove_library_root': string[];
+  'request_destructive_consent': string | null;
   'restore_roots': string[];
   'set_close_to_tray': void;
   'set_musixmatch_token': void;
@@ -309,6 +321,9 @@ export interface CommandResult {
   'smtc_set_playback': void;
   'start_window_drag': boolean;
   'take_pending_open_files': string[];
+  'updater_check': unknown /* Rust: UpdateInfo */ | null;
+  'updater_install': void;
+  'updater_status': unknown /* Rust: UpdaterStatus */;
   'watch_roots': void;
   'write_track_tags': unknown /* Rust: MusicTrack */;
 }
@@ -361,7 +376,7 @@ export const ipc = {
   dbRediscover: (args: CommandArgs['db_rediscover']) => invokeCommand('db_rediscover', args),
   dbRelocateRoot: (args: CommandArgs['db_relocate_root']) => invokeCommand('db_relocate_root', args),
   dbRemovePaths: (args: CommandArgs['db_remove_paths']) => invokeCommand('db_remove_paths', args),
-  dbReset: () => invokeCommand('db_reset', undefined),
+  dbReset: (args: CommandArgs['db_reset']) => invokeCommand('db_reset', args),
   dbRoots: () => invokeCommand('db_roots', undefined),
   dbSearch: (args: CommandArgs['db_search']) => invokeCommand('db_search', args),
   dbSmartTracks: (args: CommandArgs['db_smart_tracks']) => invokeCommand('db_smart_tracks', args),
@@ -390,6 +405,7 @@ export const ipc = {
   indexLibrary: (args: CommandArgs['index_library']) => invokeCommand('index_library', args),
   listOutputDevices: () => invokeCommand('list_output_devices', undefined),
   musixmatchTokenStatus: () => invokeCommand('musixmatch_token_status', undefined),
+  openVinylScratchWindow: () => invokeCommand('open_vinyl_scratch_window', undefined),
   playbackSessionIntent: (args: CommandArgs['playback_session_intent']) => invokeCommand('playback_session_intent', args),
   playbackSessionSnapshot: () => invokeCommand('playback_session_snapshot', undefined),
   playerDeleteFile: (args: CommandArgs['player_delete_file']) => invokeCommand('player_delete_file', args),
@@ -410,6 +426,7 @@ export const ipc = {
   previewImage: (args: CommandArgs['preview_image']) => invokeCommand('preview_image', args),
   probeFiles: (args: CommandArgs['probe_files']) => invokeCommand('probe_files', args),
   removeLibraryRoot: (args: CommandArgs['remove_library_root']) => invokeCommand('remove_library_root', args),
+  requestDestructiveConsent: (args: CommandArgs['request_destructive_consent']) => invokeCommand('request_destructive_consent', args),
   restoreRoots: () => invokeCommand('restore_roots', undefined),
   setCloseToTray: (args: CommandArgs['set_close_to_tray']) => invokeCommand('set_close_to_tray', args),
   setMusixmatchToken: (args: CommandArgs['set_musixmatch_token']) => invokeCommand('set_musixmatch_token', args),
@@ -419,6 +436,9 @@ export const ipc = {
   smtcSetPlayback: (args: CommandArgs['smtc_set_playback']) => invokeCommand('smtc_set_playback', args),
   startWindowDrag: () => invokeCommand('start_window_drag', undefined),
   takePendingOpenFiles: () => invokeCommand('take_pending_open_files', undefined),
+  updaterCheck: () => invokeCommand('updater_check', undefined),
+  updaterInstall: (args: CommandArgs['updater_install']) => invokeCommand('updater_install', args),
+  updaterStatus: () => invokeCommand('updater_status', undefined),
   watchRoots: () => invokeCommand('watch_roots', undefined),
   writeTrackTags: (args: CommandArgs['write_track_tags']) => invokeCommand('write_track_tags', args),
 } as const;

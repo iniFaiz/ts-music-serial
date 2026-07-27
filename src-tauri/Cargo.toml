@@ -1,6 +1,6 @@
 [package]
 name = "ts-music"
-version = "0.1.0"
+version = "1.0.0"
 description = "A high-performance native desktop music player built with Tauri, Vue, and Rust"
 authors = ["iniFaiz"]
 edition = "2021"
@@ -60,6 +60,9 @@ discord-rich-presence = "1.1"
 # Credential Manager; on other targets keyring compiles with a mock backend that
 # simply reports "no token".
 keyring = { version = "3", features = ["windows-native"] }
+tauri-plugin-updater = "^2.10"
+trash = "^5"
+getrandom = "^0.3"
 
 # Windows-only: native Taskbar thumbnail toolbar buttons (ITaskbarList3).
 # Pinned to the same `windows` major already pulled in by tauri/tao/wry so the

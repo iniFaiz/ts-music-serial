@@ -14,7 +14,8 @@ use tauri::{AppHandle, State};
 
 use crate::cover_cache::make_thumbnail;
 use crate::{
-    compute_fingerprint, db, is_allowed_path, parse_metadata, resolve_allowed_audio, MusicTrack,
+    compute_fingerprint, db, is_allowed_path, limits, parse_metadata, resolve_allowed_audio,
+    security, MusicTrack,
 };
 
 // ---------------------------------------------------------------------------
@@ -39,15 +40,17 @@ pub(crate) struct TagEdits {
 // keeps the command from being abused as an arbitrary-file-embed primitive),
 // and formats without broad tag support (webp/bmp/…) are re-encoded to JPEG.
 fn load_cover_art(path: &Path) -> Result<(Vec<u8>, MimeType), String> {
-    const MAX_COVER_BYTES: u64 = 20 * 1024 * 1024;
     let meta = fs::metadata(path).map_err(|e| e.to_string())?;
-    if meta.len() > MAX_COVER_BYTES {
-        return Err("Cover image is too large (max 20 MB)".to_string());
+    if meta.len() > limits::MAX_COVER_BYTES as u64 {
+        return Err(format!(
+            "Cover image is too large (max {} MB)",
+            limits::MAX_COVER_BYTES / 1024 / 1024
+        ));
     }
     let data = fs::read(path).map_err(|e| e.to_string())?;
     let format = image::guess_format(&data).map_err(|_| "Not a valid image file".to_string())?;
     // Validate that the bytes really decode before embedding them.
-    let img = image::load_from_memory(&data).map_err(|_| "Not a valid image file".to_string())?;
+    let img = limits::decode_image_limited(&data)?;
     match format {
         image::ImageFormat::Jpeg => Ok((data, MimeType::Jpeg)),
         image::ImageFormat::Png => Ok((data, MimeType::Png)),
@@ -77,10 +80,12 @@ fn authorize_cover_path<R: Runtime>(app: &AppHandle<R>, path: &Path) -> Result<(
 pub(crate) async fn write_track_tags(
     app: AppHandle,
     db: State<'_, db::Db>,
+    consent: State<'_, security::DestructiveConsentState>,
     path: String,
     edits: TagEdits,
     cover_path: Option<String>,
     remove_cover: bool,
+    consent_token: String,
 ) -> Result<MusicTrack, String> {
     use lofty::config::WriteOptions;
     use lofty::picture::{Picture, PictureType};
@@ -91,17 +96,42 @@ pub(crate) async fn write_track_tags(
     if db::tracks::db_track(db.clone(), canonical)?.is_none() {
         return Err("File is not an indexed library track".to_string());
     }
+    limits::validate_text(&edits.title, "Title", 1_024)?;
+    limits::validate_text(&edits.artist, "Artist", 1_024)?;
+    limits::validate_text(&edits.album, "Album", 1_024)?;
+    limits::validate_text(&edits.genre, "Genre", 256)?;
+    if edits.year.is_some_and(|year| year > 9_999) {
+        return Err("Year must be at most 9999".to_string());
+    }
+    if edits
+        .track_number
+        .is_some_and(|track_number| track_number == 0 || track_number > 9_999)
+    {
+        return Err("Track number must be between 1 and 9999".to_string());
+    }
     if let Some(path) = cover_path.as_deref() {
         authorize_cover_path(&app, Path::new(path))?;
     }
 
+    let new_cover = match cover_path.as_deref() {
+        Some(path) => {
+            let path = PathBuf::from(path);
+            Some(
+                tauri::async_runtime::spawn_blocking(move || load_cover_art(&path))
+                    .await
+                    .map_err(|error| format!("Cover validation task failed: {error}"))??,
+            )
+        }
+        None => None,
+    };
+    consent.consume(
+        &consent_token,
+        security::ConsentAction::WriteTrackTags,
+        Some(path_buf.to_string_lossy().as_ref()),
+    )?;
+
     let (track, fingerprint) = tauri::async_runtime::spawn_blocking(
         move || -> Result<(MusicTrack, Option<String>), String> {
-            let new_cover = match cover_path.as_deref() {
-                Some(p) => Some(load_cover_art(Path::new(p))?),
-                None => None,
-            };
-
             let mut tagged_file = Probe::open(&path_buf)
                 .map_err(|e| e.to_string())?
                 .read()
@@ -281,16 +311,19 @@ mod tests {
     }
 
     #[test]
-    fn cover_loader_rejects_files_over_twenty_megabytes_before_reading() {
+    fn cover_loader_rejects_files_over_native_limit_before_reading() {
         let dir = TestDir::new();
         let path = dir.join("huge.png");
         let file = std::fs::File::create(&path).expect("create sparse file");
-        file.set_len(20 * 1024 * 1024 + 1)
+        file.set_len(limits::MAX_COVER_BYTES as u64 + 1)
             .expect("resize sparse file");
 
         assert_eq!(
             load_cover_art(&path).expect_err("reject oversized cover"),
-            "Cover image is too large (max 20 MB)"
+            format!(
+                "Cover image is too large (max {} MB)",
+                limits::MAX_COVER_BYTES / 1024 / 1024
+            )
         );
     }
 }

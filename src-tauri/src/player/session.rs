@@ -270,6 +270,114 @@ pub(crate) enum PlaybackIntent {
     Clear,
 }
 
+impl PlaybackIntent {
+    pub(crate) fn validate_and_authorize<R: tauri::Runtime>(
+        mut self,
+        app: &tauri::AppHandle<R>,
+    ) -> Result<Self, String> {
+        fn validate_position(value: f64, field: &str) -> Result<(), String> {
+            if !value.is_finite() || !(0.0..=7.0 * 24.0 * 60.0 * 60.0).contains(&value) {
+                return Err(format!("{field} is outside the supported range"));
+            }
+            Ok(())
+        }
+
+        fn authorize_entries<R: tauri::Runtime>(
+            app: &tauri::AppHandle<R>,
+            entries: &mut [QueueEntry],
+        ) -> Result<(), String> {
+            if entries.len() > crate::limits::MAX_QUEUE_ENTRIES {
+                return Err(format!(
+                    "Queue contains too many entries (max {})",
+                    crate::limits::MAX_QUEUE_ENTRIES
+                ));
+            }
+            for entry in entries {
+                crate::limits::validate_text(&entry.id, "Queue entry ID", 128)?;
+                crate::limits::validate_text(
+                    &entry.path,
+                    "Queue path",
+                    crate::limits::MAX_PATH_BYTES,
+                )?;
+                validate_position(entry.duration_hint, "Queue duration")?;
+                if entry
+                    .track_gain_db
+                    .is_some_and(|value| !value.is_finite() || !(-100.0..=100.0).contains(&value))
+                {
+                    return Err("Queue gain is outside the supported range".to_string());
+                }
+                if entry
+                    .track_peak
+                    .is_some_and(|value| !value.is_finite() || !(0.0..=100.0).contains(&value))
+                {
+                    return Err("Queue peak is outside the supported range".to_string());
+                }
+                entry.path = crate::resolve_allowed_audio(app, std::path::Path::new(&entry.path))?
+                    .to_string_lossy()
+                    .to_string();
+            }
+            Ok(())
+        }
+
+        match &mut self {
+            Self::PlayQueue {
+                entries,
+                start_entry_id,
+                start_at,
+                ..
+            } => {
+                authorize_entries(app, entries)?;
+                if let Some(entry_id) = start_entry_id {
+                    crate::limits::validate_text(entry_id, "Queue entry ID", 128)?;
+                }
+                if let Some(position) = start_at {
+                    validate_position(*position, "Start position")?;
+                }
+            }
+            Self::Enqueue { entries, .. } => authorize_entries(app, entries)?,
+            Self::AppendAutoplay { entry, .. } => {
+                authorize_entries(app, std::slice::from_mut(entry))?
+            }
+            Self::SelectEntry {
+                entry_id, start_at, ..
+            } => {
+                crate::limits::validate_text(entry_id, "Queue entry ID", 128)?;
+                if let Some(position) = start_at {
+                    validate_position(*position, "Start position")?;
+                }
+            }
+            Self::MoveQueueItem { entry_id, to_index } => {
+                crate::limits::validate_text(entry_id, "Queue entry ID", 128)?;
+                if *to_index >= crate::limits::MAX_QUEUE_ENTRIES {
+                    return Err("Queue destination is outside the supported range".to_string());
+                }
+            }
+            Self::RemoveQueueItem { entry_id } => {
+                crate::limits::validate_text(entry_id, "Queue entry ID", 128)?;
+            }
+            Self::Previous { position } => validate_position(*position, "Playback position")?,
+            Self::SetTransition { crossfade_secs, .. } => {
+                if !crossfade_secs.is_finite() || !(0.0..=60.0).contains(crossfade_secs) {
+                    return Err("Crossfade duration is outside the supported range".to_string());
+                }
+            }
+            Self::ObserveProgress {
+                position, duration, ..
+            } => {
+                validate_position(*position, "Playback position")?;
+                validate_position(*duration, "Track duration")?;
+            }
+            Self::Next { .. }
+            | Self::ClearUpcoming
+            | Self::SetModes { .. }
+            | Self::SetSleep { .. }
+            | Self::SetPlaying { .. }
+            | Self::Clear => {}
+        }
+        Ok(self)
+    }
+}
+
 fn default_true() -> bool {
     true
 }
@@ -668,6 +776,14 @@ impl PlaybackSession {
                 entries,
                 after_current,
             } => {
+                if state.queue.len().saturating_add(entries.len())
+                    > crate::limits::MAX_QUEUE_ENTRIES
+                {
+                    return Err(format!(
+                        "Queue contains too many entries (max {})",
+                        crate::limits::MAX_QUEUE_ENTRIES
+                    ));
+                }
                 let mut additions = state.normalize_entries(entries)?;
                 let mut existing: HashSet<String> =
                     state.queue.iter().map(|entry| entry.id.clone()).collect();
@@ -869,6 +985,12 @@ impl PlaybackSession {
                 }
             }
             PlaybackIntent::AppendAutoplay { entry, play_now } => {
+                if state.queue.len() >= crate::limits::MAX_QUEUE_ENTRIES {
+                    return Err(format!(
+                        "Queue contains too many entries (max {})",
+                        crate::limits::MAX_QUEUE_ENTRIES
+                    ));
+                }
                 let mut normalized = state.normalize_entries(vec![entry])?;
                 let entry = normalized.remove(0);
                 let entry_id = entry.id.clone();

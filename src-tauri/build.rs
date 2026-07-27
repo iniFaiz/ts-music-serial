@@ -21,6 +21,9 @@ struct Argument {
 
 fn main() {
     println!("cargo:rerun-if-changed=src");
+    // The public verification key is intentionally embedded at compile time.
+    // Release CI provides it; local/dev builds remain updater-disabled.
+    println!("cargo:rerun-if-env-changed=TS_MUSIC_UPDATER_PUBLIC_KEY");
     if std::env::var("TARGET").is_ok_and(|target| target.contains("windows-msvc")) {
         // Unit-test executables do not inherit Tauri's application manifest.
         // `windows` imports TaskDialogIndirect from Common-Controls v6; without

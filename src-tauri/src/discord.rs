@@ -10,6 +10,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use discord_rich_presence::{activity, DiscordIpc, DiscordIpcClient};
 
+use crate::limits;
+
 // Our Discord application. Controls the app icon/name and base assets. Hardcoded
 // on purpose: the user just flips the toggle in Settings.
 const DISCORD_CLIENT_ID: &str = "1521515050160881775";
@@ -218,7 +220,9 @@ async fn itunes_cover(client: &reqwest::Client, term: &str, entity: &str) -> Opt
         .send()
         .await
         .ok()?;
-    let v: serde_json::Value = resp.json().await.ok()?;
+    let v: serde_json::Value = limits::response_json_limited(resp, limits::MAX_NETWORK_JSON_BYTES)
+        .await
+        .ok()?;
     let art = v.get("results")?.get(0)?.get("artworkUrl100")?.as_str()?;
     // iTunes serves a tiny 100x100 thumbnail; ask for 600x600 instead.
     Some(art.replace("100x100bb", "600x600bb"))
@@ -237,7 +241,9 @@ async fn deezer_cover(client: &reqwest::Client, q: &str) -> Option<String> {
         .send()
         .await
         .ok()?;
-    let v: serde_json::Value = resp.json().await.ok()?;
+    let v: serde_json::Value = limits::response_json_limited(resp, limits::MAX_NETWORK_JSON_BYTES)
+        .await
+        .ok()?;
     let item = v.get("data")?.get(0)?;
     let cover = item
         .get("album")
@@ -256,6 +262,9 @@ async fn deezer_cover(client: &reqwest::Client, q: &str) -> Option<String> {
 // aren't on iTunes under their exact name (or at all), but are on Deezer.
 #[tauri::command]
 pub async fn discord_cover_art(title: String, artist: String, album: String) -> Option<String> {
+    limits::validate_text(&title, "Title", 1_024).ok()?;
+    limits::validate_text(&artist, "Artist", 1_024).ok()?;
+    limits::validate_text(&album, "Album", 1_024).ok()?;
     let artist = clean_query(&artist);
     let album = clean_query(&album);
     let title = clean_query(&title);

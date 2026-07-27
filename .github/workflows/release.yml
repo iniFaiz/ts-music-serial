@@ -1,0 +1,211 @@
+name: Signed release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*.*.*'
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  quality:
+    name: Release gate
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 'lts/*'
+          cache: npm
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - run: npm ci
+      - name: Verify synchronized version
+        shell: pwsh
+        run: node scripts/release-version.mjs --check $env:GITHUB_REF_NAME
+      - run: npm audit --audit-level=high
+      - run: npm run lint
+      - run: npm test
+      - run: cargo test --manifest-path src-tauri/Cargo.toml --lib
+
+  build:
+    name: ${{ matrix.name }}
+    needs: quality
+    strategy:
+      fail-fast: true
+      max-parallel: 1
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-latest
+            platform: windows
+            args: --config src-tauri/tauri.release.conf.json --bundles nsis
+            rust_target: ''
+            bundle_dir: src-tauri/target/release/bundle/nsis
+          - name: Linux x64
+            os: ubuntu-22.04
+            platform: linux
+            args: --config src-tauri/tauri.release.conf.json --bundles appimage,deb
+            rust_target: ''
+            bundle_dir: src-tauri/target/release/bundle/appimage
+          - name: macOS Apple Silicon
+            os: macos-latest
+            platform: macos
+            args: --config src-tauri/tauri.release.conf.json --target aarch64-apple-darwin --bundles app,dmg
+            rust_target: aarch64-apple-darwin
+            bundle_dir: src-tauri/target/aarch64-apple-darwin/release/bundle/macos
+          - name: macOS Intel
+            os: macos-latest
+            platform: macos
+            args: --config src-tauri/tauri.release.conf.json --target x86_64-apple-darwin --bundles app,dmg
+            rust_target: x86_64-apple-darwin
+            bundle_dir: src-tauri/target/x86_64-apple-darwin/release/bundle/macos
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 'lts/*'
+          cache: npm
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          targets: ${{ matrix.rust_target }}
+      - name: Install Linux build dependencies
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libasound2-dev \
+            libdbus-1-dev \
+            libfuse2
+      - run: npm ci
+      - name: Require updater signing secrets
+        shell: pwsh
+        env:
+          UPDATER_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          UPDATER_PUBLIC_KEY: ${{ secrets.TAURI_UPDATER_PUBLIC_KEY }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:UPDATER_PRIVATE_KEY)) {
+            throw 'Missing TAURI_SIGNING_PRIVATE_KEY'
+          }
+          if ([string]::IsNullOrWhiteSpace($env:UPDATER_PUBLIC_KEY)) {
+            throw 'Missing TAURI_UPDATER_PUBLIC_KEY'
+          }
+
+      - name: Inject signed updater release configuration
+        shell: pwsh
+        env:
+          UPDATER_PUBLIC_KEY: ${{ secrets.TAURI_UPDATER_PUBLIC_KEY }}
+        run: |
+          $configPath = 'src-tauri/tauri.release.conf.json'
+          $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+          $updater = [ordered]@{
+            pubkey = $env:UPDATER_PUBLIC_KEY
+            endpoints = @(
+              'https://github.com/iniFaiz/ts-music-serial/releases/latest/download/latest.json'
+            )
+          }
+          $plugins = [ordered]@{ updater = $updater }
+          $config | Add-Member -Force -NotePropertyName plugins -NotePropertyValue $plugins
+          $config | ConvertTo-Json -Depth 20 |
+            Set-Content -LiteralPath $configPath -Encoding utf8
+
+      - name: Build, sign updater artifacts, and upload draft release
+        id: tauri
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TS_MUSIC_UPDATER_PUBLIC_KEY: ${{ secrets.TAURI_UPDATER_PUBLIC_KEY }}
+        with:
+          tagName: v__VERSION__
+          releaseName: 'TS Music v__VERSION__'
+          releaseBody: |
+            TS Music desktop release with cryptographically signed updater artifacts.
+
+            The in-app rollout starts paused. Publish this draft, then use the
+            "Update rollout" workflow to advance 10% → 25% → 50% → 100%.
+
+            Windows installers do not have Authenticode and macOS bundles use
+            ad-hoc signing, so operating-system trust warnings are expected.
+          releaseDraft: true
+          prerelease: false
+          generateReleaseNotes: true
+          uploadUpdaterJson: true
+          updaterJsonPreferNsis: true
+          uploadUpdaterSignatures: true
+          uploadWorkflowArtifacts: true
+          args: ${{ matrix.args }}
+
+      - name: Verify updater artifact signatures
+        env:
+          TS_MUSIC_UPDATER_PUBLIC_KEY: ${{ secrets.TAURI_UPDATER_PUBLIC_KEY }}
+        run: cargo run --quiet --manifest-path tools/update-verifier/Cargo.toml -- "${{ matrix.bundle_dir }}"
+
+      - name: Verify macOS ad-hoc signature
+        if: matrix.platform == 'macos'
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_PATH="$(find src-tauri/target -type d -name '*.app' -print -quit)"
+          test -n "$APP_PATH"
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+
+  finalize:
+    name: Checksums and paused rollout
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Download release assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          New-Item -ItemType Directory -Path release-assets | Out-Null
+          gh release download $env:GITHUB_REF_NAME --dir release-assets
+
+      - name: Pause initial updater rollout
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $manifestPath = 'release-assets/latest.json'
+          $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+          $manifest | Add-Member -Force -NotePropertyName rolloutPercentage -NotePropertyValue 0
+          $manifest | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $manifestPath -Encoding utf8
+          gh release upload $env:GITHUB_REF_NAME $manifestPath --clobber
+
+      - name: Generate and upload SHA-256 checksums
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $assets = Get-ChildItem -LiteralPath release-assets -File |
+            Where-Object Name -ne 'SHA256SUMS.txt' |
+            Sort-Object Name
+          $lines = foreach ($asset in $assets) {
+            $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $asset.FullName).Hash.ToLowerInvariant()
+            "$hash  $($asset.Name)"
+          }
+          $checksumPath = Join-Path (Resolve-Path release-assets) 'SHA256SUMS.txt'
+          [IO.File]::WriteAllLines($checksumPath, $lines, [Text.UTF8Encoding]::new($false))
+          gh release upload $env:GITHUB_REF_NAME $checksumPath --clobber
+
+      - name: Attest finalized release assets
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
+        with:
+          subject-checksums: release-assets/SHA256SUMS.txt

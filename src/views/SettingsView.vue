@@ -367,6 +367,92 @@
       </p>
     </Section>
 
+    <!-- Signed application updater -->
+    <Section
+      title="Software Update"
+      :description="
+        updaterStatus
+          ? `Installed version ${updaterStatus.currentVersion}`
+          : 'Check for signed TS Music releases.'
+      "
+    >
+      <p v-if="updaterStatus && !updaterStatus.configured" class="text-xs text-gray-500">
+        Updates are disabled in this development build. Official release builds embed the
+        verification key and only accept signed packages.
+      </p>
+
+      <template v-else>
+        <div class="flex items-center justify-between gap-4">
+          <div class="min-w-0">
+            <h3 class="text-white font-medium text-sm">
+              {{
+                updateInfo ? `Version ${updateInfo.version} is available` : 'Signed release channel'
+              }}
+            </h3>
+            <p class="text-xs text-gray-500 mt-1">
+              {{
+                updateInfo
+                  ? `Available to ${updateInfo.rolloutPercentage}% of installations.`
+                  : updateMessage || 'Updates are verified by Rust before installation.'
+              }}
+            </p>
+          </div>
+          <button
+            v-if="!updateInfo"
+            @click="checkForUpdate"
+            :disabled="checkingUpdate || installingUpdate || !updaterStatus"
+            class="px-4 py-2 bg-[#3a3a3a] hover:bg-[#444] disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-md transition-colors text-sm font-medium shrink-0"
+          >
+            {{ checkingUpdate ? 'Checking...' : 'Check for Updates' }}
+          </button>
+          <button
+            v-else
+            @click="installUpdate"
+            :disabled="installingUpdate"
+            class="px-4 py-2 bg-[var(--accent-color)] hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-md transition-colors text-sm font-medium shrink-0"
+          >
+            {{ installingUpdate ? 'Installing...' : 'Install and Restart' }}
+          </button>
+        </div>
+
+        <div v-if="installingUpdate" class="mt-4">
+          <div class="h-1.5 rounded-full bg-white/5 overflow-hidden">
+            <div
+              class="h-full bg-[var(--accent-color)] transition-all duration-200"
+              :class="{ 'animate-pulse w-1/3': !updateProgress.total }"
+              :style="
+                updateProgress.total
+                  ? {
+                      width: `${Math.min(
+                        100,
+                        (updateProgress.downloaded / updateProgress.total) * 100
+                      )}%`,
+                    }
+                  : undefined
+              "
+            />
+          </div>
+          <p class="text-xs text-gray-500 mt-2">
+            {{
+              updateProgress.finished
+                ? 'Signature verified. Starting installer...'
+                : updateProgress.total
+                  ? `${formatBytes(updateProgress.downloaded)} / ${formatBytes(updateProgress.total)}`
+                  : 'Downloading signed update...'
+            }}
+          </p>
+        </div>
+
+        <p
+          v-if="updateInfo?.body"
+          class="text-xs text-gray-400 leading-relaxed mt-4 whitespace-pre-line"
+        >
+          {{ updateInfo.body }}
+        </p>
+        <p v-if="updateError" class="text-xs text-red-400 mt-3">{{ updateError }}</p>
+      </template>
+    </Section>
+
     <!-- Keyboard Shortcuts -->
     <Section title="Keyboard Shortcuts" description="Control playback from anywhere in the app.">
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-1.5">
@@ -589,6 +675,7 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
+import { listen } from '@tauri-apps/api/event';
 import { store } from '../store';
 import { invokeCommand as invoke } from '../generated/ipc';
 import Section from '../components/settings/Section.vue';
@@ -599,6 +686,57 @@ import EqualizerPanel from '../components/EqualizerPanel.vue';
 import CoverImage from '../components/CoverImage.vue';
 
 const devices = ref([]);
+const updaterStatus = ref(null);
+const updateInfo = ref(null);
+const updateMessage = ref('');
+const updateError = ref('');
+const checkingUpdate = ref(false);
+const installingUpdate = ref(false);
+const updateProgress = ref({ downloaded: 0, total: null, finished: false });
+let unlistenUpdaterProgress = null;
+
+const formatBytes = (bytes) => {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  return `${(bytes / 1024 ** index).toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
+};
+
+async function loadUpdaterStatus() {
+  try {
+    updaterStatus.value = await invoke('updater_status');
+  } catch (error) {
+    updateError.value = String(error);
+  }
+}
+
+async function checkForUpdate() {
+  checkingUpdate.value = true;
+  updateError.value = '';
+  updateMessage.value = '';
+  try {
+    updateInfo.value = await invoke('updater_check');
+    if (!updateInfo.value) updateMessage.value = 'You are up to date for the current rollout.';
+  } catch (error) {
+    updateError.value = String(error);
+  } finally {
+    checkingUpdate.value = false;
+  }
+}
+
+async function installUpdate() {
+  if (!updateInfo.value || installingUpdate.value) return;
+  installingUpdate.value = true;
+  updateError.value = '';
+  updateProgress.value = { downloaded: 0, total: null, finished: false };
+  try {
+    await store.flushState();
+    await invoke('updater_install', { expectedVersion: updateInfo.value.version });
+  } catch (error) {
+    updateError.value = String(error);
+    installingUpdate.value = false;
+  }
+}
 
 const deviceOptions = computed(() => [
   { value: '', label: 'System Default' },
@@ -729,13 +867,22 @@ watch(
   }
 );
 
-onMounted(() => {
+onMounted(async () => {
   loadDevices();
+  loadUpdaterStatus();
+  unlistenUpdaterProgress = await listen('updater-progress', ({ payload }) => {
+    updateProgress.value = {
+      downloaded: payload.downloaded,
+      total: payload.total ?? updateProgress.value.total,
+      finished: payload.finished,
+    };
+  });
   sleepTick = setInterval(() => {
     now.value = Date.now();
   }, 1000);
 });
 onUnmounted(() => {
   if (sleepTick) clearInterval(sleepTick);
+  if (unlistenUpdaterProgress) unlistenUpdaterProgress();
 });
 </script>

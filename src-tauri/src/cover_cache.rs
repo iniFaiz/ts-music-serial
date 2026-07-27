@@ -13,7 +13,7 @@ use lofty::prelude::*;
 use lofty::probe::Probe;
 use tauri::{AppHandle, Manager, State};
 
-use crate::{db, is_allowed_audio};
+use crate::{db, is_allowed_audio, limits};
 
 const THUMB_SIZE: u32 = 300;
 
@@ -48,6 +48,9 @@ fn extract_cover(path: &Path) -> Option<(Vec<u8>, String)> {
         .primary_tag()
         .or_else(|| tagged_file.first_tag())
         .and_then(|tag| tag.pictures().first())?;
+    if picture.data().len() > limits::MAX_COVER_BYTES {
+        return None;
+    }
 
     let mime = match picture.mime_type() {
         Some(MimeType::Png) => "image/png",
@@ -64,7 +67,7 @@ fn extract_cover(path: &Path) -> Option<(Vec<u8>, String)> {
 
 // Decode, downscale and re-encode cover art as a small JPEG thumbnail.
 pub(crate) fn make_thumbnail(data: &[u8]) -> Option<Vec<u8>> {
-    let img = image::load_from_memory(data).ok()?;
+    let img = limits::decode_image_limited(data).ok()?;
     let thumb = img.thumbnail(THUMB_SIZE, THUMB_SIZE);
     let mut buf = Vec::new();
     image::DynamicImage::ImageRgb8(thumb.to_rgb8())
@@ -174,8 +177,10 @@ pub(crate) async fn get_track_cover(
 
     // 1. Try to get it from the database first
     if let Some((_, _, bytes)) = db::db_get_cover_art(&db, &path) {
-        let b64 = general_purpose::STANDARD.encode(&bytes);
-        return Ok(Some(format!("data:image/jpeg;base64,{b64}")));
+        if let Some(thumb) = make_thumbnail(&bytes) {
+            let b64 = general_purpose::STANDARD.encode(thumb);
+            return Ok(Some(format!("data:image/jpeg;base64,{b64}")));
+        }
     }
 
     // 2. If it is NOT in the database, and the file exists on disk:
@@ -192,22 +197,13 @@ pub(crate) async fn get_track_cover(
                 }
             }
 
-            let (raw, raw_mime) = extract_cover(&p_buf)?;
-
-            // Downscale when possible; otherwise fall back to the original bytes.
-            match make_thumbnail(&raw) {
-                Some(thumb) => {
-                    if let (Some(dir), Some(k)) = (&cache, &key) {
-                        let _ = fs::write(dir.join(format!("{k}.jpg")), &thumb);
-                    }
-                    let b64 = general_purpose::STANDARD.encode(&thumb);
-                    Some(format!("data:image/jpeg;base64,{b64}"))
-                }
-                None => {
-                    let b64 = general_purpose::STANDARD.encode(&raw);
-                    Some(format!("data:{raw_mime};base64,{b64}"))
-                }
+            let (raw, _) = extract_cover(&p_buf)?;
+            let thumb = make_thumbnail(&raw)?;
+            if let (Some(dir), Some(k)) = (&cache, &key) {
+                let _ = fs::write(dir.join(format!("{k}.jpg")), &thumb);
             }
+            let b64 = general_purpose::STANDARD.encode(&thumb);
+            Some(format!("data:image/jpeg;base64,{b64}"))
         })
         .await
         .map_err(|e| format!("Cover task failed: {e}"))?;
@@ -265,13 +261,14 @@ pub(crate) async fn get_track_cover_path(
     if let Some((album, artist, bytes)) = db::db_get_cover_art(&db, &path) {
         let result = tauri::async_runtime::spawn_blocking(move || -> Option<String> {
             let dir = cache?;
+            let thumb = make_thumbnail(&bytes)?;
             let mut hasher = DefaultHasher::new();
             album.hash(&mut hasher);
             artist.hash(&mut hasher);
             let key = format!("db_{:016x}", hasher.finish());
             let file = dir.join(format!("{key}.jpg"));
             if !file.exists() {
-                let _ = fs::write(&file, &bytes);
+                fs::write(&file, thumb).ok()?;
             }
             Some(file.to_string_lossy().into_owned())
         })
@@ -363,11 +360,11 @@ pub(crate) async fn get_track_palette(
         let img = match (&cache, &key) {
             (Some(dir), Some(k)) if dir.join(format!("{k}.jpg")).exists() => {
                 let bytes = fs::read(dir.join(format!("{k}.jpg"))).ok()?;
-                image::load_from_memory(&bytes).ok()?
+                limits::decode_image_limited(&bytes).ok()?
             }
             _ => {
                 let (raw, _mime) = extract_cover(&path_buf)?;
-                image::load_from_memory(&raw).ok()?
+                limits::decode_image_limited(&raw).ok()?
             }
         };
 

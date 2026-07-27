@@ -6,6 +6,7 @@ import { idbGet, idbDelete } from './libraryStore';
 import { newSmartPlaylist } from './smartPlaylists';
 import { EQ_PRESETS, EQ_BAND_COUNT, EQ_MIN_DB, EQ_MAX_DB, matchPreset } from './equalizer';
 import { invalidateCover, retryMissingCovers } from './coverCache';
+import { requestDestructiveConsent } from './destructiveConsent';
 
 const appWindow = getCurrentWindow();
 
@@ -576,11 +577,16 @@ export const store = reactive({
   },
 
   async resetLibrary() {
+    const consentToken = await requestDestructiveConsent('reset_library');
+    if (!consentToken) {
+      this.statusMessage = 'Library reset cancelled';
+      return;
+    }
     this.resettingLibrary = true;
     this.loading = true;
     this.statusMessage = 'Resetting library...';
     try {
-      await invoke('db_reset');
+      await invoke('db_reset', { consentToken });
     } catch (e) {
       console.error('Failed to reset database', e);
     }
@@ -702,9 +708,14 @@ export const store = reactive({
 
   // Remove a scanned folder and every track that lives inside it.
   async removeRoot(root) {
-    let removed = [];
+    let removed;
     try {
-      removed = await invoke('remove_library_root', { root });
+      const consentToken = await requestDestructiveConsent('remove_library_root', [root]);
+      if (!consentToken) {
+        this.statusMessage = 'Folder removal cancelled';
+        return;
+      }
+      removed = await invoke('remove_library_root', { root, consentToken });
       this.roots = await invoke('db_roots');
     } catch (e) {
       console.error('Failed to remove folder tracks', e);
@@ -892,8 +903,14 @@ export const store = reactive({
     };
     this.onlineMetadataStatus = 'Finding missing metadata...';
     try {
+      const consentToken = await requestDestructiveConsent('import_online_metadata');
+      if (!consentToken) {
+        this.onlineMetadataStatus = 'Online metadata scan cancelled';
+        return;
+      }
       const summary = await invoke('import_online_metadata', {
         paths: Array.isArray(paths) ? paths : null,
+        consentToken,
       });
       // Keep every live clone (queue/current song) in sync with SQLite and
       // invalidate artwork misses so covers appear without restarting the app.
@@ -1046,7 +1063,7 @@ export const store = reactive({
   // Pull any audio files passed on the command line (first launch or forwarded
   // from a second instance) and play them.
   async consumePendingOpenFiles() {
-    let files = [];
+    let files;
     try {
       files = await invoke('take_pending_open_files');
     } catch {
@@ -1727,13 +1744,17 @@ export const store = reactive({
   },
 
   async deletePlaylist(id) {
+    const consentToken = await requestDestructiveConsent('delete_playlist', [id]);
+    if (!consentToken) return false;
     try {
-      await invoke('db_delete_playlist', { id });
+      await invoke('db_delete_playlist', { id, consentToken });
     } catch (e) {
       console.error('Failed to delete playlist', e);
+      throw e;
     }
     await this.refreshPlaylists();
     this.bumpPlaylists();
+    return true;
   },
 
   async renamePlaylist(id, name) {
@@ -1803,9 +1824,16 @@ export const store = reactive({
     this.bumpPlaylists();
   },
 
-  async deleteSong(path) {
+  async requestDeleteConsent(paths) {
+    return requestDestructiveConsent('delete_audio', paths);
+  },
+
+  async deleteSong(path, existingConsentToken = null) {
+    const consentToken =
+      existingConsentToken || (await requestDestructiveConsent('delete_audio', [path]));
+    if (!consentToken) return false;
     try {
-      await invoke('player_delete_file', { path });
+      await invoke('player_delete_file', { path, consentToken });
     } catch (e) {
       console.error('Failed to delete file from disk:', e);
       throw e;
@@ -1828,21 +1856,19 @@ export const store = reactive({
     }
 
     this.queue = this.queue.filter((s) => s.path !== path);
-    try {
-      await invoke('db_remove_paths', { paths: [path] });
-    } catch (e) {
-      console.error('Failed to remove track from DB', e);
-    }
     const favIdx = this.favorites.indexOf(path);
     if (favIdx >= 0) this.favorites.splice(favIdx, 1);
     await this.refreshPlaylists();
 
     this.scanCount = await invoke('db_count');
     this.bumpLibrary();
-    this.statusMessage = `Deleted file: ${path}`;
+    this.statusMessage = `Moved file to Trash: ${path}`;
+    return true;
   },
 
   async removeSongFromLibrary(path) {
+    const consentToken = await requestDestructiveConsent('remove_library_tracks', [path]);
+    if (!consentToken) return false;
     if (this.currentSong && this.currentSong.path === path) {
       if (this.queue.length <= 1) {
         this.isPlaying = false;
@@ -1861,9 +1887,10 @@ export const store = reactive({
 
     this.queue = this.queue.filter((s) => s.path !== path);
     try {
-      await invoke('db_remove_paths', { paths: [path] });
+      await invoke('db_remove_paths', { paths: [path], consentToken });
     } catch (e) {
       console.error('Failed to remove track from DB', e);
+      throw e;
     }
     const favIdx = this.favorites.indexOf(path);
     if (favIdx >= 0) this.favorites.splice(favIdx, 1);
@@ -1872,6 +1899,7 @@ export const store = reactive({
     this.scanCount = await invoke('db_count');
     this.bumpLibrary();
     this.statusMessage = `Removed file from list: ${path}`;
+    return true;
   },
 
   // Fetch a normal playlist's tracks (in order) or a smart playlist's evaluated
@@ -2139,13 +2167,17 @@ export const store = reactive({
   },
 
   async deleteSmartPlaylist(id) {
+    const consentToken = await requestDestructiveConsent('delete_playlist', [id]);
+    if (!consentToken) return false;
     try {
-      await invoke('db_delete_playlist', { id });
+      await invoke('db_delete_playlist', { id, consentToken });
     } catch (e) {
       console.error('Failed to delete smart playlist', e);
+      throw e;
     }
     await this.refreshPlaylists();
     this.bumpPlaylists();
+    return true;
   },
 
   openSmartModal(mode = 'create', smartId = null) {
@@ -2517,6 +2549,11 @@ export const store = reactive({
         confirmText: 'Import',
         cancelText: 'Cancel',
         onConfirm: async () => {
+          const consentToken = await requestDestructiveConsent('import_backup', [src]);
+          if (!consentToken) {
+            this.statusMessage = 'Backup import cancelled';
+            return;
+          }
           this.loading = true;
           this.statusMessage = 'Importing backup...';
 
@@ -2532,7 +2569,7 @@ export const store = reactive({
           }
 
           try {
-            const res = await invoke('db_import_backup', { src });
+            const res = await invoke('db_import_backup', { src, consentToken });
 
             // Backup paths are data, not filesystem authority. Every restored
             // root must be confirmed through the Rust-side native picker,

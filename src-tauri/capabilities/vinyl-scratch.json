@@ -4,8 +4,8 @@
   "description": "Minimal capability for the dedicated vinyl scratch window",
   "windows": ["vinyl-scratch"],
   "permissions": [
-    "library-read",
     "vinyl-playback",
+    "vinyl-cover-read",
     "core:event:allow-emit"
   ]
 }

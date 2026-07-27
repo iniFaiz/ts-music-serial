@@ -21,14 +21,17 @@ mod discord;
 mod library_db;
 mod library_index;
 mod library_scan;
+mod limits;
 mod lyrics;
 mod metadata_tags;
 mod online_metadata;
 mod player;
 mod playlist_io;
+mod security;
 #[cfg(target_os = "windows")]
 mod thumbbar;
 mod tray;
+mod updater;
 mod waveform;
 mod window_drag;
 
@@ -90,6 +93,7 @@ struct PendingOpenFiles(Mutex<Vec<String>>);
 
 fn collect_audio_args<I: IntoIterator<Item = String>>(args: I) -> Vec<String> {
     args.into_iter()
+        .take(limits::MAX_BATCH_PATHS)
         .filter(|a| !a.starts_with('-'))
         .map(PathBuf::from)
         .filter(|p| p.is_file() && is_audio_file(p))
@@ -117,6 +121,7 @@ fn take_pending_open_files(app: AppHandle, state: State<PendingOpenFiles>) -> Ve
 // transient queue from the returned tracks.
 #[tauri::command]
 async fn probe_files(app: AppHandle, paths: Vec<String>) -> Result<Vec<MusicTrack>, String> {
+    limits::validate_paths(&paths, limits::MAX_BATCH_PATHS)?;
     tauri::async_runtime::spawn_blocking(move || {
         let mut tracks = Vec::new();
         for p in paths {
@@ -202,16 +207,22 @@ fn lyrics_cache_dir(app: &AppHandle) -> Option<PathBuf> {
 // hand-synced) takes priority over an embedded lyrics tag.
 fn local_lyrics(path: &Path) -> Option<lyrics::Lyrics> {
     let sidecar = path.with_extension("lrc");
-    if let Ok(text) = fs::read_to_string(&sidecar) {
-        if let Some(l) = lyrics::lyrics_from_text(&text, "Local (.lrc)") {
-            return Some(l);
+    if fs::metadata(&sidecar)
+        .is_ok_and(|metadata| metadata.len() <= limits::MAX_NETWORK_JSON_BYTES as u64)
+    {
+        if let Ok(text) = fs::read_to_string(&sidecar) {
+            if let Some(l) = lyrics::lyrics_from_text(&text, "Local (.lrc)") {
+                return Some(l);
+            }
         }
     }
     if let Ok(tagged) = Probe::open(path).and_then(|p| p.read()) {
         let tag = tagged.primary_tag().or_else(|| tagged.first_tag());
         if let Some(text) = tag.and_then(|t| t.get_string(&ItemKey::Lyrics)) {
-            if let Some(l) = lyrics::lyrics_from_text(text, "Embedded") {
-                return Some(l);
+            if text.len() <= limits::MAX_NETWORK_JSON_BYTES {
+                if let Some(l) = lyrics::lyrics_from_text(text, "Embedded") {
+                    return Some(l);
+                }
             }
         }
     }
@@ -232,6 +243,18 @@ async fn get_lyrics(
     lyrics_source: String,
     force: bool,
 ) -> Option<lyrics::Lyrics> {
+    limits::validate_text(&path, "Path", limits::MAX_PATH_BYTES).ok()?;
+    limits::validate_text(&title, "Title", 1_024).ok()?;
+    limits::validate_text(&artist, "Artist", 1_024).ok()?;
+    limits::validate_text(&album, "Album", 1_024).ok()?;
+    limits::validate_text(&lyrics_source, "Lyrics source", 32).ok()?;
+    if !matches!(
+        lyrics_source.as_str(),
+        "none" | "local" | "lrclib" | "netease" | "musixmatch"
+    ) || duration_secs > 7 * 24 * 60 * 60
+    {
+        return None;
+    }
     let path_buf = resolve_allowed_audio(&app, Path::new(&path)).ok()?;
 
     if lyrics_source == "none" {
@@ -661,14 +684,100 @@ fn player_show_in_folder(app: AppHandle, path: String) -> Result<(), String> {
     Ok(())
 }
 
+// WebviewWindowBuilder deadlocks WebView2 when invoked by a synchronous command
+// on Windows. Force this command onto Tauri's async runtime while keeping the
+// function synchronous so the debug setup hook can call it directly.
+#[tauri::command(async)]
+fn open_vinyl_scratch_window(app: AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("vinyl-scratch") {
+        window.show().map_err(|error| error.to_string())?;
+        if window.is_minimized().unwrap_or(false) {
+            window.unminimize().map_err(|error| error.to_string())?;
+        }
+        window.set_focus().map_err(|error| error.to_string())?;
+        return Ok(());
+    }
+
+    tauri::WebviewWindowBuilder::new(&app, "vinyl-scratch", vinyl_scratch_url())
+        .title("TS Music Vinyl Scratch")
+        .inner_size(680.0, 620.0)
+        .min_inner_size(500.0, 470.0)
+        .center()
+        .focused(true)
+        .resizable(true)
+        .maximizable(false)
+        .minimizable(true)
+        .decorations(true)
+        .shadow(true)
+        .background_color(tauri::webview::Color(0x11, 0x11, 0x13, 0xff))
+        .skip_taskbar(false)
+        .drag_and_drop(false)
+        .on_page_load(|_, payload| {
+            #[cfg(debug_assertions)]
+            eprintln!(
+                "[vinyl-scratch] page-load {:?}: {}",
+                payload.event(),
+                payload.url()
+            );
+        })
+        .build()
+        .map(|window| {
+            #[cfg(debug_assertions)]
+            match window.url() {
+                Ok(url) => eprintln!("[vinyl-scratch] created at {url}"),
+                Err(error) => eprintln!("[vinyl-scratch] could not read URL: {error}"),
+            }
+        })
+        .map_err(|error| format!("Failed to open Vinyl Scratch: {error}"))
+}
+
+fn vinyl_scratch_url() -> tauri::WebviewUrl {
+    // Keep this at the app root. The original, working JS-created webview used
+    // `/?tsWindow=vinyl-scratch`; main.js relies on that query to mount the
+    // standalone turntable instead of the main application.
+    tauri::WebviewUrl::App("/?tsWindow=vinyl-scratch".into())
+}
+
+#[cfg(test)]
+mod vinyl_window_tests {
+    use super::vinyl_scratch_url;
+
+    #[test]
+    fn scratch_entrypoint_resolves_to_app_root_with_mode_query() {
+        let tauri::WebviewUrl::App(path) = vinyl_scratch_url() else {
+            panic!("vinyl scratch must remain an app-local URL");
+        };
+        let resolved = tauri::Url::parse("http://localhost:1420/")
+            .expect("valid dev URL")
+            .join(&path.to_string_lossy())
+            .expect("valid vinyl URL");
+
+        assert_eq!(resolved.path(), "/");
+        assert_eq!(resolved.query(), Some("tsWindow=vinyl-scratch"));
+    }
+}
+
 #[tauri::command]
-fn player_delete_file(app: AppHandle, db: State<db::Db>, path: String) -> Result<(), String> {
+fn player_delete_file(
+    app: AppHandle,
+    db: State<db::Db>,
+    consent: State<security::DestructiveConsentState>,
+    path: String,
+    consent_token: String,
+) -> Result<(), String> {
     let path_buf = resolve_allowed_audio(&app, Path::new(&path))?;
     let canonical = path_buf.to_string_lossy().to_string();
-    if db::tracks::db_track(db, canonical)?.is_none() {
+    if db::tracks::db_track(db.clone(), canonical.clone())?.is_none() {
         return Err("File is not an indexed library track".to_string());
     }
-    fs::remove_file(&path_buf).map_err(|e| e.to_string())
+    consent.consume(
+        &consent_token,
+        security::ConsentAction::DeleteAudio,
+        Some(path_buf.to_string_lossy().as_ref()),
+    )?;
+    trash::delete(&path_buf).map_err(|error| format!("Failed to move file to Trash: {error}"))?;
+    db::remove_paths(db.inner(), &[canonical])
+        .map_err(|error| format!("File moved to Trash, but its library row remains: {error}"))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -700,6 +809,9 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_dialog::init())
+        // The webview never receives the generic updater plugin permission.
+        // Our narrow Rust commands pin the feed and the embedded signing key.
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(audio)
         .manage(discord::DiscordState::new())
         .manage(tray::TrayState::new())
@@ -713,6 +825,7 @@ pub fn run() {
         })
         .manage(library_index::LibraryIndexState::new())
         .manage(library_scan::LibraryAccessState::new())
+        .manage(security::DestructiveConsentState::default())
         // Close-to-tray: while the setting is enabled, closing the main window
         // hides it instead of quitting; Quit lives in the tray menu.
         .on_window_event(|window, event| match event {
@@ -788,6 +901,12 @@ pub fn run() {
             let player = _app.state::<AudioPlayer>().inner().clone();
             spawn_player_ticker(_app.handle().clone(), player);
 
+            #[cfg(debug_assertions)]
+            if std::env::var_os("TS_MUSIC_OPEN_VINYL_ON_START").is_some() {
+                eprintln!("[vinyl-scratch] debug auto-open requested");
+                open_vinyl_scratch_window(_app.handle().clone())?;
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -826,6 +945,8 @@ pub fn run() {
             smtc_set_playback,
             player_show_in_folder,
             player_delete_file,
+            open_vinyl_scratch_window,
+            security::request_destructive_consent,
             write_track_tags,
             preview_image,
             probe_files,
@@ -890,7 +1011,10 @@ pub fn run() {
             db::backup::db_export_backup,
             db::backup::db_import_backup,
             db::backup::db_relocate_root,
-            db::backup::db_prune_and_get_missing
+            db::backup::db_prune_and_get_missing,
+            updater::updater_status,
+            updater::updater_check,
+            updater::updater_install
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

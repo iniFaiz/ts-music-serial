@@ -5,6 +5,7 @@ import { invokeCommand as invoke } from '../generated/ipc';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { store } from '../store';
 import { invalidateCover } from '../coverCache';
+import { requestDestructiveConsent } from '../destructiveConsent';
 import CoverImage from './CoverImage.vue';
 import { navigateWithTransition } from '../viewTransition';
 
@@ -489,6 +490,11 @@ const saveEditInfo = async () => {
   const yr = parseInt(editForm.value.year, 10);
   const tn = parseInt(editForm.value.track_number, 10);
   try {
+    const consentToken = await requestDestructiveConsent('write_track_tags', [s.path]);
+    if (!consentToken) {
+      editError.value = 'Tag update cancelled';
+      return;
+    }
     const updated = await invoke('write_track_tags', {
       path: s.path,
       edits: {
@@ -501,6 +507,7 @@ const saveEditInfo = async () => {
       },
       coverPath: editCoverPath.value,
       removeCover: editRemoveCover.value,
+      consentToken,
     });
     if (editCoverPath.value || editRemoveCover.value) invalidateCover(updated.path);
     store.applyTrackUpdate(updated);
@@ -623,11 +630,16 @@ const closeDeleteConfirm = () => {
 const executeDelete = async (fromDisk) => {
   const paths =
     deleteActionType.value === 'bulk' ? [...selectedSongs.value] : [deleteConfirmSong.value.path];
+  const consentToken = fromDisk ? await store.requestDeleteConsent(paths) : null;
+  if (fromDisk && !consentToken) {
+    closeDeleteConfirm();
+    return;
+  }
 
   for (const path of paths) {
     try {
       if (fromDisk) {
-        await store.deleteSong(path);
+        await store.deleteSong(path, consentToken);
       } else {
         await store.removeSongFromLibrary(path);
       }
@@ -665,8 +677,8 @@ const openMenu = (song, event) => {
   const spaceBelow = winHeight - y;
   const spaceAbove = y;
 
-  let maxHeight = 400;
-  let topPosition = y;
+  let maxHeight;
+  let topPosition;
 
   if (spaceBelow >= spaceAbove) {
     topPosition = y;

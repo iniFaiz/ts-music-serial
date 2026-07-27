@@ -9,6 +9,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::limits;
+
 // One karaoke word/syllable with its own absolute start + duration (ms). Present
 // only for providers that expose word-level timing (e.g. NetEase `yrc`).
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -314,11 +316,12 @@ pub async fn from_lrclib(
         .send()
         .await
     {
-        if resp.status().is_success() {
-            if let Ok(v) = resp.json::<serde_json::Value>().await {
-                if let Some(l) = lrclib_value_to_lyrics(&v) {
-                    return Some(l);
-                }
+        if let Ok(v) =
+            limits::response_json_limited::<serde_json::Value>(resp, limits::MAX_NETWORK_JSON_BYTES)
+                .await
+        {
+            if let Some(l) = lrclib_value_to_lyrics(&v) {
+                return Some(l);
             }
         }
     }
@@ -329,7 +332,10 @@ pub async fn from_lrclib(
         .send()
         .await
     {
-        if let Ok(v) = resp.json::<serde_json::Value>().await {
+        if let Ok(v) =
+            limits::response_json_limited::<serde_json::Value>(resp, limits::MAX_NETWORK_JSON_BYTES)
+                .await
+        {
             if let Some(items) = v.as_array() {
                 for it in items {
                     if let Some(l) = lrclib_value_to_lyrics(it) {
@@ -707,7 +713,10 @@ pub async fn from_netease(client: &reqwest::Client, title: &str, artist: &str) -
         .send()
         .await
         .ok()?;
-    let v: serde_json::Value = search.json().await.ok()?;
+    let v: serde_json::Value =
+        limits::response_json_limited(search, limits::MAX_NETWORK_JSON_BYTES)
+            .await
+            .ok()?;
     let songs = v.get("result")?.get("songs")?.as_array()?;
     let id = songs.first()?.get("id")?.as_i64()?;
     let ids = id.to_string();
@@ -745,7 +754,9 @@ async fn netease_lyric_v1(client: &reqwest::Client, ids: &str) -> Option<Lyrics>
         .send()
         .await
         .ok()?;
-    let v: serde_json::Value = resp.json().await.ok()?;
+    let v: serde_json::Value = limits::response_json_limited(resp, limits::MAX_NETWORK_JSON_BYTES)
+        .await
+        .ok()?;
     build_netease_lyrics(&v)
 }
 
@@ -857,7 +868,9 @@ async fn netease_lyric_eapi(client: &reqwest::Client, ids: &str) -> Option<Lyric
         .send()
         .await
         .ok()?;
-    let v: serde_json::Value = resp.json().await.ok()?;
+    let v: serde_json::Value = limits::response_json_limited(resp, limits::MAX_NETWORK_JSON_BYTES)
+        .await
+        .ok()?;
     build_netease_lyrics(&v)
 }
 
@@ -877,7 +890,10 @@ async fn netease_lyric_classic(client: &reqwest::Client, ids: &str) -> Option<Ly
         .send()
         .await
         .ok()?;
-    let lv: serde_json::Value = lyric.json().await.ok()?;
+    let lv: serde_json::Value =
+        limits::response_json_limited(lyric, limits::MAX_NETWORK_JSON_BYTES)
+            .await
+            .ok()?;
     let lrc = lv.get("lrc")?.get("lyric")?.as_str()?;
 
     if let Some(mut lyrics) = lyrics_from_text(lrc, "NetEase") {
@@ -1005,7 +1021,9 @@ pub async fn get_musixmatch_token(client: &reqwest::Client) -> Option<(String, S
         }
     }
 
-    let v: serde_json::Value = resp.json().await.ok()?;
+    let v: serde_json::Value = limits::response_json_limited(resp, limits::MAX_NETWORK_JSON_BYTES)
+        .await
+        .ok()?;
     let token = v.get("message")?.get("body")?.get("user_token")?.as_str()?;
     Some((token.to_string(), cookie_header))
 }
@@ -1039,7 +1057,9 @@ async fn fetch_musixmatch_raw(
         .send()
         .await
         .ok()?;
-    resp.json().await.ok()
+    limits::response_json_limited(resp, limits::MAX_NETWORK_JSON_BYTES)
+        .await
+        .ok()
 }
 
 async fn fetch_musixmatch_fuzzy(
@@ -1066,7 +1086,9 @@ async fn fetch_musixmatch_fuzzy(
         .send()
         .await
         .ok()?;
-    resp.json().await.ok()
+    limits::response_json_limited(resp, limits::MAX_NETWORK_JSON_BYTES)
+        .await
+        .ok()
 }
 
 // Parse Musixmatch "richsync" (word-by-word) into word-timed lines.

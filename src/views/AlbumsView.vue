@@ -223,8 +223,10 @@ const handleMenuDelete = async () => {
     cancelText: 'Cancel',
     onConfirm: async () => {
       const songs = await fetchAlbumTracks(album.name);
+      const consentToken = await store.requestDeleteConsent(songs.map((song) => song.path));
+      if (!consentToken) return;
       for (const song of songs) {
-        await store.deleteSong(song.path).catch(() => {});
+        await store.deleteSong(song.path, consentToken).catch(() => {});
       }
     },
   });

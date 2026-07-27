@@ -6,8 +6,7 @@ defineProps({
 });
 
 // Unique clip-path id per instance so multiple logos on one page don't clash.
-let _seq = 0;
-const cid = `tslogo-clip-${++_seq}-${Math.random().toString(36).slice(2, 7)}`;
+const cid = `tslogo-clip-${Math.random().toString(36).slice(2, 9)}`;
 const clipId = computed(() => cid);
 </script>
 

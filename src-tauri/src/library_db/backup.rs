@@ -13,7 +13,8 @@ use tauri::{AppHandle, Manager, Runtime, State};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::is_allowed_path;
-use crate::library_scan::canonicalize_directory;
+use crate::library_scan::{canonicalize_directory, canonicalize_existing_path};
+use crate::security::{ConsentAction, DestructiveConsentState};
 
 use super::{migrate, Db, APPLICATION_ID, SCHEMA, SCHEMA_VERSION};
 
@@ -522,11 +523,20 @@ fn restore_from_path(
 pub fn db_import_backup(
     app: AppHandle,
     db: State<Db>,
+    consent: State<DestructiveConsentState>,
     src: String,
+    consent_token: String,
 ) -> Result<ImportBackupResult, String> {
     let src_path = Path::new(&src);
     authorize_backup_path(&app, src_path)?;
     validate_backup_source(src_path)?;
+    let canonical = canonicalize_existing_path(src_path)
+        .map_err(|error| format!("Backup file is unavailable: {error}"))?;
+    consent.consume(
+        &consent_token,
+        ConsentAction::ImportBackup,
+        Some(canonical.to_string_lossy().as_ref()),
+    )?;
 
     // Resolve the current library.db path.
     let dir = app
@@ -560,8 +570,8 @@ pub async fn db_relocate_root(app: AppHandle, old_root: String) -> Result<Option
         database.1.smart_counts.lock().clear();
 
         // The webview never supplies the destination. Only the directory
-        // returned by the Rust-side picker can become a trusted root.
-        crate::library_scan::allow_root(&app, &canonical_new)?;
+        // returned by the Rust-side picker can become a trusted root. It is
+        // intentionally not exposed through the asset protocol.
         crate::reconfigure_watcher(&app)?;
         Ok(Some(canonical_string))
     })

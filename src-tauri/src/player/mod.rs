@@ -806,6 +806,9 @@ pub(crate) async fn playback_session_intent(
     player: State<'_, AudioPlayer>,
     intent: PlaybackIntent,
 ) -> Result<PlaybackSessionUpdate, String> {
+    // Canonicalize and authorize every new queue path before mutating session
+    // state. A rejected path can no longer leave a partially replaced queue.
+    let intent = intent.validate_and_authorize(&app)?;
     let update = player.session.apply(intent)?;
     if update.prepared_invalidated {
         invalidate_prepared_decoder(&player);
