@@ -48,7 +48,7 @@ notify = "6" #filesystem watching for library auto-update
 ebur128 = "0.1" #EBU R128 loudness analysis for volume normalization (ReplayGain)
 # NetEase eapi request signing (AES-128-ECB + MD5) to fetch word-by-word (yrc)
 # and romanized (romalrc) lyrics, which its plain web API does not expose.
-aes = "0.8"
+aes = "0.9"
 ecb = { version = "0.1", features = ["alloc"] }
 md-5 = "0.10"
 hex = "0.4"
