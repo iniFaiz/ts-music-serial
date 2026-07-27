@@ -62,7 +62,7 @@ discord-rich-presence = "1.1"
 keyring = { version = "3", features = ["windows-native"] }
 tauri-plugin-updater = "^2.10"
 trash = "^5"
-getrandom = "^0.3"
+getrandom = "^0.4"
 
 # Windows-only: native Taskbar thumbnail toolbar buttons (ITaskbarList3).
 # Pinned to the same `windows` major already pulled in by tauri/tao/wry so the

@@ -5962,7 +5962,7 @@ dependencies = [
  "discord-rich-presence",
  "ebur128",
  "ecb",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "hex",
  "image",
  "jwalk",
