@@ -34,7 +34,7 @@ parking_lot = "0.12" #faster, non-poisoning Mutex (no lock().unwrap() panic path
 # Embedded library database. `bundled` compiles SQLite from source (no system
 # dependency on Windows) with FTS5 enabled — used for full-text track search,
 # GROUP BY album/artist grouping and SQL smart-playlist evaluation.
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 walkdir = "2.5" #directory traversal
 jwalk = "0.8"
 lofty = "0.21" #audio metadata parsing
