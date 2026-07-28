@@ -77,6 +77,7 @@ fn authorize_cover_path<R: Runtime>(app: &AppHandle<R>, path: &Path) -> Result<(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_track_tags(
     app: AppHandle,
     db: State<'_, db::Db>,

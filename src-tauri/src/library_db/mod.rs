@@ -725,7 +725,7 @@ fn upsert_tracks_with_options(
 }
 
 pub(crate) fn remove_paths(db: &Db, paths: &[String]) -> Result<(), String> {
-    limits::validate_paths(&paths, limits::MAX_BATCH_PATHS)?;
+    limits::validate_paths(paths, limits::MAX_BATCH_PATHS)?;
     let mut conn = db.0.lock();
     let tx = conn.transaction().map_err(|e| e.to_string())?;
     for p in paths {

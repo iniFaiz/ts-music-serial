@@ -711,7 +711,7 @@ fn open_vinyl_scratch_window(app: AppHandle) -> Result<(), String> {
         .shadow(true)
         .background_color(tauri::webview::Color(0x11, 0x11, 0x13, 0xff))
         .skip_taskbar(false)
-        .drag_and_drop(false)
+        .disable_drag_drop_handler()
         .on_page_load(|_, payload| {
             #[cfg(debug_assertions)]
             eprintln!(
