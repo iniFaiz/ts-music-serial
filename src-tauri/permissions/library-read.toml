@@ -15,6 +15,7 @@ commands.allow = [
   "db_roots",
   "db_tracks_page",
   "db_search",
+  "db_global_search",
   "db_tracks_by_paths",
   "db_track",
   "db_random_track",
@@ -22,8 +23,10 @@ commands.allow = [
   "db_album_tracks",
   "db_artists",
   "db_artist_tracks",
-  "db_station_tracks",
+  "db_station_start",
+  "db_station_next",
   "db_has_genre",
+  "db_smart_count",
   "db_smart_tracks",
   "db_stat",
   "db_stats_summary",
@@ -45,4 +48,3 @@ commands.allow = [
   "db_export_backup",
   "discord_cover_art",
 ]
-

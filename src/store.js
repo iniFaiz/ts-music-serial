@@ -42,6 +42,10 @@ let statsVersionTimer = null;
 // the native generation token is designed to prevent.
 let playbackIntentTail = Promise.resolve();
 const queueMetadata = new Map();
+// Native station sessions keep only shuffled row IDs; the webview hydrates one
+// small metadata window at a time and replaces it when that window is exhausted.
+let activeStationSession = null;
+const STATION_BATCH_SIZE = 24;
 
 const nativeQueueEntry = (song) => {
   if (song.queueId) queueMetadata.set(song.queueId, { ...song });
@@ -1385,6 +1389,7 @@ export const store = reactive({
   },
 
   async playSong(song, newQueue = null, options = {}) {
+    if (!options.preserveStation) activeStationSession = null;
     if (newQueue && newQueue.length > 0) {
       this.queue = newQueue.map((s) => ({
         ...s,
@@ -2055,24 +2060,27 @@ export const store = reactive({
 
   // ---- Stations ---------------------------------------------------------
 
-  // Play a shuffled "station" built from every track by an artist or genre.
+  // Start a native shuffled station and hydrate only a small queue window.
   async playStation(type, key) {
-    let pool = [];
+    let batch = null;
     try {
-      pool = await invoke('db_station_tracks', { kind: type, key });
+      batch = await invoke('db_station_start', {
+        kind: type,
+        key,
+        limit: STATION_BATCH_SIZE,
+      });
     } catch (e) {
       console.error('Failed to load station', e);
     }
-    if (pool.length === 0) return;
-    const list = [...pool];
-    for (let i = list.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [list[i], list[j]] = [list[j], list[i]];
-    }
-    this.shuffleMode = false; // queue is already shuffled; play it straight
-    this.autoplayMode = true; // keep it going like a radio station
+    if (!batch?.tracks?.length) return;
+    activeStationSession = {
+      id: batch.session_id,
+      hasMore: !!batch.has_more,
+    };
+    this.shuffleMode = false; // native station order is already shuffled
+    this.autoplayMode = true; // requests the next lazy native window at the end
     this.recordRecent('station', `${type}:${key}`);
-    this.playSong(list[0], list);
+    this.playSong(batch.tracks[0], batch.tracks, { preserveStation: true });
   },
 
   // ---- Smart playlists --------------------------------------------------
@@ -2320,6 +2328,30 @@ export const store = reactive({
       });
 
       if (update.effect?.type === 'request_autoplay') {
+        if (activeStationSession) {
+          if (!activeStationSession.hasMore) {
+            activeStationSession = null;
+            await this.sendPlaybackIntent({ type: 'set_playing', playing: false });
+            this.playbackFinished = true;
+            return;
+          }
+          const batch = await invoke('db_station_next', {
+            sessionId: activeStationSession.id,
+            limit: STATION_BATCH_SIZE,
+          });
+          activeStationSession.hasMore = !!batch.has_more;
+          if (!batch.tracks?.length) {
+            activeStationSession = null;
+            await this.sendPlaybackIntent({ type: 'set_playing', playing: false });
+            this.playbackFinished = true;
+            return;
+          }
+          await this.playSong(batch.tracks[0], batch.tracks, {
+            autoplay: true,
+            preserveStation: true,
+          });
+          return;
+        }
         const song = await this.pickRandomSong();
         if (!song) {
           await this.sendPlaybackIntent({ type: 'set_playing', playing: false });

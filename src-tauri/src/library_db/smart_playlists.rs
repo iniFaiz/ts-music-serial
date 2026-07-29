@@ -6,12 +6,12 @@ use serde_json::Value;
 
 use crate::MusicTrack;
 
-use super::{now_ms, row_to_track, TRACK_COLS_T};
+use super::{now_ms, random_u64, row_to_track, TRACK_COLS_T};
 
 /// The dynamic part of a smart-playlist query. Every SQL identifier and
 /// operator is selected from an allowlist below; user values only ever travel
 /// through SQLite bind parameters.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct CompiledRules {
     where_sql: String,
     params: Vec<SqlValue>,
@@ -25,6 +25,9 @@ pub(super) fn smart_eval(
     limit: i64,
 ) -> Result<Vec<MusicTrack>, String> {
     let compiled = compile_rules(rules, now_ms());
+    if sort_by == "random" {
+        return smart_eval_random(conn, &compiled, limit);
+    }
     let mut sql = format!(
         "SELECT {TRACK_COLS_T}
          FROM tracks t
@@ -54,6 +57,78 @@ pub(super) fn smart_eval(
         out.push(row.map_err(|e| e.to_string())?);
     }
     Ok(out)
+}
+
+fn smart_random_segment(
+    conn: &Connection,
+    compiled: &CompiledRules,
+    comparison: &str,
+    start: i64,
+    limit: Option<i64>,
+) -> Result<Vec<MusicTrack>, String> {
+    let mut sql = format!(
+        "SELECT {TRACK_COLS_T}
+         FROM tracks t
+         LEFT JOIN stats s ON s.path = t.path
+         LEFT JOIN favorites f ON f.path = t.path
+         WHERE ({}) AND t.id {comparison} ?
+         ORDER BY t.id",
+        compiled.where_sql
+    );
+    let mut params = compiled.params.clone();
+    params.push(SqlValue::Integer(start));
+    if let Some(limit) = limit {
+        sql.push_str(" LIMIT ?");
+        params.push(SqlValue::Integer(limit));
+    }
+    let mut statement = conn.prepare(&sql).map_err(|error| error.to_string())?;
+    let tracks = statement
+        .query_map(params_from_iter(params.iter()), row_to_track)
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    Ok(tracks)
+}
+
+fn smart_eval_random(
+    conn: &Connection,
+    compiled: &CompiledRules,
+    limit: i64,
+) -> Result<Vec<MusicTrack>, String> {
+    let max_sql = format!(
+        "SELECT COALESCE(MAX(t.id), 0)
+         FROM tracks t
+         LEFT JOIN stats s ON s.path = t.path
+         LEFT JOIN favorites f ON f.path = t.path
+         WHERE {}",
+        compiled.where_sql
+    );
+    let max_id: i64 = conn
+        .query_row(&max_sql, params_from_iter(compiled.params.iter()), |row| {
+            row.get(0)
+        })
+        .map_err(|error| error.to_string())?;
+    if max_id <= 0 {
+        return Ok(Vec::new());
+    }
+    let start = (random_u64() % max_id as u64) as i64 + 1;
+    let bounded = (limit > 0).then_some(limit);
+    let mut tracks = smart_random_segment(conn, compiled, ">=", start, bounded)?;
+    let remaining = if limit > 0 {
+        limit.saturating_sub(tracks.len() as i64)
+    } else {
+        0
+    };
+    if limit == 0 || remaining > 0 {
+        tracks.extend(smart_random_segment(
+            conn,
+            compiled,
+            "<",
+            start,
+            (limit > 0).then_some(remaining),
+        )?);
+    }
+    Ok(tracks)
 }
 
 /// Count matches without materializing every track. A positive playlist limit
@@ -206,7 +281,7 @@ fn date_column(field: &str) -> Option<&'static str> {
     match field {
         "lastPlayed" => Some("COALESCE(s.last_played, 0)"),
         // Track dates are stored as seconds; smart rules compare milliseconds.
-        "dateAdded" => Some("(t.date_added * 1000.0)"),
+        "dateAdded" => Some("(t.first_seen_at * 1000.0)"),
         _ => None,
     }
 }
@@ -237,7 +312,7 @@ fn json_to_f64(value: &Value) -> f64 {
 fn compile_order_by(sort_by: &str, sort_order: &str) -> Option<&'static str> {
     let desc = sort_order.eq_ignore_ascii_case("desc");
     match (sort_by, desc) {
-        ("random", _) => Some("RANDOM()"),
+        ("random", _) => None,
         ("title", false) => Some("t.title COLLATE NOCASE ASC, t.id ASC"),
         ("title", true) => Some("t.title COLLATE NOCASE DESC, t.id ASC"),
         ("artist", false) => Some("t.artist COLLATE NOCASE ASC, t.id ASC"),
@@ -254,8 +329,8 @@ fn compile_order_by(sort_by: &str, sort_order: &str) -> Option<&'static str> {
         ("playCount", true) => Some("COALESCE(s.play_count, 0) DESC, t.id ASC"),
         ("lastPlayed", false) => Some("COALESCE(s.last_played, 0) ASC, t.id ASC"),
         ("lastPlayed", true) => Some("COALESCE(s.last_played, 0) DESC, t.id ASC"),
-        ("dateAdded", false) => Some("t.date_added ASC, t.id ASC"),
-        ("dateAdded", true) => Some("t.date_added DESC, t.id ASC"),
+        ("dateAdded", false) => Some("t.first_seen_at ASC, t.id ASC"),
+        ("dateAdded", true) => Some("t.first_seen_at DESC, t.id ASC"),
         _ => None,
     }
 }
@@ -278,13 +353,16 @@ mod tests {
                genre TEXT,
                duration_secs INTEGER NOT NULL DEFAULT 0,
                date_added INTEGER NOT NULL DEFAULT 0,
+               first_seen_at INTEGER NOT NULL DEFAULT 0,
                year INTEGER,
                track_number INTEGER,
                has_cover INTEGER NOT NULL DEFAULT 0,
                sample_rate INTEGER,
                bit_depth INTEGER,
                track_gain_db REAL,
-               track_peak REAL
+               track_peak REAL,
+               file_size INTEGER,
+               mtime_ns INTEGER
              );
              CREATE TABLE stats (
                path TEXT PRIMARY KEY,
@@ -314,8 +392,8 @@ mod tests {
     ) {
         conn.execute(
             "INSERT INTO tracks
-             (path, title, artist, album, genre, duration_secs, date_added, year)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+             (path, title, artist, album, genre, duration_secs, date_added, first_seen_at, year)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?8)",
             params![path, title, artist, album, genre, duration, date_added, year],
         )
         .expect("insert track");
@@ -464,6 +542,9 @@ mod tests {
         );
         assert_eq!(smart_count(&conn, &rules, 2).expect("count rules"), 2);
         assert_eq!(smart_count(&conn, &rules, 0).expect("count rules"), 3);
+        let random = smart_eval(&conn, &rules, "random", "asc", 2).expect("random window");
+        assert_eq!(random.len(), 2);
+        assert_ne!(random[0].path, random[1].path);
     }
 
     #[test]

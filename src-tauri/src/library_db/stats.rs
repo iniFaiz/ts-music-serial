@@ -7,7 +7,7 @@ use tauri::State;
 use crate::MusicTrack;
 
 use super::{
-    collect_tracks, now_ms, ArtistRow, Db, GenreRow, StatRow, StatsSummary, TRACK_COLS,
+    collect_tracks, now_ms, random_u64, ArtistRow, Db, GenreRow, StatRow, StatsSummary, TRACK_COLS,
     TRACK_COLS_T,
 };
 
@@ -138,7 +138,7 @@ pub fn db_on_repeat(db: State<Db>, limit: i64) -> Result<Vec<MusicTrack>, String
 #[tauri::command]
 pub fn db_recently_added(db: State<Db>, limit: i64) -> Result<Vec<MusicTrack>, String> {
     let conn = db.0.lock();
-    let sql = format!("SELECT {TRACK_COLS} FROM tracks ORDER BY date_added DESC LIMIT ?1");
+    let sql = format!("SELECT {TRACK_COLS} FROM tracks ORDER BY first_seen_at DESC LIMIT ?1");
     collect_tracks(&conn, &sql, params![limit])
 }
 
@@ -146,13 +146,42 @@ pub fn db_recently_added(db: State<Db>, limit: i64) -> Result<Vec<MusicTrack>, S
 pub fn db_rediscover(db: State<Db>, limit: i64) -> Result<Vec<MusicTrack>, String> {
     let conn = db.0.lock();
     let cutoff = now_ms() - 60 * 86_400_000;
-    let sql = format!(
+    let max_id: i64 = conn
+        .query_row(
+            "SELECT COALESCE(MAX(t.id), 0)
+             FROM tracks t JOIN favorites f ON f.path = t.path
+             LEFT JOIN stats s ON s.path = t.path
+             WHERE COALESCE(s.last_played, 0) = 0 OR s.last_played < ?1",
+            params![cutoff],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    if max_id <= 0 || limit <= 0 {
+        return Ok(Vec::new());
+    }
+    let start = (random_u64() % max_id as u64) as i64 + 1;
+    let forward = format!(
         "SELECT {TRACK_COLS_T} FROM tracks t JOIN favorites f ON f.path = t.path
          LEFT JOIN stats s ON s.path = t.path
-         WHERE COALESCE(s.last_played, 0) = 0 OR s.last_played < ?1
-         ORDER BY RANDOM() LIMIT ?2"
+         WHERE (COALESCE(s.last_played, 0) = 0 OR s.last_played < ?1) AND t.id >= ?2
+         ORDER BY t.id LIMIT ?3"
     );
-    collect_tracks(&conn, &sql, params![cutoff, limit])
+    let mut tracks = collect_tracks(&conn, &forward, params![cutoff, start, limit])?;
+    let remaining = limit.saturating_sub(tracks.len() as i64);
+    if remaining > 0 {
+        let wrapped = format!(
+            "SELECT {TRACK_COLS_T} FROM tracks t JOIN favorites f ON f.path = t.path
+             LEFT JOIN stats s ON s.path = t.path
+             WHERE (COALESCE(s.last_played, 0) = 0 OR s.last_played < ?1) AND t.id < ?2
+             ORDER BY t.id LIMIT ?3"
+        );
+        tracks.extend(collect_tracks(
+            &conn,
+            &wrapped,
+            params![cutoff, start, remaining],
+        )?);
+    }
+    Ok(tracks)
 }
 
 #[tauri::command]

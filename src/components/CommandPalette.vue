@@ -21,6 +21,7 @@ const activeIndex = ref(0);
 const inputEl = ref(null);
 const listEl = ref(null);
 let debounce = null;
+let searchSequence = 0;
 
 const playlists = computed(() => {
   const q = query.value.trim().toLowerCase();
@@ -37,7 +38,7 @@ const items = computed(() => [
   ...genres.value.map((g) => ({ type: 'genre', data: g })),
 ]);
 
-async function runSearch() {
+async function runSearch(requestId) {
   const q = query.value.trim();
   if (!q) {
     songs.value = [];
@@ -48,16 +49,19 @@ async function runSearch() {
     return;
   }
   try {
-    const [s, al, ar, gn] = await Promise.all([
-      invoke('db_search', { query: q, limit: 6 }),
-      invoke('db_albums', { search: q }),
-      invoke('db_artists', { search: q }),
-      invoke('db_genres', { search: q }),
-    ]);
-    songs.value = s || [];
-    albums.value = (al || []).slice(0, 4);
-    artists.value = (ar || []).slice(0, 4);
-    genres.value = (gn || []).slice(0, 4);
+    const result = await invoke('db_global_search', {
+      query: q,
+      songLimit: 6,
+      albumLimit: 4,
+      artistLimit: 4,
+      genreLimit: 4,
+      requestId,
+    });
+    if (result.request_id !== searchSequence) return;
+    songs.value = result.songs || [];
+    albums.value = result.albums || [];
+    artists.value = result.artists || [];
+    genres.value = result.genres || [];
     activeIndex.value = 0;
     nextTick(() => {
       if (listEl.value) listEl.value.scrollTop = 0;
@@ -69,7 +73,8 @@ async function runSearch() {
 
 watch(query, () => {
   if (debounce) clearTimeout(debounce);
-  debounce = setTimeout(runSearch, 140);
+  const requestId = ++searchSequence;
+  debounce = setTimeout(() => runSearch(requestId), 140);
 });
 
 watch(
@@ -88,6 +93,7 @@ watch(
       window.addEventListener('keydown', onKeydown, true);
       nextTick(() => inputEl.value && inputEl.value.focus());
     } else {
+      searchSequence++;
       window.removeEventListener('keydown', onKeydown, true);
     }
   }

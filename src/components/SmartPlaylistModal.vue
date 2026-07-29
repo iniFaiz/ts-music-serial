@@ -129,13 +129,10 @@ const recomputePreview = () => {
   previewTimer = setTimeout(async () => {
     const limit = limitEnabled.value ? Number(form.value.limit) || 0 : 0;
     try {
-      const tracks = await invoke('db_smart_tracks', {
+      previewCount.value = await invoke('db_smart_count', {
         rules: form.value.rules,
-        sortBy: form.value.sortBy,
-        sortOrder: form.value.sortOrder,
         limit,
       });
-      previewCount.value = tracks.length;
     } catch {
       previewCount.value = 0;
     }

@@ -516,6 +516,7 @@ fn restore_from_path(
     }
 
     db.1.smart_counts.lock().clear();
+    db.1.station_sessions.lock().clear();
     Ok(ImportBackupResult { roots })
 }
 
@@ -568,6 +569,7 @@ pub async fn db_relocate_root(app: AppHandle, old_root: String) -> Result<Option
             relocate_root(&mut connection, &old_root, &canonical_new)?;
         }
         database.1.smart_counts.lock().clear();
+        database.1.station_sessions.lock().clear();
 
         // The webview never supplies the destination. Only the directory
         // returned by the Rust-side picker can become a trusted root. It is

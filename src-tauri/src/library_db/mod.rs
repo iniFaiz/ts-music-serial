@@ -37,6 +37,12 @@ use crate::{limits, security, MusicTrack};
 #[derive(Default)]
 pub struct DbCache {
     smart_counts: Mutex<HashMap<String, (i64, String, i64)>>,
+    station_sessions: Mutex<HashMap<String, StationSession>>,
+}
+
+pub(super) struct StationSession {
+    pub(super) ids: Vec<i64>,
+    pub(super) cursor: usize,
 }
 
 // The connection normally contains `Some`.  Restore briefly takes ownership
@@ -97,7 +103,7 @@ impl Db {
 }
 
 pub(crate) const APPLICATION_ID: i32 = 0x5453_4D31; // "TSM1"
-pub(crate) const SCHEMA_VERSION: i32 = 2;
+pub(crate) const SCHEMA_VERSION: i32 = 3;
 
 // Cheap signature that changes whenever the tracks / stats / favorites that a
 // smart playlist can match change (track added/removed, played, skipped, or
@@ -118,8 +124,8 @@ fn library_fingerprint(conn: &Connection) -> i64 {
 // Column list shared by every "give me tracks" query, in the order row_to_track
 // expects. `_T` is the alias-qualified variant for queries that JOIN `stats`
 // (which also has a `path` column, so the bare name would be ambiguous).
-const TRACK_COLS: &str = "path, title, artist, album, genre, duration_secs, date_added, year, track_number, has_cover, sample_rate, bit_depth, track_gain_db, track_peak";
-const TRACK_COLS_T: &str = "t.path, t.title, t.artist, t.album, t.genre, t.duration_secs, t.date_added, t.year, t.track_number, t.has_cover, t.sample_rate, t.bit_depth, t.track_gain_db, t.track_peak";
+const TRACK_COLS: &str = "path, title, artist, album, genre, duration_secs, first_seen_at, year, track_number, has_cover, sample_rate, bit_depth, track_gain_db, track_peak, file_size, mtime_ns";
+const TRACK_COLS_T: &str = "t.path, t.title, t.artist, t.album, t.genre, t.duration_secs, t.first_seen_at, t.year, t.track_number, t.has_cover, t.sample_rate, t.bit_depth, t.track_gain_db, t.track_peak, t.file_size, t.mtime_ns";
 
 fn row_to_track(row: &Row) -> rusqlite::Result<MusicTrack> {
     Ok(MusicTrack {
@@ -137,6 +143,8 @@ fn row_to_track(row: &Row) -> rusqlite::Result<MusicTrack> {
         bit_depth: row.get::<_, Option<i64>>(11)?.map(|v| v as u8),
         track_gain_db: row.get::<_, Option<f64>>(12)?.map(|v| v as f32),
         track_peak: row.get::<_, Option<f64>>(13)?.map(|v| v as f32),
+        file_size: row.get::<_, Option<i64>>(14)?.unwrap_or(0).max(0) as u64,
+        mtime_ns: row.get::<_, Option<i64>>(15)?.unwrap_or(0),
     })
 }
 
@@ -266,10 +274,16 @@ fn normalize_verbatim_paths(tx: &Transaction<'_>) -> Result<(), String> {
             .map_err(|error| error.to_string())?;
         if target_exists {
             tx.execute(
-                "UPDATE tracks SET fingerprint = COALESCE(
-                    fingerprint,
-                    (SELECT fingerprint FROM tracks WHERE path = ?2)
-                 ) WHERE path = ?1",
+                "UPDATE tracks SET
+                   fingerprint = COALESCE(
+                     fingerprint,
+                     (SELECT fingerprint FROM tracks WHERE path = ?2)
+                   ),
+                   first_seen_at = MIN(
+                     first_seen_at,
+                     COALESCE((SELECT first_seen_at FROM tracks WHERE path = ?2), first_seen_at)
+                   )
+                 WHERE path = ?1",
                 params![target, source],
             )
             .map_err(|error| error.to_string())?;
@@ -325,6 +339,51 @@ fn normalize_verbatim_paths(tx: &Transaction<'_>) -> Result<(), String> {
     Ok(())
 }
 
+fn rebuild_search_index(tx: &Transaction<'_>) -> Result<(), String> {
+    for (stage, sql) in [
+        (
+            "drop legacy triggers",
+            "DROP TRIGGER IF EXISTS tracks_ai;
+             DROP TRIGGER IF EXISTS tracks_ad;
+             DROP TRIGGER IF EXISTS tracks_au;",
+        ),
+        (
+            "create genre index",
+            "CREATE VIRTUAL TABLE IF NOT EXISTS tracks_search USING fts5(
+           title, artist, album, genre,
+           content='tracks', content_rowid='id',
+           tokenize=\"unicode61 remove_diacritics 2\"
+         );",
+        ),
+        (
+            "create sync triggers",
+            "CREATE TRIGGER tracks_ai AFTER INSERT ON tracks BEGIN
+           INSERT INTO tracks_search(rowid, title, artist, album, genre)
+           VALUES (new.id, new.title, new.artist, new.album, new.genre);
+         END;
+         CREATE TRIGGER tracks_ad AFTER DELETE ON tracks BEGIN
+           INSERT INTO tracks_search(tracks_search, rowid, title, artist, album, genre)
+           VALUES ('delete', old.id, old.title, old.artist, old.album, old.genre);
+         END;
+         CREATE TRIGGER tracks_au AFTER UPDATE ON tracks BEGIN
+           INSERT INTO tracks_search(tracks_search, rowid, title, artist, album, genre)
+           VALUES ('delete', old.id, old.title, old.artist, old.album, old.genre);
+           INSERT INTO tracks_search(rowid, title, artist, album, genre)
+           VALUES (new.id, new.title, new.artist, new.album, new.genre);
+         END;",
+        ),
+        (
+            "populate index",
+            "INSERT INTO tracks_search(tracks_search) VALUES ('rebuild');",
+        ),
+    ] {
+        tx.execute_batch(sql).map_err(|error| {
+            format!("Failed to rebuild library search index ({stage}): {error}")
+        })?;
+    }
+    Ok(())
+}
+
 fn migrate(conn: &mut Connection) -> Result<(), String> {
     let application_id: i32 = conn
         .pragma_query_value(None, "application_id", |row| row.get(0))
@@ -361,14 +420,55 @@ fn migrate(conn: &mut Connection) -> Result<(), String> {
         tx.execute_batch("CREATE INDEX IF NOT EXISTS idx_tracks_fp ON tracks(fingerprint);")
             .map_err(|e| e.to_string())?;
     }
+    let has_file_size: bool = tx
+        .prepare("SELECT 1 FROM pragma_table_info('tracks') WHERE name = 'file_size'")
+        .and_then(|mut statement| statement.exists([]))
+        .map_err(|error| error.to_string())?;
+    if !has_file_size {
+        tx.execute_batch("ALTER TABLE tracks ADD COLUMN file_size INTEGER;")
+            .map_err(|error| error.to_string())?;
+    }
+    let has_mtime_ns: bool = tx
+        .prepare("SELECT 1 FROM pragma_table_info('tracks') WHERE name = 'mtime_ns'")
+        .and_then(|mut statement| statement.exists([]))
+        .map_err(|error| error.to_string())?;
+    if !has_mtime_ns {
+        tx.execute_batch("ALTER TABLE tracks ADD COLUMN mtime_ns INTEGER;")
+            .map_err(|error| error.to_string())?;
+    }
+    let has_first_seen_at: bool = tx
+        .prepare("SELECT 1 FROM pragma_table_info('tracks') WHERE name = 'first_seen_at'")
+        .and_then(|mut statement| statement.exists([]))
+        .map_err(|error| error.to_string())?;
+    if !has_first_seen_at {
+        tx.execute_batch(
+            "ALTER TABLE tracks ADD COLUMN first_seen_at INTEGER NOT NULL DEFAULT 0;
+             UPDATE tracks SET first_seen_at = date_added WHERE first_seen_at = 0;",
+        )
+        .map_err(|error| error.to_string())?;
+    }
+    tx.execute_batch("CREATE INDEX IF NOT EXISTS idx_tracks_first_seen ON tracks(first_seen_at);")
+        .map_err(|error| error.to_string())?;
     if version < 2 {
         normalize_verbatim_paths(&tx)?;
+    }
+    if version < 3 {
+        rebuild_search_index(&tx)?;
     }
     tx.pragma_update(None, "application_id", APPLICATION_ID)
         .map_err(|e| format!("Failed to set database application id: {e}"))?;
     tx.pragma_update(None, "user_version", SCHEMA_VERSION)
         .map_err(|e| format!("Failed to set database schema version: {e}"))?;
-    tx.commit().map_err(|e| e.to_string())
+    tx.commit().map_err(|e| e.to_string())?;
+    if version < 3 {
+        // Dropping an external-content FTS5 table inside the same transaction
+        // that creates/rebuilds its replacement can fail at commit on SQLite.
+        // The old v2 index is unreferenced once the new triggers are committed,
+        // so reclaim it safely afterward.
+        conn.execute_batch("DROP TABLE IF EXISTS tracks_fts;")
+            .map_err(|error| format!("Failed to remove legacy search index: {error}"))?;
+    }
+    Ok(())
 }
 
 const SCHEMA: &str = r#"
@@ -385,13 +485,17 @@ CREATE TABLE IF NOT EXISTS tracks (
   genre         TEXT,
   duration_secs INTEGER NOT NULL DEFAULT 0,
   date_added    INTEGER NOT NULL DEFAULT 0,
+  first_seen_at INTEGER NOT NULL DEFAULT 0,
   year          INTEGER,
   track_number  INTEGER,
   has_cover     INTEGER NOT NULL DEFAULT 0,
   sample_rate   INTEGER,
   bit_depth     INTEGER,
   track_gain_db REAL,
-  track_peak    REAL
+  track_peak    REAL,
+  fingerprint   TEXT,
+  file_size     INTEGER,
+  mtime_ns      INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_tracks_album  ON tracks(album);
 CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks(artist);
@@ -401,24 +505,24 @@ CREATE INDEX IF NOT EXISTS idx_tracks_title  ON tracks(title COLLATE NOCASE);
 
 -- Diacritic-insensitive full-text index over the searchable text columns, kept
 -- in sync with `tracks` by triggers (external-content FTS5 keyed on tracks.id).
-CREATE VIRTUAL TABLE IF NOT EXISTS tracks_fts USING fts5(
-  title, artist, album,
+CREATE VIRTUAL TABLE IF NOT EXISTS tracks_search USING fts5(
+  title, artist, album, genre,
   content='tracks', content_rowid='id',
   tokenize="unicode61 remove_diacritics 2"
 );
 CREATE TRIGGER IF NOT EXISTS tracks_ai AFTER INSERT ON tracks BEGIN
-  INSERT INTO tracks_fts(rowid, title, artist, album)
-  VALUES (new.id, new.title, new.artist, new.album);
+  INSERT INTO tracks_search(rowid, title, artist, album, genre)
+  VALUES (new.id, new.title, new.artist, new.album, new.genre);
 END;
 CREATE TRIGGER IF NOT EXISTS tracks_ad AFTER DELETE ON tracks BEGIN
-  INSERT INTO tracks_fts(tracks_fts, rowid, title, artist, album)
-  VALUES ('delete', old.id, old.title, old.artist, old.album);
+  INSERT INTO tracks_search(tracks_search, rowid, title, artist, album, genre)
+  VALUES ('delete', old.id, old.title, old.artist, old.album, old.genre);
 END;
 CREATE TRIGGER IF NOT EXISTS tracks_au AFTER UPDATE ON tracks BEGIN
-  INSERT INTO tracks_fts(tracks_fts, rowid, title, artist, album)
-  VALUES ('delete', old.id, old.title, old.artist, old.album);
-  INSERT INTO tracks_fts(rowid, title, artist, album)
-  VALUES (new.id, new.title, new.artist, new.album);
+  INSERT INTO tracks_search(tracks_search, rowid, title, artist, album, genre)
+  VALUES ('delete', old.id, old.title, old.artist, old.album, old.genre);
+  INSERT INTO tracks_search(rowid, title, artist, album, genre)
+  VALUES (new.id, new.title, new.artist, new.album, new.genre);
 END;
 
 CREATE TABLE IF NOT EXISTS stats (
@@ -481,7 +585,7 @@ CREATE TABLE IF NOT EXISTS cover_art (
 
 // Whitelist sort keys → SQL so the interpolated ORDER BY can never carry
 // user-controlled text. `p` is a table-alias prefix ("" for a plain query, "t."
-// when the query JOINs another table — e.g. tracks_fts, which also has
+// when the query JOINs another table — e.g. tracks_search, which also has
 // title/artist/album columns, so the bare names would be ambiguous).
 fn sort_col(sort_by: &str, p: &str) -> String {
     match sort_by {
@@ -489,7 +593,7 @@ fn sort_col(sort_by: &str, p: &str) -> String {
         "album" => format!("{p}album COLLATE NOCASE, {p}track_number"),
         "year" => format!("{p}year"),
         "duration" | "duration_secs" => format!("{p}duration_secs"),
-        "dateAdded" | "date_added" => format!("{p}date_added"),
+        "dateAdded" | "date_added" => format!("{p}first_seen_at"),
         "track_number" => format!("{p}track_number"),
         _ => format!("{p}title COLLATE NOCASE"),
     }
@@ -615,6 +719,17 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+fn random_u64() -> u64 {
+    let mut bytes = [0_u8; 8];
+    if getrandom::fill(&mut bytes).is_ok() {
+        u64::from_le_bytes(bytes)
+    } else {
+        // OS randomness is expected to succeed; this fallback only preserves
+        // non-security-sensitive playback behavior on an unusual platform.
+        now_ms() as u64 ^ (std::process::id() as u64).rotate_left(17)
+    }
+}
+
 // ---- Library mutation -------------------------------------------------------
 
 // Insert/update scanned tracks. Returns how many were newly inserted (existing
@@ -626,48 +741,17 @@ pub fn db_upsert_tracks(db: State<Db>, tracks: Vec<MusicTrack>) -> Result<usize,
 // Used by the native scanner so metadata can be indexed without crossing IPC.
 // Memory usage is bounded by the caller's batch size.
 pub(crate) fn upsert_tracks(db: &Db, tracks: Vec<MusicTrack>) -> Result<usize, String> {
-    upsert_tracks_with_options(db, tracks, false)
+    upsert_tracks_with_options(db, tracks)
 }
 
-// Watcher batches are small and represent actual writes/renames, so refresh
-// their fingerprints as well as metadata. Full scans keep existing hashes to
-// avoid another 128 KiB of IO for every unchanged file.
-pub(crate) fn upsert_changed_tracks(db: &Db, tracks: Vec<MusicTrack>) -> Result<usize, String> {
-    upsert_tracks_with_options(db, tracks, true)
-}
-
-fn upsert_tracks_with_options(
-    db: &Db,
-    tracks: Vec<MusicTrack>,
-    refresh_fingerprints: bool,
-) -> Result<usize, String> {
-    // Compute content fingerprints for tracks that don't have one yet (new files,
-    // plus pre-fingerprint rows getting backfilled on rescan). Hashing reads
-    // ~128 KiB per file, so it happens in parallel and OUTSIDE the connection
-    // lock — the UI keeps querying while a big import is being hashed.
-    let need_fp: Vec<String> = {
-        let conn = db.0.lock();
-        let mut has_fingerprint = conn
-            .prepare("SELECT fingerprint IS NOT NULL FROM tracks WHERE path = ?1")
-            .map_err(|e| e.to_string())?;
-        let mut paths = Vec::new();
-        for track in &tracks {
-            let already_hashed =
-                match has_fingerprint.query_row(params![track.path], |row| row.get::<_, bool>(0)) {
-                    Ok(value) => value,
-                    Err(rusqlite::Error::QueryReturnedNoRows) => false,
-                    Err(error) => return Err(error.to_string()),
-                };
-            if refresh_fingerprints || !already_hashed {
-                paths.push(track.path.clone());
-            }
-        }
-        paths
-    };
+fn upsert_tracks_with_options(db: &Db, tracks: Vec<MusicTrack>) -> Result<usize, String> {
+    // The scanner only passes new or signature-changed files. Hashing reads
+    // ~128 KiB per file, so it runs in parallel and outside the connection lock.
+    let need_fp: Vec<String> = tracks.iter().map(|track| track.path.clone()).collect();
     let fps: HashMap<String, String> = need_fp
         .into_par_iter()
         .map(|p| {
-            // '' = tried but unreadable, so the backfill doesn't retry forever.
+            // '' records an attempted but unreadable fingerprint.
             let fp = crate::compute_fingerprint(Path::new(&p)).unwrap_or_default();
             (p, fp)
         })
@@ -682,16 +766,17 @@ fn upsert_tracks_with_options(
             .map_err(|e| e.to_string())?;
         let mut upsert = tx
             .prepare(
-                "INSERT INTO tracks (path, title, artist, album, genre, duration_secs, date_added, year, track_number, has_cover, sample_rate, bit_depth, track_gain_db, track_peak, fingerprint)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
+                "INSERT INTO tracks (path, title, artist, album, genre, duration_secs, date_added, first_seen_at, year, track_number, has_cover, sample_rate, bit_depth, track_gain_db, track_peak, fingerprint, file_size, mtime_ns)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)
                  ON CONFLICT(path) DO UPDATE SET
                    title=excluded.title, artist=excluded.artist, album=excluded.album,
                    genre=excluded.genre, duration_secs=excluded.duration_secs,
-                   date_added=excluded.date_added, year=excluded.year,
-                   track_number=excluded.track_number, has_cover=excluded.has_cover,
+                   year=excluded.year, track_number=excluded.track_number,
+                   has_cover=excluded.has_cover,
                    sample_rate=excluded.sample_rate, bit_depth=excluded.bit_depth,
                    track_gain_db=excluded.track_gain_db, track_peak=excluded.track_peak,
-                   fingerprint=COALESCE(excluded.fingerprint, fingerprint)",
+                   fingerprint=excluded.fingerprint, file_size=excluded.file_size,
+                   mtime_ns=excluded.mtime_ns",
             )
             .map_err(|e| e.to_string())?;
         for t in &tracks {
@@ -713,6 +798,8 @@ fn upsert_tracks_with_options(
                     t.track_gain_db.map(|v| v as f64),
                     t.track_peak.map(|v| v as f64),
                     fps.get(&t.path),
+                    t.file_size.min(i64::MAX as u64) as i64,
+                    t.mtime_ns,
                 ])
                 .map_err(|e| e.to_string())?;
             if is_new {
@@ -722,6 +809,31 @@ fn upsert_tracks_with_options(
     }
     tx.commit().map_err(|e| e.to_string())?;
     Ok(new_count)
+}
+
+/// Select only candidates whose cheap filesystem signature differs from the
+/// indexed row. NULL signatures are the one-time migration/backfill case.
+pub(crate) fn paths_requiring_metadata(
+    db: &Db,
+    candidates: &[(std::path::PathBuf, i64, i64)],
+) -> Result<Vec<std::path::PathBuf>, String> {
+    let conn = db.0.lock();
+    let mut statement = conn
+        .prepare("SELECT file_size, mtime_ns FROM tracks WHERE path = ?1")
+        .map_err(|error| error.to_string())?;
+    let mut changed = Vec::new();
+    for (path, file_size, mtime_ns) in candidates {
+        let indexed = statement.query_row(params![path.to_string_lossy()], |row| {
+            Ok((row.get::<_, Option<i64>>(0)?, row.get::<_, Option<i64>>(1)?))
+        });
+        match indexed {
+            Ok((Some(indexed_size), Some(indexed_mtime)))
+                if indexed_size == *file_size && indexed_mtime == *mtime_ns => {}
+            Ok(_) | Err(rusqlite::Error::QueryReturnedNoRows) => changed.push(path.clone()),
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    Ok(changed)
 }
 
 pub(crate) fn remove_paths(db: &Db, paths: &[String]) -> Result<(), String> {
@@ -851,10 +963,16 @@ fn prune_gone_rows(
             // Keep the original library-add date so a moved file doesn't reappear
             // under "Recently Added".
             tx.execute(
-                "UPDATE tracks SET date_added = MIN(
-                   date_added,
-                   COALESCE((SELECT date_added FROM tracks WHERE path = ?2), date_added)
-                 ) WHERE path = ?1",
+                "UPDATE tracks SET
+                   first_seen_at = MIN(
+                     first_seen_at,
+                     COALESCE((SELECT first_seen_at FROM tracks WHERE path = ?2), first_seen_at)
+                   ),
+                   date_added = MIN(
+                     date_added,
+                     COALESCE((SELECT date_added FROM tracks WHERE path = ?2), date_added)
+                   )
+                 WHERE path = ?1",
                 params![new_path, old_path],
             )
             .map_err(|e| e.to_string())?;
@@ -940,7 +1058,7 @@ pub(crate) fn reindex_track(
            title=?2, artist=?3, album=?4, genre=?5, duration_secs=?6, year=?7,
            track_number=?8, has_cover=?9, sample_rate=?10, bit_depth=?11,
            track_gain_db=?12, track_peak=?13,
-           fingerprint=COALESCE(?14, fingerprint)
+           fingerprint=COALESCE(?14, fingerprint), file_size=?15, mtime_ns=?16
          WHERE path=?1",
         params![
             t.path,
@@ -957,6 +1075,8 @@ pub(crate) fn reindex_track(
             t.track_gain_db.map(|v| v as f64),
             t.track_peak.map(|v| v as f64),
             fingerprint,
+            t.file_size.min(i64::MAX as u64) as i64,
+            t.mtime_ns,
         ],
     )
     .map_err(|e| e.to_string())?;
@@ -1081,13 +1201,18 @@ pub fn db_reset(
     consent_token: String,
 ) -> Result<(), String> {
     consent.consume(&consent_token, security::ConsentAction::ResetLibrary, None)?;
-    let conn = db.0.lock();
-    conn.execute_batch(
-        "DELETE FROM tracks; DELETE FROM stats; DELETE FROM favorites;
-         DELETE FROM playlist_items; DELETE FROM playlists; DELETE FROM roots;
-         DELETE FROM pending_roots; DELETE FROM recents;",
-    )
-    .map_err(|e| e.to_string())
+    {
+        let conn = db.0.lock();
+        conn.execute_batch(
+            "DELETE FROM tracks; DELETE FROM stats; DELETE FROM favorites;
+             DELETE FROM playlist_items; DELETE FROM playlists; DELETE FROM roots;
+             DELETE FROM pending_roots; DELETE FROM recents;",
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    db.1.smart_counts.lock().clear();
+    db.1.station_sessions.lock().clear();
+    Ok(())
 }
 
 // ---- Roots ------------------------------------------------------------------
@@ -1428,6 +1553,148 @@ mod indexing_tests {
                 params![path.to_string_lossy(), fingerprint],
             )
             .expect("insert test track");
+    }
+
+    fn music_track(path: &str, first_seen_at: u64, file_size: u64, mtime_ns: i64) -> MusicTrack {
+        MusicTrack {
+            path: path.to_string(),
+            title: "Song".to_string(),
+            artist: "Artist".to_string(),
+            album: "Album".to_string(),
+            genre: Some("Genre".to_string()),
+            duration_secs: 180,
+            date_added: first_seen_at,
+            year: Some(2026),
+            track_number: Some(1),
+            has_cover: false,
+            sample_rate: Some(44_100),
+            bit_depth: Some(16),
+            track_gain_db: None,
+            track_peak: None,
+            file_size,
+            mtime_ns,
+        }
+    }
+
+    #[test]
+    fn filesystem_signatures_skip_unchanged_candidates() {
+        let db = memory_db();
+        db.0.lock()
+            .execute(
+                "INSERT INTO tracks
+                 (path, title, artist, album, file_size, mtime_ns)
+                 VALUES ('same.mp3', 'Same', 'Artist', 'Album', 100, 200)",
+                [],
+            )
+            .expect("insert signature row");
+        let candidates = vec![
+            (PathBuf::from("same.mp3"), 100, 200),
+            (PathBuf::from("changed.mp3"), 101, 201),
+        ];
+        let changed = paths_requiring_metadata(&db, &candidates).expect("compare signatures");
+        assert_eq!(changed, vec![PathBuf::from("changed.mp3")]);
+
+        let changed_signature = vec![(PathBuf::from("same.mp3"), 100, 201)];
+        assert_eq!(
+            paths_requiring_metadata(&db, &changed_signature).expect("detect changed mtime"),
+            vec![PathBuf::from("same.mp3")]
+        );
+    }
+
+    #[test]
+    fn metadata_refresh_preserves_first_seen_time() {
+        let db = memory_db();
+        upsert_tracks(&db, vec![music_track("song.mp3", 100, 10, 20)]).expect("insert track");
+        upsert_tracks(&db, vec![music_track("song.mp3", 999, 11, 21)]).expect("refresh track");
+        let (first_seen_at, file_size, mtime_ns): (i64, i64, i64) =
+            db.0.lock()
+                .query_row(
+                    "SELECT first_seen_at, file_size, mtime_ns FROM tracks WHERE path = 'song.mp3'",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .expect("read refreshed track");
+        assert_eq!(first_seen_at, 100);
+        assert_eq!((file_size, mtime_ns), (11, 21));
+    }
+
+    #[test]
+    fn schema_v3_migrates_signatures_first_seen_and_genre_fts() {
+        let mut connection = Connection::open_in_memory().expect("open v2 database");
+        connection
+            .execute_batch(
+                "CREATE TABLE tracks (
+                   id INTEGER PRIMARY KEY,
+                   path TEXT NOT NULL UNIQUE,
+                   title TEXT NOT NULL DEFAULT '',
+                   artist TEXT NOT NULL DEFAULT '',
+                   album TEXT NOT NULL DEFAULT '',
+                   genre TEXT,
+                   duration_secs INTEGER NOT NULL DEFAULT 0,
+                   date_added INTEGER NOT NULL DEFAULT 0,
+                   year INTEGER,
+                   track_number INTEGER,
+                   has_cover INTEGER NOT NULL DEFAULT 0,
+                   sample_rate INTEGER,
+                   bit_depth INTEGER,
+                   track_gain_db REAL,
+                   track_peak REAL,
+                   fingerprint TEXT
+                 );
+                 INSERT INTO tracks
+                   (path, title, artist, album, genre, date_added)
+                 VALUES ('legacy.mp3', 'Legacy', 'Artist', 'Album', 'Rock', 123);
+                 CREATE VIRTUAL TABLE tracks_fts USING fts5(
+                   title, artist, album,
+                   content='tracks', content_rowid='id',
+                   tokenize=\"unicode61 remove_diacritics 2\"
+                 );
+                 INSERT INTO tracks_fts(tracks_fts) VALUES ('rebuild');
+                 CREATE TRIGGER tracks_ai AFTER INSERT ON tracks BEGIN
+                   INSERT INTO tracks_fts(rowid, title, artist, album)
+                   VALUES (new.id, new.title, new.artist, new.album);
+                 END;
+                 CREATE TRIGGER tracks_ad AFTER DELETE ON tracks BEGIN
+                   INSERT INTO tracks_fts(tracks_fts, rowid, title, artist, album)
+                   VALUES ('delete', old.id, old.title, old.artist, old.album);
+                 END;
+                 CREATE TRIGGER tracks_au AFTER UPDATE ON tracks BEGIN
+                   INSERT INTO tracks_fts(tracks_fts, rowid, title, artist, album)
+                   VALUES ('delete', old.id, old.title, old.artist, old.album);
+                   INSERT INTO tracks_fts(rowid, title, artist, album)
+                   VALUES (new.id, new.title, new.artist, new.album);
+                 END;",
+            )
+            .expect("create legacy tracks table");
+        connection
+            .pragma_update(None, "application_id", APPLICATION_ID)
+            .expect("set application id");
+        connection
+            .pragma_update(None, "user_version", 2)
+            .expect("mark schema v2");
+
+        // init() executes the idempotent base schema before additive migration.
+        connection
+            .execute_batch(SCHEMA)
+            .expect("base schema remains compatible with v2 tables");
+        migrate(&mut connection).expect("migrate v2 database");
+
+        let migrated: (i64, Option<i64>, Option<i64>) = connection
+            .query_row(
+                "SELECT first_seen_at, file_size, mtime_ns FROM tracks WHERE path = 'legacy.mp3'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("read migrated signature columns");
+        assert_eq!(migrated, (123, None, None));
+        let genre_matches: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM tracks_search WHERE tracks_search MATCH 'genre:(\"Rock\"*)'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query migrated genre FTS");
+        assert_eq!(genre_matches, 1);
     }
 
     #[test]

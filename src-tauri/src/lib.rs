@@ -81,6 +81,13 @@ pub struct MusicTrack {
     // normalization feature. `None` when the file carries no ReplayGain tags.
     pub track_gain_db: Option<f32>,
     pub track_peak: Option<f32>,
+    // Native-only filesystem signature. It is persisted beside the indexed
+    // metadata so a refresh can skip Lofty and fingerprint IO for unchanged
+    // files, but it is not sent to the webview.
+    #[serde(default, skip_serializing)]
+    pub(crate) file_size: u64,
+    #[serde(default, skip_serializing)]
+    pub(crate) mtime_ns: i64,
 }
 
 // ---------------------------------------------------------------------------
@@ -968,6 +975,7 @@ pub fn run() {
             db::db_roots,
             db::tracks::db_tracks_page,
             db::tracks::db_search,
+            db::tracks::db_global_search,
             db::tracks::db_tracks_by_paths,
             db::tracks::db_track,
             db::tracks::db_random_track,
@@ -975,8 +983,10 @@ pub fn run() {
             db::tracks::db_album_tracks,
             db::tracks::db_artists,
             db::tracks::db_artist_tracks,
-            db::tracks::db_station_tracks,
+            db::tracks::db_station_start,
+            db::tracks::db_station_next,
             db::tracks::db_has_genre,
+            db::tracks::db_smart_count,
             db::tracks::db_smart_tracks,
             db::stats::db_record_play_start,
             db::stats::db_record_play,

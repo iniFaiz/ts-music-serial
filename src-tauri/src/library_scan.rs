@@ -328,12 +328,19 @@ pub(crate) fn parse_metadata(path: &Path) -> Option<MusicTrack> {
 
     let path_str = path.to_string_lossy().to_string();
 
-    // Date created (falling back to modified) as a unix timestamp.
-    let date_added = fs::metadata(path)
-        .and_then(|m| m.created().or_else(|_| m.modified()))
+    let file_metadata = fs::metadata(path).ok()?;
+    let file_size = file_metadata.len();
+    let mtime_ns = file_metadata
+        .modified()
         .ok()
-        .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs())
+        .and_then(|time| time.duration_since(SystemTime::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos().min(i64::MAX as u128) as i64)
+        .unwrap_or(0);
+    // This is the time the application first sees a new row, not a filesystem
+    // timestamp. The upsert deliberately preserves it on later tag/file edits.
+    let date_added = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
         .unwrap_or(0);
 
     let tagged_file = Probe::open(path).ok()?.read().ok()?;
@@ -401,6 +408,8 @@ pub(crate) fn parse_metadata(path: &Path) -> Option<MusicTrack> {
         bit_depth,
         track_gain_db,
         track_peak,
+        file_size,
+        mtime_ns,
     })
 }
 

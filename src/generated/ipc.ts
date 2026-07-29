@@ -16,6 +16,7 @@ export const COMMAND_NAMES = [
   'db_favorite_paths',
   'db_favorites',
   'db_genres',
+  'db_global_search',
   'db_has_genre',
   'db_import',
   'db_import_backup',
@@ -46,9 +47,11 @@ export const COMMAND_NAMES = [
   'db_reset',
   'db_roots',
   'db_search',
+  'db_smart_count',
   'db_smart_tracks',
   'db_stat',
-  'db_station_tracks',
+  'db_station_next',
+  'db_station_start',
   'db_stats_summary',
   'db_toggle_favorite',
   'db_top_artists',
@@ -126,6 +129,7 @@ export interface CommandArgs {
   'db_favorite_paths': undefined;
   'db_favorites': undefined;
   'db_genres': { search?: string | null };
+  'db_global_search': { query: string; songLimit: number; albumLimit: number; artistLimit: number; genreLimit: number; requestId: number };
   'db_has_genre': undefined;
   'db_import': { tracks: unknown /* Rust: MusicTrack */[]; roots: string[]; state: unknown };
   'db_import_backup': { src: string; consentToken: string };
@@ -156,9 +160,11 @@ export interface CommandArgs {
   'db_reset': { consentToken: string };
   'db_roots': undefined;
   'db_search': { query: string; limit: number };
+  'db_smart_count': { rules: unknown; limit?: number | null };
   'db_smart_tracks': { rules: unknown; sortBy?: string | null; sortOrder?: string | null; limit?: number | null };
   'db_stat': { path: string };
-  'db_station_tracks': { kind: string; key: string };
+  'db_station_next': { sessionId: string; limit: number };
+  'db_station_start': { kind: string; key: string; limit: number };
   'db_stats_summary': undefined;
   'db_toggle_favorite': { path: string };
   'db_top_artists': { limit: number };
@@ -234,6 +240,7 @@ export interface CommandResult {
   'db_favorite_paths': string[];
   'db_favorites': unknown /* Rust: MusicTrack */[];
   'db_genres': unknown /* Rust: GenreRow */[];
+  'db_global_search': unknown /* Rust: GlobalSearchResults */;
   'db_has_genre': boolean;
   'db_import': void;
   'db_import_backup': unknown /* Rust: ImportBackupResult */;
@@ -264,9 +271,11 @@ export interface CommandResult {
   'db_reset': void;
   'db_roots': string[];
   'db_search': unknown /* Rust: MusicTrack */[];
+  'db_smart_count': number;
   'db_smart_tracks': unknown /* Rust: MusicTrack */[];
   'db_stat': unknown /* Rust: StatRow */;
-  'db_station_tracks': unknown /* Rust: MusicTrack */[];
+  'db_station_next': unknown /* Rust: StationBatch */;
+  'db_station_start': unknown /* Rust: StationBatch */;
   'db_stats_summary': unknown /* Rust: StatsSummary */;
   'db_toggle_favorite': boolean;
   'db_top_artists': unknown /* Rust: ArtistRow */[];
@@ -349,6 +358,7 @@ export const ipc = {
   dbFavoritePaths: () => invokeCommand('db_favorite_paths', undefined),
   dbFavorites: () => invokeCommand('db_favorites', undefined),
   dbGenres: (args: CommandArgs['db_genres']) => invokeCommand('db_genres', args),
+  dbGlobalSearch: (args: CommandArgs['db_global_search']) => invokeCommand('db_global_search', args),
   dbHasGenre: () => invokeCommand('db_has_genre', undefined),
   dbImport: (args: CommandArgs['db_import']) => invokeCommand('db_import', args),
   dbImportBackup: (args: CommandArgs['db_import_backup']) => invokeCommand('db_import_backup', args),
@@ -379,9 +389,11 @@ export const ipc = {
   dbReset: (args: CommandArgs['db_reset']) => invokeCommand('db_reset', args),
   dbRoots: () => invokeCommand('db_roots', undefined),
   dbSearch: (args: CommandArgs['db_search']) => invokeCommand('db_search', args),
+  dbSmartCount: (args: CommandArgs['db_smart_count']) => invokeCommand('db_smart_count', args),
   dbSmartTracks: (args: CommandArgs['db_smart_tracks']) => invokeCommand('db_smart_tracks', args),
   dbStat: (args: CommandArgs['db_stat']) => invokeCommand('db_stat', args),
-  dbStationTracks: (args: CommandArgs['db_station_tracks']) => invokeCommand('db_station_tracks', args),
+  dbStationNext: (args: CommandArgs['db_station_next']) => invokeCommand('db_station_next', args),
+  dbStationStart: (args: CommandArgs['db_station_start']) => invokeCommand('db_station_start', args),
   dbStatsSummary: () => invokeCommand('db_stats_summary', undefined),
   dbToggleFavorite: (args: CommandArgs['db_toggle_favorite']) => invokeCommand('db_toggle_favorite', args),
   dbTopArtists: (args: CommandArgs['db_top_artists']) => invokeCommand('db_top_artists', args),

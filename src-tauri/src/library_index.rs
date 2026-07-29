@@ -54,7 +54,6 @@ fn flush_batch(
     app: &AppHandle,
     batch: &mut Vec<PathBuf>,
     use_parallelism: bool,
-    refresh_fingerprints: bool,
     summary: &mut IndexSummary,
 ) -> Result<(), String> {
     if batch.is_empty() {
@@ -62,6 +61,21 @@ fn flush_batch(
     }
 
     let paths = mem::take(batch);
+    let signatures = paths
+        .into_iter()
+        .filter_map(|path| {
+            let metadata = path.metadata().ok()?;
+            let mtime_ns = metadata
+                .modified()
+                .ok()
+                .and_then(|time| time.duration_since(std::time::SystemTime::UNIX_EPOCH).ok())
+                .map(|duration| duration.as_nanos().min(i64::MAX as u128) as i64)
+                .unwrap_or(0);
+            Some((path, metadata.len().min(i64::MAX as u64) as i64, mtime_ns))
+        })
+        .collect::<Vec<_>>();
+    summary.scanned += signatures.len();
+    let paths = db::paths_requiring_metadata(&app.state::<db::Db>(), &signatures)?;
     let tracks: Vec<MusicTrack> = if use_parallelism {
         paths
             .into_par_iter()
@@ -74,12 +88,7 @@ fn flush_batch(
             .collect()
     };
 
-    summary.scanned += tracks.len();
-    summary.added += if refresh_fingerprints {
-        db::upsert_changed_tracks(&app.state::<db::Db>(), tracks)?
-    } else {
-        db::upsert_tracks(&app.state::<db::Db>(), tracks)?
-    };
+    summary.added += db::upsert_tracks(&app.state::<db::Db>(), tracks)?;
     Ok(())
 }
 
@@ -87,7 +96,6 @@ fn queue_audio_path(
     app: &AppHandle,
     path: PathBuf,
     use_parallelism: bool,
-    refresh_fingerprints: bool,
     batch: &mut Vec<PathBuf>,
     summary: &mut IndexSummary,
 ) -> Result<(), String> {
@@ -96,7 +104,7 @@ fn queue_audio_path(
     }
     batch.push(path);
     if batch.len() >= INDEX_BATCH_SIZE {
-        flush_batch(app, batch, use_parallelism, refresh_fingerprints, summary)?;
+        flush_batch(app, batch, use_parallelism, summary)?;
     }
     Ok(())
 }
@@ -105,7 +113,6 @@ fn index_directory(
     app: &AppHandle,
     root: &Path,
     use_parallelism: bool,
-    refresh_fingerprints: bool,
     batch: &mut Vec<PathBuf>,
     summary: &mut IndexSummary,
 ) -> Result<(), String> {
@@ -115,14 +122,7 @@ fn index_directory(
         for entry in jwalk::WalkDir::new(root).into_iter().filter_map(Result::ok) {
             if entry.file_type().is_file() {
                 if let Some(path) = safe_walked_file(root, &entry.path()) {
-                    queue_audio_path(
-                        app,
-                        path,
-                        use_parallelism,
-                        refresh_fingerprints,
-                        batch,
-                        summary,
-                    )?;
+                    queue_audio_path(app, path, use_parallelism, batch, summary)?;
                 }
             }
         }
@@ -130,14 +130,7 @@ fn index_directory(
         for entry in WalkDir::new(root).into_iter().filter_map(Result::ok) {
             if entry.file_type().is_file() {
                 if let Some(path) = safe_walked_file(root, entry.path()) {
-                    queue_audio_path(
-                        app,
-                        path,
-                        use_parallelism,
-                        refresh_fingerprints,
-                        batch,
-                        summary,
-                    )?;
+                    queue_audio_path(app, path, use_parallelism, batch, summary)?;
                 }
             }
         }
@@ -190,7 +183,6 @@ fn index_paths_locked(
     paths: Vec<PathBuf>,
     use_parallelism: bool,
     prune_missing: bool,
-    refresh_fingerprints: bool,
 ) -> Result<IndexSummary, String> {
     let started = Instant::now();
     let mut summary = IndexSummary::default();
@@ -199,42 +191,16 @@ fn index_paths_locked(
     for path in paths {
         if path.is_dir() {
             let before = summary.scanned;
-            index_directory(
-                app,
-                &path,
-                use_parallelism,
-                refresh_fingerprints,
-                &mut batch,
-                &mut summary,
-            )?;
-            flush_batch(
-                app,
-                &mut batch,
-                use_parallelism,
-                refresh_fingerprints,
-                &mut summary,
-            )?;
+            index_directory(app, &path, use_parallelism, &mut batch, &mut summary)?;
+            flush_batch(app, &mut batch, use_parallelism, &mut summary)?;
             if summary.scanned > before {
                 push_root(&mut summary.roots, &path);
             }
         } else if path.is_file() && is_audio_file(&path) {
-            queue_audio_path(
-                app,
-                path,
-                use_parallelism,
-                refresh_fingerprints,
-                &mut batch,
-                &mut summary,
-            )?;
+            queue_audio_path(app, path, use_parallelism, &mut batch, &mut summary)?;
         }
     }
-    flush_batch(
-        app,
-        &mut batch,
-        use_parallelism,
-        refresh_fingerprints,
-        &mut summary,
-    )?;
+    flush_batch(app, &mut batch, use_parallelism, &mut summary)?;
 
     if prune_missing {
         summary.removed = db::db_prune_missing(app.state::<db::Db>())?.len();
@@ -252,7 +218,7 @@ pub(crate) fn index_authorized_paths(
 ) -> Result<IndexSummary, String> {
     let state = app.state::<LibraryIndexState>();
     let _job = state.job.lock();
-    index_paths_locked(app, paths, use_parallelism, prune_missing, false)
+    index_paths_locked(app, paths, use_parallelism, prune_missing)
 }
 
 // Full/manual scans never accept webview-provided paths. With no grant they
@@ -326,7 +292,7 @@ pub(crate) fn index_watcher_paths(
             .collect(),
     );
     let changed = paths.clone();
-    let mut summary = index_paths_locked(app, paths, true, false, true)?;
+    let mut summary = index_paths_locked(app, paths, true, false)?;
     summary.removed = db::prune_changed_paths(&app.state::<db::Db>(), &changed)?.len();
     summary.total = db::db_count(app.state::<db::Db>())?;
     Ok(summary)
