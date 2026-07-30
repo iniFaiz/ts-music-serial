@@ -14,6 +14,7 @@ commands.allow = [
   "discord_update",
   "discord_clear",
   "cancel_online_metadata",
+  "clear_cache",
   "db_toggle_favorite",
   "db_move_favorite",
   "db_upsert_playlist",

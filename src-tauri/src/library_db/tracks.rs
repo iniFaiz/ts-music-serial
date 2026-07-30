@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+use rusqlite::types::Value as SqlValue;
 use rusqlite::{params, params_from_iter, Connection};
 use serde::Serialize;
 use serde_json::Value;
@@ -10,11 +11,48 @@ use tauri::State;
 use crate::{limits, MusicTrack};
 
 use super::{
-    collect_tracks, dir, fts_query, random_u64, row_to_track, smart_count, smart_eval, sort_col,
-    AlbumRow, ArtistRow, Db, GenreRow, Page, StationSession, TRACK_COLS, TRACK_COLS_T,
+    collect_tracks, dir, fts_query, random_u64, row_to_track, row_to_track_at, smart_count,
+    smart_eval, AlbumRow, ArtistRow, Db, GenreRow, Page, StationSession, TRACK_COLS, TRACK_COLS_T,
 };
 
 // ---- Track queries ----------------------------------------------------------
+
+fn page_sort_parts(sort_by: &str, prefix: &str) -> Vec<String> {
+    let text = |column: &str| format!("COALESCE({prefix}{column}, '') COLLATE NOCASE");
+    let number = |column: &str| format!("COALESCE({prefix}{column}, 0)");
+    match sort_by {
+        "artist" => vec![text("artist"), text("album"), number("track_number")],
+        "album" => vec![text("album"), number("track_number")],
+        "year" => vec![number("year")],
+        "duration" | "duration_secs" => vec![number("duration_secs")],
+        "dateAdded" | "date_added" => vec![number("first_seen_at")],
+        "track_number" => vec![number("track_number")],
+        _ => vec![text("title")],
+    }
+}
+
+fn collect_track_page(
+    conn: &Connection,
+    sql: &str,
+    params: &[SqlValue],
+) -> Result<(Vec<MusicTrack>, Option<i64>), String> {
+    let mut statement = conn
+        .prepare_cached(sql)
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map(params_from_iter(params.iter()), |row| {
+            Ok((row.get::<_, i64>(0)?, row_to_track_at(row, 1)?))
+        })
+        .map_err(|error| error.to_string())?;
+    let mut tracks = Vec::new();
+    let mut next_cursor = None;
+    for row in rows {
+        let (id, track) = row.map_err(|error| error.to_string())?;
+        next_cursor = Some(id);
+        tracks.push(track);
+    }
+    Ok((tracks, next_cursor))
+}
 
 #[tauri::command]
 pub fn db_tracks_page(
@@ -23,6 +61,7 @@ pub fn db_tracks_page(
     order: String,
     search: Option<String>,
     offset: i64,
+    cursor: Option<i64>,
     limit: i64,
 ) -> Result<Page, String> {
     limits::validate_text(&sort_by, "Track sort", 32)?;
@@ -33,36 +72,66 @@ pub fn db_tracks_page(
     if offset < 0 || limit <= 0 || limit > 1_000 {
         return Err("Invalid track page bounds".to_string());
     }
-    let conn = db.0.lock();
+    let conn = db.read();
     let d = dir(&order);
     let query = search.as_deref().and_then(fts_query);
-
-    if let Some(q) = query {
-        // JOIN with tracks_search: qualify the sort columns with `t.` so shared
-        // column names (title/artist/album) aren't ambiguous.
-        let sort = sort_col(&sort_by, "t.");
-        let total: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM tracks_search WHERE tracks_search MATCH ?1",
-                params![q],
-                |r| r.get(0),
-            )
-            .map_err(|e| e.to_string())?;
-        let sql = format!(
-            "SELECT {TRACK_COLS_T} FROM tracks t JOIN tracks_search f ON f.rowid = t.id
-             WHERE tracks_search MATCH ?1 ORDER BY {sort} {d} LIMIT ?2 OFFSET ?3"
-        );
-        let tracks = collect_tracks(&conn, &sql, params![q, limit, offset])?;
-        Ok(Page { total, tracks })
+    let total: i64 = if let Some(query) = query.as_ref() {
+        conn.query_row(
+            "SELECT COUNT(*) FROM tracks_search WHERE tracks_search MATCH ?1",
+            params![query],
+            |row| row.get(0),
+        )
     } else {
-        let sort = sort_col(&sort_by, "");
-        let total: i64 = conn
-            .query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0))
-            .map_err(|e| e.to_string())?;
-        let sql = format!("SELECT {TRACK_COLS} FROM tracks ORDER BY {sort} {d} LIMIT ?1 OFFSET ?2");
-        let tracks = collect_tracks(&conn, &sql, params![limit, offset])?;
-        Ok(Page { total, tracks })
+        conn.query_row("SELECT COUNT(*) FROM tracks", [], |row| row.get(0))
     }
+    .map_err(|error| error.to_string())?;
+
+    let mut sort_parts = page_sort_parts(&sort_by, "t.");
+    sort_parts.push("t.id".to_string());
+    let mut cursor_parts = page_sort_parts(&sort_by, "c.");
+    cursor_parts.push("c.id".to_string());
+    let order_by = sort_parts
+        .iter()
+        .map(|part| format!("{part} {d}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let comparison = if d == "DESC" { "<" } else { ">" };
+    let mut params = Vec::<SqlValue>::new();
+    let mut sql = format!("SELECT t.id, {TRACK_COLS_T} FROM tracks t");
+    if query.is_some() {
+        sql.push_str(" JOIN tracks_search f ON f.rowid = t.id");
+    }
+    sql.push_str(" WHERE ");
+    if let Some(query) = query {
+        sql.push_str("tracks_search MATCH ?");
+        params.push(SqlValue::Text(query));
+    } else {
+        sql.push_str("1 = 1");
+    }
+    if let Some(cursor) = cursor {
+        sql.push_str(&format!(
+            " AND ({}) {comparison} (
+                SELECT {} FROM tracks c WHERE c.id = ?
+              )",
+            sort_parts.join(", "),
+            cursor_parts.join(", ")
+        ));
+        params.push(SqlValue::Integer(cursor));
+    }
+    sql.push_str(&format!(" ORDER BY {order_by} LIMIT ?"));
+    params.push(SqlValue::Integer(limit));
+    // Compatibility for older callers/bookmarks. The Vue list uses keyset
+    // cursors after page one, so deep pages never pay OFFSET's scan cost.
+    if cursor.is_none() && offset > 0 {
+        sql.push_str(" OFFSET ?");
+        params.push(SqlValue::Integer(offset));
+    }
+    let (tracks, next_cursor) = collect_track_page(&conn, &sql, &params)?;
+    Ok(Page {
+        total,
+        tracks,
+        next_cursor,
+    })
 }
 
 #[tauri::command]
@@ -71,7 +140,7 @@ pub fn db_search(db: State<Db>, query: String, limit: i64) -> Result<Vec<MusicTr
     if !(1..=100).contains(&limit) {
         return Err("Search limit must be between 1 and 100".to_string());
     }
-    let conn = db.0.lock();
+    let conn = db.read();
     match fts_query(&query) {
         None => Ok(Vec::new()),
         Some(q) => {
@@ -130,7 +199,7 @@ pub fn db_global_search(
             ));
         }
     }
-    let conn = db.0.lock();
+    let conn = db.read();
     global_search(
         &conn,
         &query,
@@ -200,7 +269,7 @@ fn global_search(
            GROUP_CONCAT(DISTINCT t.artist)
          FROM matches m
          JOIN tracks t ON t.id = m.rowid
-         LEFT JOIN stats s ON s.path = t.path
+         LEFT JOIN stats s ON s.track_id = t.id
          GROUP BY t.album
          ORDER BY
            CASE
@@ -242,7 +311,7 @@ fn global_search(
            COALESCE(MAX(s.last_played), 0)
          FROM matches m
          JOIN tracks t ON t.id = m.rowid
-         LEFT JOIN stats s ON s.path = t.path
+         LEFT JOIN stats s ON s.track_id = t.id
          WHERE t.artist <> ''
          GROUP BY t.artist
          ORDER BY
@@ -281,7 +350,7 @@ fn global_search(
             WHERE cover.genre = t.genre AND cover.has_cover = 1 LIMIT 1)
          FROM matches m
          JOIN tracks t ON t.id = m.rowid
-         LEFT JOIN stats s ON s.path = t.path
+         LEFT JOIN stats s ON s.track_id = t.id
          WHERE t.genre IS NOT NULL AND t.genre <> ''
          GROUP BY t.genre
          ORDER BY
@@ -325,7 +394,7 @@ pub fn db_tracks_by_paths(db: State<Db>, paths: Vec<String>) -> Result<Vec<Music
     if paths.is_empty() {
         return Ok(Vec::new());
     }
-    let conn = db.0.lock();
+    let conn = db.read();
     let placeholders = vec!["?"; paths.len()].join(",");
     let sql = format!("SELECT {TRACK_COLS} FROM tracks WHERE path IN ({placeholders})");
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
@@ -346,7 +415,7 @@ pub fn db_tracks_by_paths(db: State<Db>, paths: Vec<String>) -> Result<Vec<Music
 
 #[tauri::command]
 pub fn db_track(db: State<Db>, path: String) -> Result<Option<MusicTrack>, String> {
-    let conn = db.0.lock();
+    let conn = db.read();
     let sql = format!("SELECT {TRACK_COLS} FROM tracks WHERE path = ?1");
     let mut tracks = collect_tracks(&conn, &sql, params![path])?;
     Ok(tracks.pop())
@@ -357,7 +426,7 @@ pub fn db_random_track(
     db: State<Db>,
     exclude: Option<String>,
 ) -> Result<Option<MusicTrack>, String> {
-    let conn = db.0.lock();
+    let conn = db.read();
     random_track(&conn, exclude.as_deref().unwrap_or(""))
 }
 
@@ -390,7 +459,7 @@ fn random_track(conn: &Connection, exclude: &str) -> Result<Option<MusicTrack>, 
 
 #[tauri::command]
 pub fn db_albums(db: State<Db>, search: Option<String>) -> Result<Vec<AlbumRow>, String> {
-    let conn = db.0.lock();
+    let conn = db.read();
     let like = search
         .as_deref()
         .filter(|s| !s.trim().is_empty())
@@ -399,7 +468,7 @@ pub fn db_albums(db: State<Db>, search: Option<String>) -> Result<Vec<AlbumRow>,
                  (SELECT path FROM tracks t2 WHERE t2.album = t.album AND t2.has_cover = 1 LIMIT 1) AS cover,
                  COALESCE(MAX(s.last_played), 0) AS last_played,
                  GROUP_CONCAT(DISTINCT t.artist) AS all_artists
-               FROM tracks t LEFT JOIN stats s ON s.path = t.path
+               FROM tracks t LEFT JOIN stats s ON s.track_id = t.id
                WHERE (?1 IS NULL OR t.album LIKE ?1 OR t.artist LIKE ?1)
                GROUP BY t.album ORDER BY t.album COLLATE NOCASE";
     let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
@@ -425,7 +494,7 @@ pub fn db_albums(db: State<Db>, search: Option<String>) -> Result<Vec<AlbumRow>,
 
 #[tauri::command]
 pub fn db_album_tracks(db: State<Db>, album: String) -> Result<Vec<MusicTrack>, String> {
-    let conn = db.0.lock();
+    let conn = db.read();
     let sql = format!(
         "SELECT {TRACK_COLS} FROM tracks WHERE album = ?1 ORDER BY track_number, title COLLATE NOCASE"
     );
@@ -434,7 +503,7 @@ pub fn db_album_tracks(db: State<Db>, album: String) -> Result<Vec<MusicTrack>, 
 
 #[tauri::command]
 pub fn db_artists(db: State<Db>, search: Option<String>) -> Result<Vec<ArtistRow>, String> {
-    let conn = db.0.lock();
+    let conn = db.read();
     let like = search
         .as_deref()
         .filter(|s| !s.trim().is_empty())
@@ -443,7 +512,7 @@ pub fn db_artists(db: State<Db>, search: Option<String>) -> Result<Vec<ArtistRow
                  COALESCE(SUM(s.play_count), 0) AS plays,
                  (SELECT path FROM tracks t2 WHERE t2.artist = t.artist AND t2.has_cover = 1 LIMIT 1) AS cover,
                  COALESCE(MAX(s.last_played), 0) AS last_played
-               FROM tracks t LEFT JOIN stats s ON s.path = t.path
+               FROM tracks t LEFT JOIN stats s ON s.track_id = t.id
                WHERE t.artist <> '' AND (?1 IS NULL OR t.artist LIKE ?1)
                GROUP BY t.artist ORDER BY t.artist COLLATE NOCASE";
     let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
@@ -468,7 +537,7 @@ pub fn db_artists(db: State<Db>, search: Option<String>) -> Result<Vec<ArtistRow
 
 #[tauri::command]
 pub fn db_artist_tracks(db: State<Db>, artist: String) -> Result<Vec<MusicTrack>, String> {
-    let conn = db.0.lock();
+    let conn = db.read();
     let sql = format!(
         "SELECT {TRACK_COLS} FROM tracks WHERE artist = ?1
          ORDER BY album COLLATE NOCASE, track_number, title COLLATE NOCASE"
@@ -517,7 +586,7 @@ fn hydrate_station_ids(
             has_more,
         });
     }
-    let conn = db.0.lock();
+    let conn = db.read();
     let placeholders = vec!["?"; ids.len()].join(",");
     let sql = format!("SELECT {TRACK_COLS}, id FROM tracks WHERE id IN ({placeholders})");
     let mut statement = conn.prepare(&sql).map_err(|error| error.to_string())?;
@@ -573,7 +642,7 @@ pub fn db_station_start(
 
 fn station_start(db: &Db, kind: &str, key: &str, limit: usize) -> Result<StationBatch, String> {
     let mut ids = {
-        let conn = db.0.lock();
+        let conn = db.read();
         let sql = if kind == "genre" {
             "SELECT id FROM tracks WHERE genre = ?1"
         } else {
@@ -618,7 +687,7 @@ pub fn db_station_next(
 // "genre needs reindex" hint).
 #[tauri::command]
 pub fn db_has_genre(db: State<Db>) -> Result<bool, String> {
-    let conn = db.0.lock();
+    let conn = db.read();
     conn.query_row(
         "SELECT EXISTS(SELECT 1 FROM tracks WHERE genre IS NOT NULL AND genre <> '')",
         [],
@@ -654,7 +723,7 @@ pub fn db_smart_tracks(
     if limit.is_some_and(|limit| !(0..=100_000).contains(&limit)) {
         return Err("Smart-playlist limit must be between 0 and 100000".to_string());
     }
-    let conn = db.0.lock();
+    let conn = db.read();
     smart_eval(
         &conn,
         &rules,
@@ -677,7 +746,7 @@ pub fn db_smart_count(db: State<Db>, rules: Value, limit: Option<i64>) -> Result
     if limit.is_some_and(|value| !(0..=100_000).contains(&value)) {
         return Err("Smart-playlist limit must be between 0 and 100000".to_string());
     }
-    let conn = db.0.lock();
+    let conn = db.read();
     smart_count(&conn, &rules, limit.unwrap_or(0))
 }
 
@@ -687,7 +756,7 @@ mod tests {
     use rusqlite::{params, Connection};
 
     use super::*;
-    use crate::library_db::{migrate, ConnectionSlot, DbCache, SCHEMA};
+    use crate::library_db::{migrate, ConnectionSlot, DbCache, ReadPool, SCHEMA};
 
     fn database() -> Db {
         let mut connection = Connection::open_in_memory().expect("open test database");
@@ -698,6 +767,7 @@ mod tests {
         Db(
             Mutex::new(ConnectionSlot::new(connection)),
             DbCache::default(),
+            ReadPool::empty(),
         )
     }
 

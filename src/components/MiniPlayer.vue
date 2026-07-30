@@ -18,20 +18,19 @@ import { useWindowDrag } from '../useWindowDrag';
 import { useRouter } from 'vue-router';
 import { store } from '../store';
 import { loadCover, getCachedCover, hasCachedCover } from '../coverCache';
-import { loadLyrics, activeLineIndex, processLyricLines } from '../lyricsCache';
+import { activeLineIndex, processLyricLines } from '../lyricsCache';
 import { extractColorsForPath, defaultPalette } from '../colorExtract';
 import LyricContent from './LyricContent.vue';
 import LosslessBadge from './LosslessBadge.vue';
 import CoverImage from './CoverImage.vue';
 import MarqueeText from './MarqueeText.vue';
 import { createNyanCatSeekStyle } from '../nyancatTheme';
+import { useQueueReorder } from '../useQueueReorder';
+import { useTrackLyrics } from '../useTrackLyrics';
 
 const router = useRouter();
 
 const coverUrl = ref(null);
-// undefined = loading, null = not found, object = resolved lyrics
-const lyrics = ref(undefined);
-const lyricsLoading = ref(false);
 const linesEl = ref(null);
 
 // View state. `lyricsEnabled` is the lyrics toggle; `artworkMode` (clicking the
@@ -51,6 +50,11 @@ const moreOpen = ref(false);
 const colors = ref(defaultPalette());
 
 const song = computed(() => store.currentSong);
+const { lyrics, lyricsLoading, fetchLyrics } = useTrackLyrics({
+  song: () => song.value,
+  active: () => store.miniPlayerOpen,
+  source: () => store.lyricsSource,
+});
 
 // ---- Cover + lyrics loading (only while the mini player is open) ----------
 async function resolveCover(path) {
@@ -64,19 +68,6 @@ async function resolveCover(path) {
   }
   const result = await loadCover(path);
   if (song.value && song.value.path === path) coverUrl.value = result;
-}
-
-async function fetchLyrics(force = false) {
-  const current = song.value;
-  if (!current) {
-    lyrics.value = null;
-    return;
-  }
-  lyricsLoading.value = true;
-  lyrics.value = undefined;
-  const res = await loadLyrics(current, { force });
-  if (song.value && song.value.path === current.path) lyrics.value = res;
-  lyricsLoading.value = false;
 }
 
 // Re-derive the backdrop colors whenever the cover changes; the blobs ease
@@ -101,7 +92,6 @@ watch(
       lyricsEnabled.value = true;
       if (song.value) {
         resolveCover(song.value.path);
-        fetchLyrics();
       }
     }
   },
@@ -112,16 +102,6 @@ watch(
   (path) => {
     if (store.miniPlayerOpen && path) {
       resolveCover(path);
-      fetchLyrics();
-    }
-  }
-);
-watch(
-  () => store.lyricsSource,
-  () => {
-    if (store.miniPlayerOpen) {
-      lyrics.value = undefined;
-      fetchLyrics(true);
     }
   }
 );
@@ -388,97 +368,24 @@ const remaining = computed(() =>
 );
 
 // ---- Queue (mirrors the main QueuePanel: drag-to-reorder, remove, etc.) ----
-const queueListEl = ref(null);
-const dragIndex = ref(-1);
-const overIndex = ref(-1);
+const {
+  listContainer: queueListEl,
+  dragIndex,
+  overIndex,
+  keyFor,
+  onQueueLeave,
+  disableQueueTransition,
+  onGripMouseDown,
+} = useQueueReorder(
+  () => store.queue.length,
+  (from, to) => store.moveInQueue(from, to)
+);
 
 const isCurrent = (s) =>
   store.currentSong &&
   (store.currentSong.queueId && s.queueId
     ? store.currentSong.queueId === s.queueId
     : store.currentSong.path === s.path);
-
-const keyMap = new WeakMap();
-let keySeq = 0;
-const keyFor = (item) => {
-  if (!item) return ++keySeq;
-  if (item.queueId) return item.queueId;
-  let k = keyMap.get(item);
-  if (k === undefined) {
-    k = ++keySeq;
-    keyMap.set(item, k);
-  }
-  return k;
-};
-
-const onQueueLeave = (el) => {
-  const { offsetTop, offsetLeft, offsetWidth } = el;
-  el.style.top = `${offsetTop}px`;
-  el.style.left = `${offsetLeft}px`;
-  el.style.width = `${offsetWidth}px`;
-};
-
-const disableQueueTransition = ref(false);
-
-watch(
-  () => store.queue.length,
-  (newLen, oldLen) => {
-    if (oldLen !== undefined && Math.abs(newLen - oldLen) > 20) {
-      disableQueueTransition.value = true;
-      nextTick(() => {
-        disableQueueTransition.value = false;
-      });
-    }
-  }
-);
-
-const getRowIndexFromY = (clientY) => {
-  if (!queueListEl.value) return -1;
-  const rows = queueListEl.value.querySelectorAll('[data-queue-idx]');
-  for (const row of rows) {
-    const rect = row.getBoundingClientRect();
-    if (clientY >= rect.top && clientY <= rect.bottom) {
-      return parseInt(row.dataset.queueIdx, 10);
-    }
-  }
-  if (rows.length > 0) {
-    const firstRect = rows[0].getBoundingClientRect();
-    if (clientY < firstRect.top) return 0;
-    const lastRect = rows[rows.length - 1].getBoundingClientRect();
-    if (clientY > lastRect.bottom) return rows.length - 1;
-  }
-  return -1;
-};
-
-const onQueueMouseMove = (e) => {
-  if (dragIndex.value === -1) return;
-  e.preventDefault();
-  const idx = getRowIndexFromY(e.clientY);
-  if (idx !== -1) overIndex.value = idx;
-};
-
-const onQueueMouseUp = () => {
-  if (dragIndex.value !== -1 && overIndex.value !== -1 && dragIndex.value !== overIndex.value) {
-    store.moveInQueue(dragIndex.value, overIndex.value);
-  }
-  dragIndex.value = -1;
-  overIndex.value = -1;
-  document.removeEventListener('mousemove', onQueueMouseMove);
-  document.removeEventListener('mouseup', onQueueMouseUp);
-  document.body.style.userSelect = '';
-  document.body.style.cursor = '';
-};
-
-const onGripMouseDown = (index, e) => {
-  e.preventDefault();
-  e.stopPropagation();
-  dragIndex.value = index;
-  overIndex.value = index;
-  document.body.style.userSelect = 'none';
-  document.body.style.cursor = 'grabbing';
-  document.addEventListener('mousemove', onQueueMouseMove);
-  document.addEventListener('mouseup', onQueueMouseUp);
-};
 
 // ---- Navigation / window / view actions -----------------------------------
 const goToArtist = (artistName) => {
@@ -558,8 +465,6 @@ const closePopovers = () => {
 onMounted(() => document.addEventListener('click', closePopovers));
 onUnmounted(() => {
   document.removeEventListener('click', closePopovers);
-  document.removeEventListener('mousemove', onQueueMouseMove);
-  document.removeEventListener('mouseup', onQueueMouseUp);
   if (hideTimer) clearTimeout(hideTimer);
   if (mpRafId) cancelAnimationFrame(mpRafId);
   if (mpUserScrollTimer) clearTimeout(mpUserScrollTimer);

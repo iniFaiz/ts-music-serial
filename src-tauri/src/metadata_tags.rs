@@ -94,7 +94,7 @@ pub(crate) async fn write_track_tags(
 
     let path_buf = authorize_tag_target(&app, Path::new(&path))?;
     let canonical = path_buf.to_string_lossy().to_string();
-    if db::tracks::db_track(db.clone(), canonical)?.is_none() {
+    if db::tracks::db_track(db.clone(), canonical.clone())?.is_none() {
         return Err("File is not an indexed library track".to_string());
     }
     limits::validate_text(&edits.title, "Title", 1_024)?;
@@ -207,6 +207,9 @@ pub(crate) async fn write_track_tags(
     .await
     .map_err(|e| format!("Tag write task failed: {e}"))??;
 
+    if let Some(cache) = crate::cache_manager::manager(&app) {
+        cache.invalidate_source(Path::new(&canonical));
+    }
     db::reindex_track(&db, &track, fingerprint.as_deref())?;
     Ok(track)
 }

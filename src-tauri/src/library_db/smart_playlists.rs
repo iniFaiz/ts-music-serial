@@ -31,8 +31,8 @@ pub(super) fn smart_eval(
     let mut sql = format!(
         "SELECT {TRACK_COLS_T}
          FROM tracks t
-         LEFT JOIN stats s ON s.path = t.path
-         LEFT JOIN favorites f ON f.path = t.path
+         LEFT JOIN stats s ON s.track_id = t.id
+         LEFT JOIN favorites f ON f.track_id = t.id
          WHERE {}",
         compiled.where_sql
     );
@@ -69,8 +69,8 @@ fn smart_random_segment(
     let mut sql = format!(
         "SELECT {TRACK_COLS_T}
          FROM tracks t
-         LEFT JOIN stats s ON s.path = t.path
-         LEFT JOIN favorites f ON f.path = t.path
+         LEFT JOIN stats s ON s.track_id = t.id
+         LEFT JOIN favorites f ON f.track_id = t.id
          WHERE ({}) AND t.id {comparison} ?
          ORDER BY t.id",
         compiled.where_sql
@@ -98,8 +98,8 @@ fn smart_eval_random(
     let max_sql = format!(
         "SELECT COALESCE(MAX(t.id), 0)
          FROM tracks t
-         LEFT JOIN stats s ON s.path = t.path
-         LEFT JOIN favorites f ON f.path = t.path
+         LEFT JOIN stats s ON s.track_id = t.id
+         LEFT JOIN favorites f ON f.track_id = t.id
          WHERE {}",
         compiled.where_sql
     );
@@ -140,8 +140,8 @@ pub(super) fn smart_count(conn: &Connection, rules: &Value, limit: i64) -> Resul
         "SELECT COUNT(*) FROM (
            SELECT 1
            FROM tracks t
-           LEFT JOIN stats s ON s.path = t.path
-           LEFT JOIN favorites f ON f.path = t.path
+           LEFT JOIN stats s ON s.track_id = t.id
+           LEFT JOIN favorites f ON f.track_id = t.id
            WHERE {}",
         compiled.where_sql
     );
@@ -245,11 +245,11 @@ fn compile_condition(condition: &Value, now: i64, params: &mut Vec<SqlValue>) ->
 
     if field == "favorite" {
         return if op == "isFalse" {
-            "f.path IS NULL".to_string()
+            "f.track_id IS NULL".to_string()
         } else {
             // This intentionally mirrors the previous evaluator: every boolean
             // operator except isFalse means "is true".
-            "f.path IS NOT NULL".to_string()
+            "f.track_id IS NOT NULL".to_string()
         };
     }
 
@@ -365,12 +365,15 @@ mod tests {
                mtime_ns INTEGER
              );
              CREATE TABLE stats (
-               path TEXT PRIMARY KEY,
+               track_id INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
                play_count INTEGER NOT NULL DEFAULT 0,
                last_played INTEGER NOT NULL DEFAULT 0,
                skip_count INTEGER NOT NULL DEFAULT 0
              );
-             CREATE TABLE favorites (path TEXT PRIMARY KEY, position INTEGER NOT NULL DEFAULT 0);",
+             CREATE TABLE favorites (
+               track_id INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
+               position INTEGER NOT NULL DEFAULT 0
+             );",
         )
         .expect("create schema");
         conn
@@ -399,14 +402,16 @@ mod tests {
         .expect("insert track");
         if let Some((play_count, last_played)) = plays {
             conn.execute(
-                "INSERT INTO stats(path, play_count, last_played) VALUES (?1, ?2, ?3)",
+                "INSERT INTO stats(track_id, play_count, last_played)
+                 SELECT id, ?2, ?3 FROM tracks WHERE path = ?1",
                 params![path, play_count, last_played],
             )
             .expect("insert stats");
         }
         if favorite {
             conn.execute(
-                "INSERT INTO favorites(path, position) VALUES (?1, 0)",
+                "INSERT INTO favorites(track_id, position)
+                 SELECT id, 0 FROM tracks WHERE path = ?1",
                 params![path],
             )
             .expect("insert favorite");

@@ -1,6 +1,6 @@
 <script setup>
-import { ref, onUnmounted, watch, nextTick } from 'vue';
 import { store } from '../store';
+import { useQueueReorder } from '../useQueueReorder';
 import { useRouter } from 'vue-router';
 import CoverImage from './CoverImage.vue';
 import { navigateWithTransition } from '../viewTransition';
@@ -10,103 +10,18 @@ const router = useRouter();
 // Stable per-entry key (by object identity) so TransitionGroup can FLIP-animate
 // the reorder. The same references stay in the array across a reorder — only
 // their order changes — so each row keeps its key and slides to its new slot.
-const keyMap = new WeakMap();
-let keySeq = 0;
-const keyFor = (item) => {
-  if (!item) return ++keySeq;
-  if (item.queueId) return item.queueId;
-  let k = keyMap.get(item);
-  if (k === undefined) {
-    k = ++keySeq;
-    keyMap.set(item, k);
-  }
-  return k;
-};
-
-const onQueueLeave = (el) => {
-  const { offsetTop, offsetLeft, offsetWidth } = el;
-  el.style.top = `${offsetTop}px`;
-  el.style.left = `${offsetLeft}px`;
-  el.style.width = `${offsetWidth}px`;
-};
-
-const disableQueueTransition = ref(false);
-
-watch(
+const {
+  dragIndex,
+  overIndex,
+  listContainer,
+  disableQueueTransition,
+  keyFor,
+  onQueueLeave,
+  onGripMouseDown,
+} = useQueueReorder(
   () => store.queue.length,
-  (newLen, oldLen) => {
-    if (oldLen !== undefined && Math.abs(newLen - oldLen) > 20) {
-      disableQueueTransition.value = true;
-      nextTick(() => {
-        disableQueueTransition.value = false;
-      });
-    }
-  }
+  (from, to) => store.moveInQueue(from, to)
 );
-
-// ---- Pointer-event based drag-to-reorder ----
-// HTML5 drag-and-drop is unreliable in Tauri/webview contexts.
-// This uses mousedown/mousemove/mouseup for a rock-solid experience.
-
-const dragIndex = ref(-1); // row being dragged
-const overIndex = ref(-1); // row the cursor is currently over (drop target)
-const listContainer = ref(null);
-
-const getRowIndexFromY = (clientY) => {
-  if (!listContainer.value) return -1;
-  const rows = listContainer.value.querySelectorAll('[data-queue-idx]');
-  for (const row of rows) {
-    const rect = row.getBoundingClientRect();
-    if (clientY >= rect.top && clientY <= rect.bottom) {
-      return parseInt(row.dataset.queueIdx, 10);
-    }
-  }
-  // If above or below all rows, clamp to first/last
-  if (rows.length > 0) {
-    const firstRect = rows[0].getBoundingClientRect();
-    if (clientY < firstRect.top) return 0;
-    const lastRect = rows[rows.length - 1].getBoundingClientRect();
-    if (clientY > lastRect.bottom) return rows.length - 1;
-  }
-  return -1;
-};
-
-const onMouseMove = (e) => {
-  if (dragIndex.value === -1) return;
-  e.preventDefault();
-  const idx = getRowIndexFromY(e.clientY);
-  if (idx !== -1) overIndex.value = idx;
-};
-
-const onMouseUp = () => {
-  if (dragIndex.value !== -1 && overIndex.value !== -1 && dragIndex.value !== overIndex.value) {
-    store.moveInQueue(dragIndex.value, overIndex.value);
-  }
-  dragIndex.value = -1;
-  overIndex.value = -1;
-  document.removeEventListener('mousemove', onMouseMove);
-  document.removeEventListener('mouseup', onMouseUp);
-  document.body.style.userSelect = '';
-  document.body.style.cursor = '';
-};
-
-const onGripMouseDown = (index, e) => {
-  e.preventDefault();
-  e.stopPropagation();
-  dragIndex.value = index;
-  overIndex.value = index;
-  document.body.style.userSelect = 'none';
-  document.body.style.cursor = 'grabbing';
-  document.addEventListener('mousemove', onMouseMove);
-  document.addEventListener('mouseup', onMouseUp);
-};
-
-onUnmounted(() => {
-  document.removeEventListener('mousemove', onMouseMove);
-  document.removeEventListener('mouseup', onMouseUp);
-  document.body.style.userSelect = '';
-  document.body.style.cursor = '';
-});
 
 const isCurrent = (song) =>
   store.currentSong &&

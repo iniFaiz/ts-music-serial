@@ -12,17 +12,20 @@
 //   * smart-playlist evaluation as a native rule pass over the DB,
 //   * incremental writes (no whole-library clone).
 //
-// A single connection guarded by a parking_lot Mutex is enough: SQLite serialises
-// writes anyway and our reads are short. The connection is opened once at startup
-// and managed as Tauri state.
+// Writes use one connection guarded by a parking_lot Mutex. Read-heavy commands
+// use a small read-only connection pool over WAL so they can run concurrently
+// without blocking the writer. The handles are opened once and managed as Tauri
+// state.
 
 use std::collections::{HashMap, HashSet};
 use std::ops::{Deref, DerefMut};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::time::Duration;
 
-use parking_lot::Mutex;
+use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
 use rayon::prelude::*;
-use rusqlite::{params, Connection, Row, Transaction};
+use rusqlite::{params, Connection, OpenFlags, Row, Transaction};
 use serde::Serialize;
 use serde_json::Value;
 use tauri::{AppHandle, Manager, State};
@@ -90,7 +93,114 @@ impl DerefMut for ConnectionSlot {
     }
 }
 
-pub struct Db(pub Mutex<ConnectionSlot>, pub DbCache);
+pub struct ReadPool {
+    path: Option<PathBuf>,
+    connections: Vec<Mutex<Option<Connection>>>,
+    next: AtomicUsize,
+    suspended: AtomicBool,
+}
+
+impl ReadPool {
+    fn new(path: PathBuf, size: usize) -> Result<Self, String> {
+        let connections = (0..size)
+            .map(|_| open_read_connection(&path).map(|connection| Mutex::new(Some(connection))))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self {
+            path: Some(path),
+            connections,
+            next: AtomicUsize::new(0),
+            suspended: AtomicBool::new(false),
+        })
+    }
+
+    #[cfg(test)]
+    fn empty() -> Self {
+        Self {
+            path: None,
+            connections: Vec::new(),
+            next: AtomicUsize::new(0),
+            suspended: AtomicBool::new(false),
+        }
+    }
+
+    pub(crate) fn refresh(&self) -> Result<(), String> {
+        let Some(path) = self.path.as_ref() else {
+            return Ok(());
+        };
+        for connection in &self.connections {
+            *connection.lock() = Some(open_read_connection(path)?);
+        }
+        self.suspended.store(false, Ordering::Release);
+        Ok(())
+    }
+
+    pub(crate) fn pause(&self) -> ReadPoolPause<'_> {
+        self.suspended.store(true, Ordering::Release);
+        for connection in &self.connections {
+            connection.lock().take();
+        }
+        ReadPoolPause {
+            pool: self,
+            active: true,
+        }
+    }
+}
+
+pub enum DbReadGuard<'a> {
+    Reader(MappedMutexGuard<'a, Connection>),
+    Writer(MutexGuard<'a, ConnectionSlot>),
+}
+
+impl Deref for DbReadGuard<'_> {
+    type Target = Connection;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Reader(connection) => connection,
+            Self::Writer(connection) => connection,
+        }
+    }
+}
+
+pub struct Db(pub Mutex<ConnectionSlot>, pub DbCache, pub(crate) ReadPool);
+
+pub(crate) struct ReadPoolPause<'a> {
+    pool: &'a ReadPool,
+    active: bool,
+}
+
+impl ReadPoolPause<'_> {
+    pub(crate) fn finish(mut self) -> Result<(), String> {
+        self.pool.refresh()?;
+        self.active = false;
+        Ok(())
+    }
+}
+
+impl Drop for ReadPoolPause<'_> {
+    fn drop(&mut self) {
+        if self.active {
+            let _ = self.pool.refresh();
+        }
+    }
+}
+
+impl Db {
+    pub(crate) fn read(&self) -> DbReadGuard<'_> {
+        if self.2.connections.is_empty() || self.2.suspended.load(Ordering::Acquire) {
+            return DbReadGuard::Writer(self.0.lock());
+        }
+        let index = self.2.next.fetch_add(1, Ordering::Relaxed) % self.2.connections.len();
+        let connection = self.2.connections[index].lock();
+        if connection.is_none() {
+            drop(connection);
+            return DbReadGuard::Writer(self.0.lock());
+        }
+        DbReadGuard::Reader(MutexGuard::map(connection, |slot| {
+            slot.as_mut().expect("reader slot checked above")
+        }))
+    }
+}
 
 #[cfg(test)]
 impl Db {
@@ -98,12 +208,34 @@ impl Db {
         Self(
             Mutex::new(ConnectionSlot::new(connection)),
             DbCache::default(),
+            ReadPool::empty(),
         )
     }
 }
 
 pub(crate) const APPLICATION_ID: i32 = 0x5453_4D31; // "TSM1"
-pub(crate) const SCHEMA_VERSION: i32 = 3;
+pub(crate) const SCHEMA_VERSION: i32 = 4;
+
+fn configure_connection(connection: &Connection) -> Result<(), String> {
+    connection
+        .busy_timeout(Duration::from_secs(5))
+        .map_err(|error| error.to_string())?;
+    connection.set_prepared_statement_cache_capacity(128);
+    Ok(())
+}
+
+fn open_read_connection(path: &Path) -> Result<Connection, String> {
+    let connection = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|error| error.to_string())?;
+    configure_connection(&connection)?;
+    connection
+        .pragma_update(None, "query_only", true)
+        .map_err(|error| error.to_string())?;
+    Ok(connection)
+}
 
 // Cheap signature that changes whenever the tracks / stats / favorites that a
 // smart playlist can match change (track added/removed, played, skipped, or
@@ -128,23 +260,27 @@ const TRACK_COLS: &str = "path, title, artist, album, genre, duration_secs, firs
 const TRACK_COLS_T: &str = "t.path, t.title, t.artist, t.album, t.genre, t.duration_secs, t.first_seen_at, t.year, t.track_number, t.has_cover, t.sample_rate, t.bit_depth, t.track_gain_db, t.track_peak, t.file_size, t.mtime_ns";
 
 fn row_to_track(row: &Row) -> rusqlite::Result<MusicTrack> {
+    row_to_track_at(row, 0)
+}
+
+fn row_to_track_at(row: &Row, offset: usize) -> rusqlite::Result<MusicTrack> {
     Ok(MusicTrack {
-        path: row.get(0)?,
-        title: row.get(1)?,
-        artist: row.get(2)?,
-        album: row.get(3)?,
-        genre: row.get(4)?,
-        duration_secs: row.get::<_, i64>(5)? as u64,
-        date_added: row.get::<_, i64>(6)? as u64,
-        year: row.get::<_, Option<i64>>(7)?.map(|v| v as u32),
-        track_number: row.get::<_, Option<i64>>(8)?.map(|v| v as u32),
-        has_cover: row.get::<_, i64>(9)? != 0,
-        sample_rate: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
-        bit_depth: row.get::<_, Option<i64>>(11)?.map(|v| v as u8),
-        track_gain_db: row.get::<_, Option<f64>>(12)?.map(|v| v as f32),
-        track_peak: row.get::<_, Option<f64>>(13)?.map(|v| v as f32),
-        file_size: row.get::<_, Option<i64>>(14)?.unwrap_or(0).max(0) as u64,
-        mtime_ns: row.get::<_, Option<i64>>(15)?.unwrap_or(0),
+        path: row.get(offset)?,
+        title: row.get(offset + 1)?,
+        artist: row.get(offset + 2)?,
+        album: row.get(offset + 3)?,
+        genre: row.get(offset + 4)?,
+        duration_secs: row.get::<_, i64>(offset + 5)? as u64,
+        date_added: row.get::<_, i64>(offset + 6)? as u64,
+        year: row.get::<_, Option<i64>>(offset + 7)?.map(|v| v as u32),
+        track_number: row.get::<_, Option<i64>>(offset + 8)?.map(|v| v as u32),
+        has_cover: row.get::<_, i64>(offset + 9)? != 0,
+        sample_rate: row.get::<_, Option<i64>>(offset + 10)?.map(|v| v as u32),
+        bit_depth: row.get::<_, Option<i64>>(offset + 11)?.map(|v| v as u8),
+        track_gain_db: row.get::<_, Option<f64>>(offset + 12)?.map(|v| v as f32),
+        track_peak: row.get::<_, Option<f64>>(offset + 13)?.map(|v| v as f32),
+        file_size: row.get::<_, Option<i64>>(offset + 14)?.unwrap_or(0).max(0) as u64,
+        mtime_ns: row.get::<_, Option<i64>>(offset + 15)?.unwrap_or(0),
     })
 }
 
@@ -156,12 +292,16 @@ pub fn init(app: &AppHandle) -> Result<Db, String> {
         .app_data_dir()
         .map_err(|e| format!("no app data dir: {e}"))?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let mut conn = Connection::open(dir.join("library.db")).map_err(|e| e.to_string())?;
+    let path = dir.join("library.db");
+    let mut conn = Connection::open(&path).map_err(|e| e.to_string())?;
+    configure_connection(&conn)?;
     conn.execute_batch(SCHEMA).map_err(|e| e.to_string())?;
     migrate(&mut conn)?;
+    let read_pool = ReadPool::new(path, 3)?;
     Ok(Db(
         Mutex::new(ConnectionSlot::new(conn)),
         DbCache::default(),
+        read_pool,
     ))
 }
 
@@ -384,6 +524,49 @@ fn rebuild_search_index(tx: &Transaction<'_>) -> Result<(), String> {
     Ok(())
 }
 
+fn migrate_stable_track_ids(tx: &Transaction<'_>) -> Result<(), String> {
+    tx.execute_batch(
+        "CREATE TABLE stats_v4 (
+           track_id    INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
+           play_count  INTEGER NOT NULL DEFAULT 0,
+           last_played INTEGER NOT NULL DEFAULT 0,
+           skip_count  INTEGER NOT NULL DEFAULT 0
+         );
+         INSERT INTO stats_v4(track_id, play_count, last_played, skip_count)
+         SELECT t.id, s.play_count, s.last_played, s.skip_count
+         FROM stats s JOIN tracks t ON t.path = s.path;
+
+         CREATE TABLE favorites_v4 (
+           track_id INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
+           position INTEGER NOT NULL DEFAULT 0
+         );
+         INSERT INTO favorites_v4(track_id, position)
+         SELECT t.id, f.position FROM favorites f JOIN tracks t ON t.path = f.path;
+
+         CREATE TABLE playlist_items_v4 (
+           id          INTEGER PRIMARY KEY,
+           playlist_id TEXT NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+           track_id    INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+           position    INTEGER NOT NULL,
+           UNIQUE(playlist_id, track_id)
+         );
+         INSERT INTO playlist_items_v4(playlist_id, track_id, position)
+         SELECT i.playlist_id, t.id, i.position
+         FROM playlist_items i JOIN tracks t ON t.path = i.path;
+
+         DROP TABLE playlist_items;
+         DROP TABLE favorites;
+         DROP TABLE stats;
+         ALTER TABLE stats_v4 RENAME TO stats;
+         ALTER TABLE favorites_v4 RENAME TO favorites;
+         ALTER TABLE playlist_items_v4 RENAME TO playlist_items;
+         CREATE INDEX idx_pl_items ON playlist_items(playlist_id, position);
+         CREATE INDEX idx_stats_last_played ON stats(last_played);
+         CREATE INDEX idx_favorites_position ON favorites(position);",
+    )
+    .map_err(|error| format!("Failed to migrate stable track identities: {error}"))
+}
+
 fn migrate(conn: &mut Connection) -> Result<(), String> {
     let application_id: i32 = conn
         .pragma_query_value(None, "application_id", |row| row.get(0))
@@ -449,11 +632,18 @@ fn migrate(conn: &mut Connection) -> Result<(), String> {
     }
     tx.execute_batch("CREATE INDEX IF NOT EXISTS idx_tracks_first_seen ON tracks(first_seen_at);")
         .map_err(|error| error.to_string())?;
-    if version < 2 {
+    let relations_use_path: bool = tx
+        .prepare("SELECT 1 FROM pragma_table_info('stats') WHERE name = 'path'")
+        .and_then(|mut statement| statement.exists([]))
+        .map_err(|error| error.to_string())?;
+    if version < 2 && relations_use_path {
         normalize_verbatim_paths(&tx)?;
     }
     if version < 3 {
         rebuild_search_index(&tx)?;
+    }
+    if relations_use_path {
+        migrate_stable_track_ids(&tx)?;
     }
     tx.pragma_update(None, "application_id", APPLICATION_ID)
         .map_err(|e| format!("Failed to set database application id: {e}"))?;
@@ -526,14 +716,14 @@ CREATE TRIGGER IF NOT EXISTS tracks_au AFTER UPDATE ON tracks BEGIN
 END;
 
 CREATE TABLE IF NOT EXISTS stats (
-  path        TEXT PRIMARY KEY,
+  track_id    INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
   play_count  INTEGER NOT NULL DEFAULT 0,
   last_played INTEGER NOT NULL DEFAULT 0,
   skip_count  INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS favorites (
-  path     TEXT PRIMARY KEY,
+  track_id INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
   position INTEGER NOT NULL DEFAULT 0
 );
 
@@ -558,12 +748,15 @@ CREATE TABLE IF NOT EXISTS playlists (
 );
 
 CREATE TABLE IF NOT EXISTS playlist_items (
-  playlist_id TEXT NOT NULL,
-  path        TEXT NOT NULL,
+  id          INTEGER PRIMARY KEY,
+  playlist_id TEXT NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+  track_id    INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
   position    INTEGER NOT NULL,
-  PRIMARY KEY (playlist_id, path)
+  UNIQUE (playlist_id, track_id)
 );
 CREATE INDEX IF NOT EXISTS idx_pl_items ON playlist_items(playlist_id, position);
+CREATE INDEX IF NOT EXISTS idx_stats_last_played ON stats(last_played);
+CREATE INDEX IF NOT EXISTS idx_favorites_position ON favorites(position);
 
 CREATE TABLE IF NOT EXISTS recents (
   type TEXT NOT NULL,
@@ -582,22 +775,6 @@ CREATE TABLE IF NOT EXISTS cover_art (
 "#;
 
 // ---- Helpers ----------------------------------------------------------------
-
-// Whitelist sort keys → SQL so the interpolated ORDER BY can never carry
-// user-controlled text. `p` is a table-alias prefix ("" for a plain query, "t."
-// when the query JOINs another table — e.g. tracks_search, which also has
-// title/artist/album columns, so the bare names would be ambiguous).
-fn sort_col(sort_by: &str, p: &str) -> String {
-    match sort_by {
-        "artist" => format!("{p}artist COLLATE NOCASE, {p}album COLLATE NOCASE, {p}track_number"),
-        "album" => format!("{p}album COLLATE NOCASE, {p}track_number"),
-        "year" => format!("{p}year"),
-        "duration" | "duration_secs" => format!("{p}duration_secs"),
-        "dateAdded" | "date_added" => format!("{p}first_seen_at"),
-        "track_number" => format!("{p}track_number"),
-        _ => format!("{p}title COLLATE NOCASE"),
-    }
-}
 
 fn dir(order: &str) -> &'static str {
     if order.eq_ignore_ascii_case("desc") {
@@ -627,7 +804,7 @@ fn collect_tracks(
     sql: &str,
     params: &[&dyn rusqlite::ToSql],
 ) -> Result<Vec<MusicTrack>, String> {
-    let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare_cached(sql).map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map(params, row_to_track)
         .map_err(|e| e.to_string())?;
@@ -644,6 +821,7 @@ fn collect_tracks(
 pub struct Page {
     total: i64,
     tracks: Vec<MusicTrack>,
+    next_cursor: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -817,7 +995,7 @@ pub(crate) fn paths_requiring_metadata(
     db: &Db,
     candidates: &[(std::path::PathBuf, i64, i64)],
 ) -> Result<Vec<std::path::PathBuf>, String> {
-    let conn = db.0.lock();
+    let conn = db.read();
     let mut statement = conn
         .prepare("SELECT file_size, mtime_ns FROM tracks WHERE path = ?1")
         .map_err(|error| error.to_string())?;
@@ -842,12 +1020,6 @@ pub(crate) fn remove_paths(db: &Db, paths: &[String]) -> Result<(), String> {
     let tx = conn.transaction().map_err(|e| e.to_string())?;
     for p in paths {
         tx.execute("DELETE FROM tracks WHERE path = ?1", params![p])
-            .map_err(|e| e.to_string())?;
-        tx.execute("DELETE FROM stats WHERE path = ?1", params![p])
-            .map_err(|e| e.to_string())?;
-        tx.execute("DELETE FROM favorites WHERE path = ?1", params![p])
-            .map_err(|e| e.to_string())?;
-        tx.execute("DELETE FROM playlist_items WHERE path = ?1", params![p])
             .map_err(|e| e.to_string())?;
     }
     tx.commit().map_err(|e| e.to_string())?;
@@ -922,72 +1094,91 @@ fn prune_gone_rows(
     for (old_path, fp) in &gone {
         let target = if let Some(fingerprint) = fp.as_ref().filter(|value| !value.is_empty()) {
             let mut stmt = tx
-                .prepare("SELECT path FROM tracks WHERE fingerprint = ?1 AND path <> ?2")
+                .prepare("SELECT id, path FROM tracks WHERE fingerprint = ?1 AND path <> ?2")
                 .map_err(|e| e.to_string())?;
             let rows = stmt
                 .query_map(params![fingerprint, old_path], |row| {
-                    row.get::<_, String>(0)
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
                 })
                 .map_err(|e| e.to_string())?;
-            let found = rows.filter_map(Result::ok).find(|candidate| {
+            let found = rows.filter_map(Result::ok).find(|(_, candidate)| {
                 Path::new(candidate).exists() && !claimed_targets.contains(candidate)
             });
             found
         } else {
             None
         };
-        if let Some(new_path) = target {
+        if let Some((new_id, new_path)) = target {
             claimed_targets.insert(new_path.clone());
-            // Merge play stats into the new path (fresh rows normally have none,
-            // but a pre-existing row is summed rather than clobbered).
+            let old_id: i64 = tx
+                .query_row(
+                    "SELECT id FROM tracks WHERE path = ?1",
+                    params![old_path],
+                    |row| row.get(0),
+                )
+                .map_err(|error| error.to_string())?;
+
+            // Preserve the original row identity. A scanner may already have
+            // inserted a temporary row for the new path, so merge any state it
+            // accumulated, copy its fresh metadata, delete it, then mutate the
+            // old row's path in place.
             tx.execute(
-                "INSERT INTO stats (path, play_count, last_played, skip_count)
-                 SELECT ?1, play_count, last_played, skip_count FROM stats WHERE path = ?2
-                 ON CONFLICT(path) DO UPDATE SET
+                "INSERT INTO stats (track_id, play_count, last_played, skip_count)
+                 SELECT ?1, play_count, last_played, skip_count FROM stats WHERE track_id = ?2
+                 ON CONFLICT(track_id) DO UPDATE SET
                    play_count  = stats.play_count + excluded.play_count,
                    last_played = MAX(stats.last_played, excluded.last_played),
                    skip_count  = stats.skip_count + excluded.skip_count",
-                params![new_path, old_path],
+                params![old_id, new_id],
             )
             .map_err(|e| e.to_string())?;
             tx.execute(
-                "UPDATE OR IGNORE favorites SET path = ?1 WHERE path = ?2",
-                params![new_path, old_path],
+                "INSERT INTO favorites(track_id, position)
+                 SELECT ?1, position FROM favorites WHERE track_id = ?2
+                 ON CONFLICT(track_id) DO UPDATE SET
+                   position = MIN(favorites.position, excluded.position)",
+                params![old_id, new_id],
             )
             .map_err(|e| e.to_string())?;
             tx.execute(
-                "UPDATE OR IGNORE playlist_items SET path = ?1 WHERE path = ?2",
-                params![new_path, old_path],
+                "INSERT INTO playlist_items(playlist_id, track_id, position)
+                 SELECT playlist_id, ?1, position FROM playlist_items WHERE track_id = ?2
+                 ON CONFLICT(playlist_id, track_id) DO UPDATE SET
+                   position = MIN(playlist_items.position, excluded.position)",
+                params![old_id, new_id],
             )
             .map_err(|e| e.to_string())?;
-            // Keep the original library-add date so a moved file doesn't reappear
-            // under "Recently Added".
             tx.execute(
-                "UPDATE tracks SET
+                "UPDATE tracks AS old SET
+                   (title, artist, album, genre, duration_secs, year, track_number,
+                    has_cover, sample_rate, bit_depth, track_gain_db, track_peak,
+                    fingerprint, file_size, mtime_ns) =
+                   (SELECT title, artist, album, genre, duration_secs, year, track_number,
+                           has_cover, sample_rate, bit_depth, track_gain_db, track_peak,
+                           fingerprint, file_size, mtime_ns
+                    FROM tracks WHERE id = ?2),
                    first_seen_at = MIN(
-                     first_seen_at,
-                     COALESCE((SELECT first_seen_at FROM tracks WHERE path = ?2), first_seen_at)
+                     old.first_seen_at,
+                     COALESCE((SELECT first_seen_at FROM tracks WHERE id = ?2), old.first_seen_at)
                    ),
                    date_added = MIN(
-                     date_added,
-                     COALESCE((SELECT date_added FROM tracks WHERE path = ?2), date_added)
+                     old.date_added,
+                     COALESCE((SELECT date_added FROM tracks WHERE id = ?2), old.date_added)
                    )
-                 WHERE path = ?1",
-                params![new_path, old_path],
+                 WHERE old.id = ?1",
+                params![old_id, new_id],
             )
             .map_err(|e| e.to_string())?;
-        }
-        // Drop the stale row; cascade like db_remove_paths so nothing dangles.
-        // (Migrated rows already moved their stats/favorites/playlist items away;
-        // any leftovers here belong to genuinely deleted files.)
-        for sql in [
-            "DELETE FROM tracks WHERE path = ?1",
-            "DELETE FROM stats WHERE path = ?1",
-            "DELETE FROM favorites WHERE path = ?1",
-            "DELETE FROM playlist_items WHERE path = ?1",
-        ] {
-            tx.execute(sql, params![old_path])
-                .map_err(|e| e.to_string())?;
+            tx.execute("DELETE FROM tracks WHERE id = ?1", params![new_id])
+                .map_err(|error| error.to_string())?;
+            tx.execute(
+                "UPDATE tracks SET path = ?2 WHERE id = ?1",
+                params![old_id, new_path],
+            )
+            .map_err(|error| error.to_string())?;
+        } else {
+            tx.execute("DELETE FROM tracks WHERE path = ?1", params![old_path])
+                .map_err(|error| error.to_string())?;
         }
     }
     tx.commit().map_err(|e| e.to_string())?;
@@ -1088,7 +1279,7 @@ pub(crate) fn reindex_track(
 // webview; the importer still re-checks the real file tags before doing network
 // work, because display fallbacks such as "Unknown Artist" are not real tags.
 pub(crate) fn all_track_paths(db: &Db) -> Result<Vec<String>, String> {
-    let conn = db.0.lock();
+    let conn = db.read();
     let mut stmt = conn
         .prepare("SELECT path FROM tracks ORDER BY path")
         .map_err(|e| e.to_string())?;
@@ -1105,7 +1296,7 @@ pub(crate) fn backfill_fingerprints(app: &AppHandle) {
     loop {
         let batch: Vec<String> = {
             let db = app.state::<Db>();
-            let conn = db.0.lock();
+            let conn = db.read();
             let Ok(mut stmt) =
                 conn.prepare("SELECT path FROM tracks WHERE fingerprint IS NULL LIMIT 48")
             else {
@@ -1171,15 +1362,6 @@ pub fn db_remove_under_root(db: State<Db>, root: String) -> Result<Vec<String>, 
         transaction
             .execute("DELETE FROM tracks WHERE path = ?1", params![p])
             .map_err(|e| e.to_string())?;
-        transaction
-            .execute("DELETE FROM stats WHERE path = ?1", params![p])
-            .map_err(|e| e.to_string())?;
-        transaction
-            .execute("DELETE FROM favorites WHERE path = ?1", params![p])
-            .map_err(|e| e.to_string())?;
-        transaction
-            .execute("DELETE FROM playlist_items WHERE path = ?1", params![p])
-            .map_err(|e| e.to_string())?;
     }
     transaction.commit().map_err(|e| e.to_string())?;
     Ok(removed)
@@ -1187,7 +1369,7 @@ pub fn db_remove_under_root(db: State<Db>, root: String) -> Result<Vec<String>, 
 
 #[tauri::command]
 pub fn db_count(db: State<Db>) -> Result<i64, String> {
-    let conn = db.0.lock();
+    let conn = db.read();
     conn.query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0))
         .map_err(|e| e.to_string())
 }
@@ -1206,7 +1388,7 @@ pub fn db_reset(
         conn.execute_batch(
             "DELETE FROM tracks; DELETE FROM stats; DELETE FROM favorites;
              DELETE FROM playlist_items; DELETE FROM playlists; DELETE FROM roots;
-             DELETE FROM pending_roots; DELETE FROM recents;",
+             DELETE FROM pending_roots; DELETE FROM recents; DELETE FROM cover_art;",
         )
         .map_err(|e| e.to_string())?;
     }
@@ -1226,7 +1408,7 @@ pub fn db_roots(db: State<Db>) -> Result<Vec<String>, String> {
 /// table is deliberately not exposed as a raw IPC command: a webview must not
 /// be able to turn an arbitrary path into an authorised library root.
 pub(crate) fn roots(db: &Db) -> Result<Vec<String>, String> {
-    let conn = db.0.lock();
+    let conn = db.read();
     let mut stmt = conn
         .prepare("SELECT path FROM roots ORDER BY path")
         .map_err(|e| e.to_string())?;
@@ -1283,7 +1465,7 @@ pub fn db_kv_get(db: State<Db>, key: String) -> Result<Option<Value>, String> {
     if !matches!(key.as_str(), "settings" | "playback") {
         return Err("Unsupported settings key".to_string());
     }
-    let conn = db.0.lock();
+    let conn = db.read();
     let raw: Option<String> = conn
         .query_row("SELECT v FROM kv WHERE k = ?1", params![key], |r| r.get(0))
         .optional_string()?;
@@ -1320,7 +1502,7 @@ pub fn db_import(
     state: Value,
 ) -> Result<(), String> {
     {
-        let conn = db.0.lock();
+        let conn = db.read();
         let has_existing: bool = conn
             .query_row(
                 "SELECT EXISTS(
@@ -1369,7 +1551,8 @@ pub fn db_import(
         for (i, p) in favs.iter().enumerate() {
             if let Some(path) = p.as_str() {
                 tx.execute(
-                    "INSERT OR REPLACE INTO favorites(path, position) VALUES (?1, ?2)",
+                    "INSERT OR REPLACE INTO favorites(track_id, position)
+                     SELECT id, ?2 FROM tracks WHERE path = ?1",
                     params![path, i as i64],
                 )
                 .map_err(|e| e.to_string())?;
@@ -1383,7 +1566,8 @@ pub fn db_import(
             let lp = st.get("lastPlayed").and_then(|v| v.as_i64()).unwrap_or(0);
             let sc = st.get("skipCount").and_then(|v| v.as_i64()).unwrap_or(0);
             tx.execute(
-                "INSERT OR REPLACE INTO stats(path, play_count, last_played, skip_count) VALUES (?1,?2,?3,?4)",
+                "INSERT OR REPLACE INTO stats(track_id, play_count, last_played, skip_count)
+                 SELECT id, ?2, ?3, ?4 FROM tracks WHERE path = ?1",
                 params![path, pc, lp, sc],
             )
             .map_err(|e| e.to_string())?;
@@ -1425,7 +1609,8 @@ pub fn db_import(
                 for (i, p) in paths.iter().enumerate() {
                     if let Some(path) = p.as_str() {
                         tx.execute(
-                            "INSERT OR IGNORE INTO playlist_items(playlist_id, path, position) VALUES (?1,?2,?3)",
+                            "INSERT OR IGNORE INTO playlist_items(playlist_id, track_id, position)
+                             SELECT ?1, id, ?3 FROM tracks WHERE path = ?2",
                             params![id, path, i as i64],
                         )
                         .map_err(|e| e.to_string())?;
@@ -1490,7 +1675,7 @@ impl<T> OptionalString<T> for rusqlite::Result<T> {
 }
 
 pub fn db_get_cover_art(db: &Db, path: &str) -> Option<(String, String, Vec<u8>)> {
-    let conn = db.0.lock();
+    let conn = db.read();
 
     // First find album and artist for the path
     let (album, artist): (String, String) = conn
@@ -1534,7 +1719,11 @@ mod indexing_tests {
         let mut conn = Connection::open_in_memory().expect("open test database");
         conn.execute_batch(SCHEMA).expect("create test schema");
         migrate(&mut conn).expect("migrate test schema");
-        Db(Mutex::new(ConnectionSlot::new(conn)), DbCache::default())
+        Db(
+            Mutex::new(ConnectionSlot::new(conn)),
+            DbCache::default(),
+            ReadPool::empty(),
+        )
     }
 
     fn unique_temp_dir() -> PathBuf {
@@ -1704,6 +1893,29 @@ mod indexing_tests {
             .execute_batch(SCHEMA)
             .expect("create test schema");
         connection
+            .execute_batch(
+                "DROP TABLE playlist_items;
+                 DROP TABLE favorites;
+                 DROP TABLE stats;
+                 CREATE TABLE stats (
+                   path TEXT PRIMARY KEY,
+                   play_count INTEGER NOT NULL DEFAULT 0,
+                   last_played INTEGER NOT NULL DEFAULT 0,
+                   skip_count INTEGER NOT NULL DEFAULT 0
+                 );
+                 CREATE TABLE favorites (
+                   path TEXT PRIMARY KEY,
+                   position INTEGER NOT NULL DEFAULT 0
+                 );
+                 CREATE TABLE playlist_items (
+                   playlist_id TEXT NOT NULL,
+                   path TEXT NOT NULL,
+                   position INTEGER NOT NULL,
+                   PRIMARY KEY (playlist_id, path)
+                 );",
+            )
+            .expect("restore v1 path-based relationships");
+        connection
             .pragma_update(None, "user_version", 1)
             .expect("mark schema v1");
         let legacy = r"D:\Music\song.flac";
@@ -1770,21 +1982,25 @@ mod indexing_tests {
             .expect("count merged tracks");
         let stats: (i64, i64, i64) = connection
             .query_row(
-                "SELECT play_count, last_played, skip_count FROM stats WHERE path = ?1",
+                "SELECT s.play_count, s.last_played, s.skip_count
+                 FROM stats s JOIN tracks t ON t.id = s.track_id WHERE t.path = ?1",
                 params![legacy],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .expect("read merged stats");
         let favorite_position: i64 = connection
             .query_row(
-                "SELECT position FROM favorites WHERE path = ?1",
+                "SELECT f.position FROM favorites f
+                 JOIN tracks t ON t.id = f.track_id WHERE t.path = ?1",
                 params![legacy],
                 |row| row.get(0),
             )
             .expect("read merged favorite");
         let playlist_position: i64 = connection
             .query_row(
-                "SELECT position FROM playlist_items WHERE playlist_id = 'playlist' AND path = ?1",
+                "SELECT i.position FROM playlist_items i
+                 JOIN tracks t ON t.id = i.track_id
+                 WHERE i.playlist_id = 'playlist' AND t.path = ?1",
                 params![legacy],
                 |row| row.get(0),
             )
@@ -1826,8 +2042,8 @@ mod indexing_tests {
         insert_track(&db, &new_path, "same-fingerprint");
         db.0.lock()
             .execute(
-                "INSERT INTO stats(path, play_count, last_played, skip_count)
-                 VALUES (?1, 7, 42, 2)",
+                "INSERT INTO stats(track_id, play_count, last_played, skip_count)
+                 SELECT id, 7, 42, 2 FROM tracks WHERE path = ?1",
                 params![old_path.to_string_lossy()],
             )
             .expect("insert old stats");
@@ -1838,7 +2054,8 @@ mod indexing_tests {
         let migrated: (i64, i64, i64) =
             db.0.lock()
                 .query_row(
-                    "SELECT play_count, last_played, skip_count FROM stats WHERE path = ?1",
+                    "SELECT s.play_count, s.last_played, s.skip_count
+                     FROM stats s JOIN tracks t ON t.id = s.track_id WHERE t.path = ?1",
                     params![new_path.to_string_lossy()],
                     |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
                 )

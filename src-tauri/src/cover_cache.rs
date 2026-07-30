@@ -13,12 +13,16 @@ use lofty::prelude::*;
 use lofty::probe::Probe;
 use tauri::{AppHandle, Manager, State};
 
+use crate::cache_manager::{self, CacheKind};
 use crate::{db, is_allowed_audio, limits};
 
 const THUMB_SIZE: u32 = 300;
 
 // Directory where downscaled cover thumbnails are cached on disk.
 pub(crate) fn cover_cache_dir(app: &AppHandle) -> Option<PathBuf> {
+    if let Some(cache) = cache_manager::manager(app) {
+        return Some(cache.directory(CacheKind::Covers));
+    }
     let dir = app.path().app_cache_dir().ok()?.join("covers");
     fs::create_dir_all(&dir).ok()?;
     Some(dir)
@@ -173,7 +177,7 @@ pub(crate) async fn get_track_cover(
         return Err("Path is not within an allowed music folder".to_string());
     }
 
-    let cache = cover_cache_dir(&app);
+    let cache = cache_manager::manager(&app);
 
     // 1. Try to get it from the database first
     if let Some((_, _, bytes)) = db::db_get_cover_art(&db, &path) {
@@ -190,8 +194,8 @@ pub(crate) async fn get_track_cover(
             let key = cover_cache_key(&p_buf);
 
             // Fast path: serve a previously cached thumbnail.
-            if let (Some(dir), Some(k)) = (&cache, &key) {
-                if let Ok(bytes) = fs::read(dir.join(format!("{k}.jpg"))) {
+            if let (Some(cache), Some(k)) = (&cache, &key) {
+                if let Some(bytes) = cache.read(CacheKind::Covers, &format!("{k}.jpg")) {
                     let b64 = general_purpose::STANDARD.encode(&bytes);
                     return Some(format!("data:image/jpeg;base64,{b64}"));
                 }
@@ -199,8 +203,8 @@ pub(crate) async fn get_track_cover(
 
             let (raw, _) = extract_cover(&p_buf)?;
             let thumb = make_thumbnail(&raw)?;
-            if let (Some(dir), Some(k)) = (&cache, &key) {
-                let _ = fs::write(dir.join(format!("{k}.jpg")), &thumb);
+            if let (Some(cache), Some(k)) = (&cache, &key) {
+                let _ = cache.write(CacheKind::Covers, &format!("{k}.jpg"), &thumb, Some(&p_buf));
             }
             let b64 = general_purpose::STANDARD.encode(&thumb);
             Some(format!("data:image/jpeg;base64,{b64}"))
@@ -255,20 +259,28 @@ pub(crate) async fn get_track_cover_path(
         return Err("Path is not within an allowed music folder".to_string());
     }
 
-    let cache = cover_cache_dir(&app);
+    let cache = cache_manager::manager(&app);
 
     // 1. Try to get it from the database first
     if let Some((album, artist, bytes)) = db::db_get_cover_art(&db, &path) {
+        let source_path = path_buf.clone();
         let result = tauri::async_runtime::spawn_blocking(move || -> Option<String> {
-            let dir = cache?;
+            let cache = cache?;
             let thumb = make_thumbnail(&bytes)?;
             let mut hasher = DefaultHasher::new();
             album.hash(&mut hasher);
             artist.hash(&mut hasher);
             let key = format!("db_{:016x}", hasher.finish());
-            let file = dir.join(format!("{key}.jpg"));
+            let name = format!("{key}.jpg");
+            let file = cache
+                .cached_path(CacheKind::Covers, &name)
+                .unwrap_or_else(|| {
+                    cache
+                        .write(CacheKind::Covers, &name, &thumb, Some(&source_path))
+                        .unwrap_or_else(|_| cache.directory(CacheKind::Covers).join(&name))
+                });
             if !file.exists() {
-                fs::write(&file, thumb).ok()?;
+                return None;
             }
             Some(file.to_string_lossy().into_owned())
         })
@@ -282,19 +294,21 @@ pub(crate) async fn get_track_cover_path(
     if path_buf.exists() {
         let p_buf = path_buf.clone();
         let result = tauri::async_runtime::spawn_blocking(move || -> Option<String> {
-            let dir = cache?;
+            let cache = cache?;
             let key = cover_cache_key(&p_buf)?;
-            let file = dir.join(format!("{key}.jpg"));
+            let name = format!("{key}.jpg");
 
             // Fast path: thumbnail already cached on disk.
-            if file.exists() {
+            if let Some(file) = cache.cached_path(CacheKind::Covers, &name) {
                 return Some(file.to_string_lossy().into_owned());
             }
 
             // Decode → downscale → cache a JPEG thumbnail, then hand back its path.
             let (raw, _mime) = extract_cover(&p_buf)?;
             let thumb = make_thumbnail(&raw)?;
-            fs::write(&file, &thumb).ok()?;
+            let file = cache
+                .write(CacheKind::Covers, &name, &thumb, Some(&p_buf))
+                .ok()?;
             Some(file.to_string_lossy().into_owned())
         })
         .await
@@ -339,14 +353,15 @@ pub(crate) async fn get_track_palette(
         return Err("Path is not within an allowed music folder".to_string());
     }
 
-    let cache = cover_cache_dir(&app);
+    let cache = cache_manager::manager(&app);
 
     let result = tauri::async_runtime::spawn_blocking(move || -> Option<Vec<String>> {
         let key = cover_cache_key(&path_buf);
 
         // Fast path: a previously computed palette cached on disk.
-        if let (Some(dir), Some(k)) = (&cache, &key) {
-            if let Ok(text) = fs::read_to_string(dir.join(format!("{k}.pal"))) {
+        if let (Some(cache), Some(k)) = (&cache, &key) {
+            if let Some(bytes) = cache.read(CacheKind::Covers, &format!("{k}.pal")) {
+                let text = String::from_utf8(bytes).ok()?;
                 if let Ok(colors) = serde_json::from_str::<Vec<String>>(&text) {
                     if colors.len() == 3 {
                         return Some(colors);
@@ -358,8 +373,12 @@ pub(crate) async fn get_track_palette(
         // Decode from the cached thumbnail when present (cheap: 300px JPEG),
         // otherwise extract + downscale the embedded cover once.
         let img = match (&cache, &key) {
-            (Some(dir), Some(k)) if dir.join(format!("{k}.jpg")).exists() => {
-                let bytes = fs::read(dir.join(format!("{k}.jpg"))).ok()?;
+            (Some(cache), Some(k))
+                if cache
+                    .cached_path(CacheKind::Covers, &format!("{k}.jpg"))
+                    .is_some() =>
+            {
+                let bytes = cache.read(CacheKind::Covers, &format!("{k}.jpg"))?;
                 limits::decode_image_limited(&bytes).ok()?
             }
             _ => {
@@ -369,9 +388,14 @@ pub(crate) async fn get_track_palette(
         };
 
         let palette = extract_palette_from_image(&img);
-        if let (Some(dir), Some(k)) = (&cache, &key) {
+        if let (Some(cache), Some(k)) = (&cache, &key) {
             if let Ok(text) = serde_json::to_string(&palette) {
-                let _ = fs::write(dir.join(format!("{k}.pal")), text);
+                let _ = cache.write(
+                    CacheKind::Covers,
+                    &format!("{k}.pal"),
+                    text.as_bytes(),
+                    Some(&path_buf),
+                );
             }
         }
         Some(palette)

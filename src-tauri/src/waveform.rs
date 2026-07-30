@@ -1,22 +1,15 @@
 //! Native waveform analysis and its on-disk cache.
 
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use rodio::Source;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
+use crate::cache_manager::{self, CacheKind};
 use crate::cover_cache::cover_cache_key;
 use crate::{build_decoder, is_allowed_audio};
 
 const WAVEFORM_BUCKETS: usize = 400;
-
-// Directory where precomputed waveforms are cached on disk.
-fn waveform_cache_dir(app: &AppHandle) -> Option<PathBuf> {
-    let dir = app.path().app_cache_dir().ok()?.join("waveforms");
-    fs::create_dir_all(&dir).ok()?;
-    Some(dir)
-}
 
 // Decode a track and reduce it to WAVEFORM_BUCKETS peak amplitudes (max abs per
 // window), normalized to the track's loudest peak and quantized to 0..255. Runs
@@ -98,14 +91,15 @@ pub(crate) async fn get_waveform(app: AppHandle, path: String) -> Result<Option<
         return Err("Path is not within an allowed music folder".to_string());
     }
 
-    let cache = waveform_cache_dir(&app);
+    let cache = cache_manager::manager(&app);
 
     let result = tauri::async_runtime::spawn_blocking(move || -> Option<Vec<u8>> {
         let key = cover_cache_key(&path_buf);
 
         // Fast path: cached waveform.
-        if let (Some(dir), Some(k)) = (&cache, &key) {
-            if let Ok(text) = fs::read_to_string(dir.join(format!("{k}.wf"))) {
+        if let (Some(cache), Some(k)) = (&cache, &key) {
+            if let Some(bytes) = cache.read(CacheKind::Waveforms, &format!("{k}.wf")) {
+                let text = String::from_utf8(bytes).ok()?;
                 if let Ok(v) = serde_json::from_str::<Vec<u8>>(&text) {
                     if !v.is_empty() {
                         return Some(v);
@@ -115,9 +109,14 @@ pub(crate) async fn get_waveform(app: AppHandle, path: String) -> Result<Option<
         }
 
         let peaks = compute_waveform(&path_buf)?;
-        if let (Some(dir), Some(k)) = (&cache, &key) {
+        if let (Some(cache), Some(k)) = (&cache, &key) {
             if let Ok(text) = serde_json::to_string(&peaks) {
-                let _ = fs::write(dir.join(format!("{k}.wf")), text);
+                let _ = cache.write(
+                    CacheKind::Waveforms,
+                    &format!("{k}.wf"),
+                    text.as_bytes(),
+                    Some(&path_buf),
+                );
             }
         }
         Some(peaks)

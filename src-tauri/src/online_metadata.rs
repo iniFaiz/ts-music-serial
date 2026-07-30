@@ -813,6 +813,9 @@ pub async fn import_online_metadata(
             .await
             {
                 Ok(Ok(Some((track, fingerprint)))) => {
+                    if let Some(cache) = crate::cache_manager::manager(&app) {
+                        cache.invalidate_source(&path);
+                    }
                     db::reindex_track(&db, &track, fingerprint.as_deref())?;
                     summary.updated += 1;
                     summary.tracks.push(track);

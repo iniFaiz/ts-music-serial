@@ -594,6 +594,23 @@
         </button>
       </div>
 
+      <!-- Native generated caches -->
+      <div class="flex items-center justify-between gap-4 mb-5 border-t border-white/5 pt-5">
+        <div>
+          <h3 class="text-white font-medium text-sm">Generated cache</h3>
+          <p class="text-xs text-gray-500">
+            Clear cached covers, waveforms, lyrics and loudness analysis. They are rebuilt on demand.
+          </p>
+        </div>
+        <button
+          @click="store.clearNativeCache()"
+          :disabled="store.loading"
+          class="px-4 py-2 bg-[#3a3a3a] hover:bg-[#444] disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-md transition-colors text-sm font-medium shrink-0"
+        >
+          Clear Cache
+        </button>
+      </div>
+
       <!-- Reset library -->
       <div class="flex items-center justify-between gap-4 border-t border-white/5 pt-5">
         <div>

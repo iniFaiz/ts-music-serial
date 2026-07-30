@@ -16,6 +16,7 @@ const songs = ref([]);
 const total = ref(0);
 const loading = ref(false);
 const offset = ref(0);
+const cursor = ref(null);
 const sortBy = ref('title');
 const order = ref('asc');
 const scrollEl = ref(null);
@@ -60,6 +61,7 @@ async function loadPage(reset = false) {
     order: order.value,
     search: search.value,
     offset: fetchOffset,
+    cursor: reset ? null : cursor.value,
     limit: PAGE,
   };
   const cacheKey = reset ? tracksPageCacheKey(params) : null;
@@ -71,6 +73,7 @@ async function loadPage(reset = false) {
     total.value = cached.total;
     songs.value = cached.tracks;
     offset.value = cached.tracks.length;
+    cursor.value = cached.next_cursor ?? null;
     loading.value = false;
   } else {
     loading.value = true;
@@ -86,6 +89,7 @@ async function loadPage(reset = false) {
     total.value = page.total;
     songs.value = reset ? page.tracks : songs.value.concat(page.tracks);
     offset.value = songs.value.length;
+    cursor.value = page.next_cursor ?? null;
     if (reset) {
       const searchOrSortChanged =
         search.value !== prevSearch || sortBy.value !== prevSortBy || order.value !== prevOrder;

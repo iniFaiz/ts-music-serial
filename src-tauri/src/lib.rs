@@ -16,6 +16,7 @@ use lofty::prelude::*;
 use lofty::probe::Probe;
 use lofty::tag::ItemKey;
 use tauri::{AppHandle, Emitter, Manager, State};
+mod cache_manager;
 mod cover_cache;
 mod discord;
 mod library_db;
@@ -204,12 +205,6 @@ mod file_argument_tests {
 // Lyrics — local tag / sidecar .lrc, then NetEase → LRCLIB → Musixmatch
 // ---------------------------------------------------------------------------
 
-fn lyrics_cache_dir(app: &AppHandle) -> Option<PathBuf> {
-    let dir = app.path().app_cache_dir().ok()?.join("lyrics");
-    fs::create_dir_all(&dir).ok()?;
-    Some(dir)
-}
-
 // Look for lyrics shipped with the file itself: a sidecar "<name>.lrc" (usually
 // hand-synced) takes priority over an embedded lyrics tag.
 fn local_lyrics(path: &Path) -> Option<lyrics::Lyrics> {
@@ -271,12 +266,12 @@ async fn get_lyrics(
     // Disk cache keyed by path+mtime+size+provider. "null" = previously not found.
     // `_v2` schema tag: bumped when LyricLine gained word-level timing + romaji,
     // so stale line-only cache entries are re-fetched instead of reused.
-    let cache_file = cover_cache_key(&path_buf).and_then(|k| {
-        lyrics_cache_dir(&app).map(|d| d.join(format!("{k}_{lyrics_source}_v2.json")))
-    });
+    let cache = cache_manager::manager(&app);
+    let cache_file = cover_cache_key(&path_buf).map(|key| format!("{key}_{lyrics_source}_v2.json"));
     if !force {
-        if let Some(cf) = &cache_file {
-            if let Ok(data) = fs::read_to_string(cf) {
+        if let (Some(cache), Some(cache_file)) = (&cache, &cache_file) {
+            if let Some(bytes) = cache.read(cache_manager::CacheKind::Lyrics, cache_file) {
+                let data = String::from_utf8(bytes).ok()?;
                 if data.trim() == "null" {
                     return None;
                 }
@@ -352,12 +347,17 @@ async fn get_lyrics(
         lyrics::apply_background(&mut l.lines);
     }
 
-    if let Some(cf) = &cache_file {
+    if let (Some(cache), Some(cache_file)) = (&cache, &cache_file) {
         let data = match &result {
             Some(l) => serde_json::to_string(l).unwrap_or_else(|_| "null".to_string()),
             None => "null".to_string(),
         };
-        let _ = fs::write(cf, data);
+        let _ = cache.write(
+            cache_manager::CacheKind::Lyrics,
+            cache_file,
+            data.as_bytes(),
+            Some(&path_buf),
+        );
     }
 
     result
@@ -864,6 +864,10 @@ pub fn run() {
 
     builder
         .setup(move |_app| {
+            let cache = cache_manager::CacheManager::new(_app.handle())?;
+            let cover_directory = cache.directory(cache_manager::CacheKind::Covers);
+            _app.manage(cache.clone());
+
             // Open the SQLite library database (source of truth for tracks, stats,
             // playlists, favorites, recents). Managed here so every db_* command
             // can reach it via State<Db>.
@@ -886,9 +890,16 @@ pub fn run() {
             // Allow the cover-thumbnail cache dir through the asset protocol so
             // the webview can load cached covers by path (convertFileSrc) instead
             // of receiving them base64-encoded over IPC.
-            if let Some(dir) = cover_cache_dir(_app.handle()) {
-                let _ = _app.asset_protocol_scope().allow_directory(&dir, false);
-            }
+            let _ = _app
+                .asset_protocol_scope()
+                .allow_directory(&cover_directory, false);
+
+            // Recover old/unindexed cache files, remove orphaned source entries,
+            // and enforce per-kind quotas away from the startup critical path.
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_secs(3));
+                let _ = cache.gc();
+            });
 
             #[cfg(target_os = "windows")]
             {
@@ -924,6 +935,7 @@ pub fn run() {
             get_track_cover_path,
             get_track_palette,
             get_waveform,
+            cache_manager::clear_cache,
             restore_roots,
             window_drag::start_window_drag,
             player_prepare_next,

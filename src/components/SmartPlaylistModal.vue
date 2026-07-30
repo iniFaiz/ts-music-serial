@@ -3,6 +3,7 @@ import { ref, computed, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { invokeCommand as invoke } from '../generated/ipc';
 import { store } from '../store';
+import { readPlaylistCover } from '../playlistCover';
 import {
   FIELDS,
   FIELD_MAP,
@@ -66,30 +67,15 @@ watch(
 const fileInput = ref(null);
 const pickImage = () => fileInput.value?.click();
 
-const onFile = (e) => {
+const onFile = async (e) => {
   const file = e.target.files && e.target.files[0];
   e.target.value = '';
   if (!file) return;
-  const reader = new FileReader();
-  reader.onload = () => downscale(String(reader.result));
-  reader.readAsDataURL(file);
-};
-
-// Shrink the picked image so it stays small in storage.
-const downscale = (dataUrl) => {
-  const img = new Image();
-  img.onload = () => {
-    const max = 400;
-    const scale = Math.min(1, max / Math.max(img.width, img.height));
-    const w = Math.round(img.width * scale);
-    const h = Math.round(img.height * scale);
-    const canvas = document.createElement('canvas');
-    canvas.width = w;
-    canvas.height = h;
-    canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-    form.value.cover = canvas.toDataURL('image/jpeg', 0.85);
-  };
-  img.src = dataUrl;
+  try {
+    form.value.cover = await readPlaylistCover(file);
+  } catch (error) {
+    console.error('Failed to process smart-playlist cover', error);
+  }
 };
 
 const clearCover = () => {

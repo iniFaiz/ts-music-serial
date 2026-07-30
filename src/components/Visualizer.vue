@@ -3,6 +3,7 @@ import { ref, watch, onMounted, onUnmounted } from 'vue';
 import { store } from '../store';
 import { invokeCommand as invoke } from '../generated/ipc';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { listen } from '@tauri-apps/api/event';
 import { nyancatRainbowRgb } from '../nyancatTheme';
 
 // Real-time 7-bar spectrum visualizer. The backend analyzes audio into 6 bands;
@@ -11,8 +12,6 @@ import { nyancatRainbowRgb } from '../nyancatTheme';
 // instead of flat lines.
 const BAR_COUNT = 7;
 const PLAYING_ENVELOPE = [0.7, 0.85, 1.0, 0.9, 0.8, 0.65, 0.5]; // preserves the curved shape at peak levels
-const POLL_MS = 33; // ~30 Hz backend polling; rendering still runs at full rAF rate
-
 const canvasRef = ref(null);
 
 // Plain JS arrays — no Vue reactivity overhead here!
@@ -20,10 +19,8 @@ const heights = new Array(BAR_COUNT).fill(0.0);
 const targets = new Array(BAR_COUNT).fill(0.0);
 
 let rafId = null;
-let inflight = false;
-let lastPoll = 0;
 let isVisible = null; // Unset initially to force the first updateVisibilityState to run
-let pollTimer = null;
+let unlistenSpectrum = null;
 let nyancatColorMix = store.nyancatMode ? 1 : 0;
 let reduceMotion = false;
 let motionQuery = null;
@@ -75,7 +72,8 @@ const updateVisibilityState = (visible) => {
   }
 };
 
-// Periodic check for window minimized state
+// Window-state events update the frontend immediately; Rust also verifies the
+// native window state before emitting telemetry.
 const checkWindowStatus = async () => {
   try {
     const minimized = await appWindow.isMinimized();
@@ -133,26 +131,7 @@ const tick = (now) => {
     return;
   }
 
-  if (store.isPlaying) {
-    // Throttle the IPC poll; a single request is kept in flight at a time.
-    if (!inflight && now - lastPoll >= POLL_MS) {
-      lastPoll = now;
-      inflight = true;
-      invoke('player_spectrum')
-        .then((vals) => {
-          if (Array.isArray(vals)) {
-            const mapped = mapBandsTo7(vals);
-            for (let i = 0; i < BAR_COUNT; i++) {
-              targets[i] = (mapped[i] ?? 0) * PLAYING_ENVELOPE[i];
-            }
-          }
-        })
-        .catch(() => {})
-        .finally(() => {
-          inflight = false;
-        });
-    }
-  } else {
+  if (!store.isPlaying) {
     // Drop all bars down to the minimum flat level when paused/stopped.
     for (let i = 0; i < BAR_COUNT; i++) {
       targets[i] = 0.0;
@@ -254,6 +233,20 @@ onMounted(async () => {
   motionQuery.addEventListener('change', onMotionPreferenceChange);
   setupCanvas();
 
+  try {
+    unlistenSpectrum = await listen('player-spectrum', (event) => {
+      const vals = event.payload;
+      if (!isVisible || !Array.isArray(vals)) return;
+      const mapped = mapBandsTo7(vals);
+      for (let i = 0; i < BAR_COUNT; i++) {
+        targets[i] = (mapped[i] ?? 0) * PLAYING_ENVELOPE[i];
+      }
+      if (!rafId && store.isPlaying) rafId = requestAnimationFrame(tick);
+    });
+  } catch {
+    // Spectrum telemetry is best-effort during development upgrades.
+  }
+
   // Listen to visibilitychange event
   document.addEventListener('visibilitychange', checkWindowStatus);
 
@@ -266,9 +259,6 @@ onMounted(async () => {
     // ignore
   }
 
-  // Check state every 300ms as a fallback for OS-level minimization
-  pollTimer = setInterval(checkWindowStatus, 300);
-
   // Initial check
   await checkWindowStatus();
 
@@ -280,7 +270,7 @@ onMounted(async () => {
   onUnmounted(() => {
     document.removeEventListener('visibilitychange', checkWindowStatus);
     if (motionQuery) motionQuery.removeEventListener('change', onMotionPreferenceChange);
-    if (pollTimer) clearInterval(pollTimer);
+    if (unlistenSpectrum) unlistenSpectrum();
     if (unlistenBlur) unlistenBlur();
     if (unlistenFocus) unlistenFocus();
     if (rafId) {

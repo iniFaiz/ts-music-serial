@@ -1,52 +1,22 @@
 <script setup>
 import { ref, computed, watch, nextTick, onUnmounted } from 'vue';
 import { store } from '../store';
-import { loadLyrics, activeLineIndex, processLyricLines } from '../lyricsCache';
+import { activeLineIndex, processLyricLines } from '../lyricsCache';
+import { useTrackLyrics } from '../useTrackLyrics';
 import LyricContent from './LyricContent.vue';
 
-const lyrics = ref(null);
-const lyricsState = ref('idle');
+const { lyrics, lyricsLoading, fetchLyrics } = useTrackLyrics({
+  song: () => store.currentSong,
+  active: () => store.lyricsPanelOpen,
+  source: () => store.lyricsSource,
+});
+const lyricsState = computed(() => {
+  if (lyricsLoading.value) return 'loading';
+  return lyrics.value === undefined ? 'idle' : 'done';
+});
 
 // Whether the current lyrics carry a romanization (enables the romaji toggle).
 const hasRomaji = computed(() => !!(lyrics.value && lyrics.value.has_romaji));
-
-async function fetchLyrics(force = false) {
-  const song = store.currentSong;
-  if (!song) {
-    lyrics.value = null;
-    lyricsState.value = 'idle';
-    return;
-  }
-  lyricsState.value = 'loading';
-  const result = await loadLyrics(song, { force });
-  lyrics.value = result;
-  lyricsState.value = 'done';
-}
-
-watch(
-  () => store.lyricsPanelOpen,
-  (open) => {
-    if (open && lyricsState.value === 'idle') fetchLyrics();
-  }
-);
-
-watch(
-  () => store.currentSong,
-  () => {
-    lyrics.value = null;
-    lyricsState.value = 'idle';
-    if (store.lyricsPanelOpen) fetchLyrics();
-  }
-);
-
-watch(
-  () => store.lyricsSource,
-  () => {
-    lyrics.value = null;
-    lyricsState.value = 'idle';
-    if (store.lyricsPanelOpen) fetchLyrics(true);
-  }
-);
 
 // +50ms lookahead: compensates for the ~50ms average lag from the 100ms poll interval
 const currentTimeMs = computed(

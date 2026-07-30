@@ -8,9 +8,10 @@ export function tracksPageCacheKey({
   order = 'asc',
   search = '',
   offset = 0,
+  cursor = null,
   limit = TRACK_PAGE_SIZE,
 } = {}) {
-  return `tracks:${sortBy}:${order}:${search || ''}:${offset}:${limit}`;
+  return `tracks:${sortBy}:${order}:${search || ''}:${offset}:${cursor ?? ''}:${limit}`;
 }
 
 export async function fetchTracksPage({
@@ -18,6 +19,7 @@ export async function fetchTracksPage({
   order = 'asc',
   search = '',
   offset = 0,
+  cursor = null,
   limit = TRACK_PAGE_SIZE,
 } = {}) {
   const result = await invoke('db_tracks_page', {
@@ -25,6 +27,7 @@ export async function fetchTracksPage({
     order,
     search: search || null,
     offset,
+    cursor,
     limit,
   });
   if (result && Array.isArray(result.tracks)) {

@@ -1,6 +1,6 @@
 //! Database backup, restore, root relocation, and missing-file recovery.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -444,6 +444,7 @@ fn restore_from_path(
     let (staging, roots) = staged_restore(source, database_path)?;
     let mut rollback = TemporaryDatabase::sibling_of(database_path, "rollback")?;
     let rollback_swap = TemporaryDatabase::sibling_of(database_path, "rollback-swap")?;
+    let reader_pause = db.2.pause();
     let mut slot = db.0.lock();
 
     // Capture a consistent rollback image while the current connection is live.
@@ -517,6 +518,8 @@ fn restore_from_path(
 
     db.1.smart_counts.lock().clear();
     db.1.station_sessions.lock().clear();
+    drop(slot);
+    reader_pause.finish()?;
     Ok(ImportBackupResult { roots })
 }
 
@@ -674,25 +677,18 @@ struct PathMove {
 
 fn table_moves(
     transaction: &Transaction<'_>,
-    table: &str,
     old_root: &str,
     new_root: &Path,
 ) -> Result<Vec<PathMove>, String> {
-    let sql = match table {
-        "tracks" => "SELECT path FROM tracks",
-        "stats" => "SELECT path FROM stats",
-        "favorites" => "SELECT path FROM favorites",
-        _ => return Err("Invalid relocation table".to_string()),
-    };
     let mut statement = transaction
-        .prepare(sql)
+        .prepare("SELECT path FROM tracks")
         .map_err(|error| error.to_string())?;
     let paths = statement
         .query_map([], |row| row.get::<_, String>(0))
         .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
-    build_moves(paths, old_root, new_root, table)
+    build_moves(paths, old_root, new_root, "tracks")
 }
 
 fn build_moves(
@@ -741,46 +737,8 @@ fn build_moves(
     Ok(moves)
 }
 
-fn playlist_moves(
-    transaction: &Transaction<'_>,
-    old_root: &str,
-    new_root: &Path,
-) -> Result<Vec<(String, PathMove)>, String> {
-    let mut statement = transaction
-        .prepare("SELECT playlist_id, path FROM playlist_items")
-        .map_err(|error| error.to_string())?;
-    let rows = statement
-        .query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })
-        .map_err(|error| error.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())?;
-
-    let mut grouped: HashMap<String, Vec<String>> = HashMap::new();
-    for (playlist, path) in rows {
-        grouped.entry(playlist).or_default().push(path);
-    }
-    let mut result = Vec::new();
-    for (playlist, paths) in grouped {
-        for path_move in build_moves(paths, old_root, new_root, "playlist_items")? {
-            result.push((playlist.clone(), path_move));
-        }
-    }
-    Ok(result)
-}
-
-fn apply_moves(
-    transaction: &Transaction<'_>,
-    table: &str,
-    moves: &[PathMove],
-) -> Result<(), String> {
-    let sql = match table {
-        "tracks" => "UPDATE tracks SET path = ?2 WHERE path = ?1",
-        "stats" => "UPDATE stats SET path = ?2 WHERE path = ?1",
-        "favorites" => "UPDATE favorites SET path = ?2 WHERE path = ?1",
-        _ => return Err("Invalid relocation table".to_string()),
-    };
+fn apply_moves(transaction: &Transaction<'_>, moves: &[PathMove]) -> Result<(), String> {
+    let sql = "UPDATE tracks SET path = ?2 WHERE path = ?1";
     for path_move in moves {
         transaction
             .execute(sql, params![path_move.old, path_move.temporary])
@@ -871,32 +829,10 @@ fn relocate_root(
         return Err("New root collides with another stored library root".to_string());
     }
 
-    // Preflight every UNIQUE/PRIMARY KEY path before changing anything. No LIKE
-    // is used, so '%' and '_' remain literal and Music never matches Music2.
-    let track_moves = table_moves(&transaction, "tracks", old_root, new_root)?;
-    let stats_moves = table_moves(&transaction, "stats", old_root, new_root)?;
-    let favorite_moves = table_moves(&transaction, "favorites", old_root, new_root)?;
-    let playlist_moves = playlist_moves(&transaction, old_root, new_root)?;
-
-    apply_moves(&transaction, "tracks", &track_moves)?;
-    apply_moves(&transaction, "stats", &stats_moves)?;
-    apply_moves(&transaction, "favorites", &favorite_moves)?;
-    for (playlist, path_move) in &playlist_moves {
-        transaction
-            .execute(
-                "UPDATE playlist_items SET path = ?3 WHERE playlist_id = ?1 AND path = ?2",
-                params![playlist, path_move.old, path_move.temporary],
-            )
-            .map_err(|error| error.to_string())?;
-    }
-    for (playlist, path_move) in &playlist_moves {
-        transaction
-            .execute(
-                "UPDATE playlist_items SET path = ?3 WHERE playlist_id = ?1 AND path = ?2",
-                params![playlist, path_move.temporary, path_move.new],
-            )
-            .map_err(|error| error.to_string())?;
-    }
+    // Relationships use tracks.id, so only the mutable path attribute moves.
+    // No LIKE is used, so '%' and '_' remain literal and Music never matches Music2.
+    let track_moves = table_moves(&transaction, old_root, new_root)?;
+    apply_moves(&transaction, &track_moves)?;
 
     transaction
         .execute(
@@ -1105,7 +1041,8 @@ mod tests {
         insert_track(&connection, &sibling_track);
         connection
             .execute(
-                "INSERT INTO stats(path, play_count) VALUES (?1, 4)",
+                "INSERT INTO stats(track_id, play_count)
+                 SELECT id, 4 FROM tracks WHERE path = ?1",
                 params![old_track.to_string_lossy().as_ref()],
             )
             .expect("insert stats");
@@ -1277,12 +1214,6 @@ pub fn db_prune_and_get_missing(db: State<Db>) -> Result<Vec<MissingTrackInfo>, 
         let tx = conn.transaction().map_err(|e| e.to_string())?;
         for p in &to_remove {
             tx.execute("DELETE FROM tracks WHERE path = ?1", params![p])
-                .map_err(|e| e.to_string())?;
-            tx.execute("DELETE FROM stats WHERE path = ?1", params![p])
-                .map_err(|e| e.to_string())?;
-            tx.execute("DELETE FROM favorites WHERE path = ?1", params![p])
-                .map_err(|e| e.to_string())?;
-            tx.execute("DELETE FROM playlist_items WHERE path = ?1", params![p])
                 .map_err(|e| e.to_string())?;
         }
         tx.execute("DELETE FROM pending_roots", [])

@@ -15,8 +15,8 @@ import { createNyanCatSeekStyle } from '../nyancatTheme';
 const router = useRouter();
 const playerCoverRef = ref(null);
 
-// Playback is handled natively in Rust (rodio + symphonia). This component just
-// issues commands and polls the backend for the current position/duration.
+// Playback is handled natively in Rust (rodio + symphonia). This component
+// issues commands and consumes the throttled telemetry stream.
 const seekValue = ref(0);
 const playbackError = ref(null);
 
@@ -107,8 +107,6 @@ const volumePercentage = computed(() => {
   return (store.isMuted ? 0 : store.volume) * 100;
 });
 
-let pollTimer = null;
-let pollStopped = false; // set on unmount so an in-flight poll doesn't reschedule
 let stateTimer = null;
 // Seek suppression timestamp lives on the store (store.lastSeekAt) so the
 // fullscreen player and lyric-click seeks suppress this poll too.
@@ -247,6 +245,7 @@ watch(
 
 let unlistenMedia = null;
 let unlistenPlaybackSession = null;
+let unlistenPlayerTelemetry = null;
 
 const handleMediaControl = (payload) => {
   const action = payload && payload.action;
@@ -326,49 +325,42 @@ const handleTrackEnded = async () => {
 let finishedSince = 0; // wall-clock ms when 'finished' first latched (transition fallback)
 let lastMediaPush = 0; // throttle OS media-overlay timeline pushes
 
-const poll = async () => {
+const applyPlayerTelemetry = async (status) => {
   if (!store.currentSong || store.isBuffering) return;
-  try {
-    const status = await invoke('player_status');
-    if (!store.currentSong || store.isBuffering) return;
-    if (status.duration > 0) store.duration = status.duration;
-    if (Date.now() - store.lastSeekAt > 500) {
-      if (status.finished) {
-        store.currentTime = store.duration;
-        seekValue.value = store.duration;
-      } else {
-        store.currentTime = status.position;
-        seekValue.value = status.position;
-      }
-    }
+  if (status.duration > 0) store.duration = status.duration;
+  if (Date.now() - store.lastSeekAt > 500) {
     if (status.finished) {
-      // 'off'/exclusive advance immediately; crossfade/gapless give the backend a
-      // short window to drive the transition itself before we fall back to it.
-      if (!finishedSince) finishedSince = Date.now();
-      if (
-        store.transitionMode === 'off' ||
-        store.wasapiExclusive ||
-        Date.now() - finishedSince > 600
-      ) {
-        await handleTrackEnded();
-        finishedSince = 0;
-      }
+      store.currentTime = store.duration;
+      seekValue.value = store.duration;
     } else {
+      store.currentTime = status.position;
+      seekValue.value = status.position;
+    }
+  }
+  if (status.finished) {
+    // 'off'/exclusive advance immediately; crossfade/gapless give the backend a
+    // short window to drive the transition itself before we fall back to it.
+    if (!finishedSince) finishedSince = Date.now();
+    if (
+      store.transitionMode === 'off' ||
+      store.wasapiExclusive ||
+      Date.now() - finishedSince > 600
+    ) {
+      await handleTrackEnded();
       finishedSince = 0;
     }
-    // Keep the OS media overlay's timeline roughly in sync (~every 2s).
-    if (Date.now() - lastMediaPush > 2000 && !store.isBuffering) {
-      pushMediaPlayback();
-      lastMediaPush = Date.now();
-    }
-  } catch {
-    // ignore transient errors
+  } else {
+    finishedSince = 0;
+  }
+  // Keep the OS media overlay's timeline roughly in sync (~every 2s).
+  if (Date.now() - lastMediaPush > 2000 && !store.isBuffering) {
+    pushMediaPlayback();
+    lastMediaPush = Date.now();
   }
 };
 
-// Smoothly advance the visible position between polls (~60fps) so the seek bar
-// and synced lyrics don't step at the 250ms poll cadence. The poll snaps
-// store.currentTime back to the backend truth each tick, correcting any drift.
+// Smoothly advance the visible position between 8 Hz telemetry snapshots. Each
+// backend event snaps currentTime to native truth and corrects any drift.
 let rafId = null;
 let lastFrameTs = 0;
 const interpolate = (ts) => {
@@ -397,16 +389,6 @@ const closeLosslessPopup = () => {
 };
 
 onMounted(async () => {
-  // Self-pacing poll (~4×/s): the next poll is scheduled only after the current
-  // one resolves, so a slow IPC round-trip can never overlap itself. Position is
-  // interpolated at 60fps by `interpolate`, so the UI stays smooth at this rate.
-  const scheduleNextPoll = () => {
-    pollTimer = setTimeout(async () => {
-      await poll();
-      if (!pollStopped) scheduleNextPoll();
-    }, 250);
-  };
-  scheduleNextPoll();
   rafId = requestAnimationFrame(interpolate);
 
   // Checkpoint playback position periodically so resume-on-launch is accurate.
@@ -434,15 +416,25 @@ onMounted(async () => {
   } catch {
     // Typed playback events are best-effort during development upgrades.
   }
+
+  try {
+    unlistenPlayerTelemetry = await listen('player-telemetry', (e) => {
+      applyPlayerTelemetry(e.payload).catch(() => {});
+    });
+    // Cover the small race between window creation and listener registration.
+    const initialStatus = await invoke('player_status');
+    await applyPlayerTelemetry(initialStatus);
+  } catch {
+    // Telemetry is best-effort during development upgrades.
+  }
 });
 
 onUnmounted(() => {
-  pollStopped = true;
-  if (pollTimer) clearTimeout(pollTimer);
   if (rafId) cancelAnimationFrame(rafId);
   if (stateTimer) clearInterval(stateTimer);
   if (unlistenMedia) unlistenMedia();
   if (unlistenPlaybackSession) unlistenPlaybackSession();
+  if (unlistenPlayerTelemetry) unlistenPlayerTelemetry();
   window.removeEventListener('beforeunload', flushState);
   document.removeEventListener('click', closeLosslessPopup);
 });

@@ -1,8 +1,6 @@
 //! Native playback engine, DSP, device routing, and loudness analysis.
 
-use std::collections::HashMap;
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
@@ -15,6 +13,7 @@ use rodio::{OutputStream, OutputStreamBuilder, Sink, Source};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
+use crate::cache_manager::{self, CacheKind};
 use crate::{cover_cache_key, library_db, parse_rg_db, resolve_allowed_audio};
 
 #[cfg(target_os = "windows")]
@@ -152,13 +151,67 @@ impl AudioPlayer {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub(crate) struct PlayerStatus {
     pub(crate) position: f64,
     pub(crate) duration: f64,
     pub(crate) playing: bool,
     pub(crate) finished: bool,
     pub(crate) path: Option<String>,
+}
+
+fn player_status_snapshot(app: &AppHandle, player: &AudioPlayer) -> PlayerStatus {
+    #[cfg(target_os = "windows")]
+    if player.exclusive_enabled.load(Ordering::SeqCst) {
+        if let Some(ex) = app.try_state::<Arc<exclusive::ExclusivePlayer>>() {
+            if ex.is_active() {
+                let mut status = ex.status();
+                let update = player.session.observe_progress(
+                    status.position,
+                    status.duration,
+                    status.finished,
+                );
+                if matches!(update.effect.as_ref(), Some(PlaybackEffect::Stop { .. })) {
+                    status.playing = false;
+                    status.finished = false;
+                }
+                apply_immediate_session_effect(app, player, update.effect.as_ref());
+                emit_session_update(app, &update);
+                return status;
+            }
+        }
+    }
+
+    let mut status = match player.sink() {
+        Some(sink) => {
+            let empty = sink.empty();
+            let path = player.current_track.lock().as_ref().map(|t| t.path.clone());
+            PlayerStatus {
+                position: sink.get_pos().as_secs_f64(),
+                duration: *player.duration.lock(),
+                playing: !sink.is_paused() && !empty,
+                finished: player.active.load(Ordering::SeqCst) && empty,
+                path,
+            }
+        }
+        None => PlayerStatus {
+            position: 0.0,
+            duration: 0.0,
+            playing: false,
+            finished: false,
+            path: None,
+        },
+    };
+    let update = player
+        .session
+        .observe_progress(status.position, status.duration, status.finished);
+    if matches!(update.effect.as_ref(), Some(PlaybackEffect::Stop { .. })) {
+        status.playing = false;
+        status.finished = false;
+    }
+    apply_immediate_session_effect(app, player, update.effect.as_ref());
+    emit_session_update(app, &update);
+    status
 }
 
 fn invalidate_prepared_decoder(player: &AudioPlayer) {
@@ -725,56 +778,7 @@ pub(crate) fn player_stop(app: AppHandle, player: State<AudioPlayer>) {
 
 #[tauri::command]
 pub(crate) fn player_status(app: AppHandle, player: State<AudioPlayer>) -> PlayerStatus {
-    #[cfg(target_os = "windows")]
-    if player.exclusive_enabled.load(Ordering::SeqCst) {
-        if let Some(ex) = app.try_state::<Arc<exclusive::ExclusivePlayer>>() {
-            if ex.is_active() {
-                let mut status = ex.status();
-                let update = player.session.observe_progress(
-                    status.position,
-                    status.duration,
-                    status.finished,
-                );
-                if matches!(update.effect.as_ref(), Some(PlaybackEffect::Stop { .. })) {
-                    status.playing = false;
-                    status.finished = false;
-                }
-                apply_immediate_session_effect(&app, &player, update.effect.as_ref());
-                emit_session_update(&app, &update);
-                return status;
-            }
-        }
-    }
-    let mut status = match player.sink() {
-        Some(sink) => {
-            let empty = sink.empty();
-            let path = player.current_track.lock().as_ref().map(|t| t.path.clone());
-            PlayerStatus {
-                position: sink.get_pos().as_secs_f64(),
-                duration: *player.duration.lock(),
-                playing: !sink.is_paused() && !empty,
-                finished: player.active.load(Ordering::SeqCst) && empty,
-                path,
-            }
-        }
-        None => PlayerStatus {
-            position: 0.0,
-            duration: 0.0,
-            playing: false,
-            finished: false,
-            path: None,
-        },
-    };
-    let update = player
-        .session
-        .observe_progress(status.position, status.duration, status.finished);
-    if matches!(update.effect.as_ref(), Some(PlaybackEffect::Stop { .. })) {
-        status.playing = false;
-        status.finished = false;
-    }
-    apply_immediate_session_effect(&app, &player, update.effect.as_ref());
-    emit_session_update(&app, &update);
-    status
+    player_status_snapshot(&app, &player)
 }
 
 #[tauri::command]
@@ -1129,11 +1133,45 @@ pub(crate) fn spawn_player_ticker(app: AppHandle, player: AudioPlayer) {
 
     std::thread::spawn(move || {
         let mut transition_triggered_for_gen = 0;
+        let mut telemetry_visible = true;
+        let mut last_visibility_check = Instant::now() - Duration::from_secs(1);
+        let mut last_status_emit = Instant::now() - Duration::from_secs(1);
+        let mut last_spectrum_emit = Instant::now() - Duration::from_secs(1);
         // Next track queued onto the live sink for true-gapless playback (None
         // when nothing is waiting ahead).
         let mut gapless_queued: Option<GaplessQueued> = None;
         loop {
             std::thread::sleep(Duration::from_millis(20));
+            let tick_now = Instant::now();
+
+            // Push one shared telemetry stream instead of making every mounted
+            // component poll IPC. Status runs at 8 Hz and spectrum at 25 Hz.
+            // Events stop while the main window is hidden or minimized, while
+            // the native status snapshot keeps session accounting up to date.
+            if tick_now.duration_since(last_visibility_check) >= Duration::from_millis(250) {
+                last_visibility_check = tick_now;
+                telemetry_visible = app
+                    .get_webview_window("main")
+                    .map(|window| {
+                        window.is_visible().unwrap_or(true)
+                            && !window.is_minimized().unwrap_or(false)
+                    })
+                    .unwrap_or(true);
+            }
+            if tick_now.duration_since(last_status_emit) >= Duration::from_millis(125) {
+                last_status_emit = tick_now;
+                let status = player_status_snapshot(&app, &player);
+                if telemetry_visible {
+                    let _ = app.emit("player-telemetry", status);
+                }
+            }
+            if telemetry_visible
+                && player.spectrum.enabled.load(Ordering::Relaxed)
+                && tick_now.duration_since(last_spectrum_emit) >= Duration::from_millis(40)
+            {
+                last_spectrum_emit = tick_now;
+                let _ = app.emit("player-spectrum", player.spectrum.load());
+            }
 
             // 1. Process fading tracks (MUST run even if active is false, so fading tracks fade out and stop!)
             {
@@ -1489,34 +1527,20 @@ fn set_normalization_factor(
     }
 }
 
-// Process-wide guard around the on-disk loudness cache file.
-static LOUDNESS_LOCK: Mutex<()> = Mutex::new(());
-
-fn loudness_cache_file(app: &AppHandle) -> Option<PathBuf> {
-    let dir = app.path().app_cache_dir().ok()?;
-    fs::create_dir_all(&dir).ok()?;
-    Some(dir.join("loudness.json"))
-}
-
 fn read_loudness(app: &AppHandle, key: &str) -> Option<f32> {
-    let file = loudness_cache_file(app)?;
-    let _g = LOUDNESS_LOCK.lock();
-    let data = fs::read_to_string(&file).ok()?;
-    let map: HashMap<String, f32> = serde_json::from_str(&data).ok()?;
-    map.get(key).copied()
+    let cache = cache_manager::manager(app)?;
+    let bytes = cache.read(CacheKind::Loudness, &format!("{key}.json"))?;
+    serde_json::from_slice(&bytes).ok()
 }
 
-fn write_loudness(app: &AppHandle, key: &str, gain: f32) {
-    if let Some(file) = loudness_cache_file(app) {
-        let _g = LOUDNESS_LOCK.lock();
-        let mut map: HashMap<String, f32> = fs::read_to_string(&file)
-            .ok()
-            .and_then(|d| serde_json::from_str(&d).ok())
-            .unwrap_or_default();
-        map.insert(key.to_string(), gain);
-        if let Ok(s) = serde_json::to_string(&map) {
-            let _ = fs::write(&file, s);
-        }
+fn write_loudness(app: &AppHandle, key: &str, gain: f32, source_path: &Path) {
+    if let (Some(cache), Ok(bytes)) = (cache_manager::manager(app), serde_json::to_vec(&gain)) {
+        let _ = cache.write(
+            CacheKind::Loudness,
+            &format!("{key}.json"),
+            &bytes,
+            Some(source_path),
+        );
     }
 }
 
@@ -1553,16 +1577,16 @@ fn compute_gain_blocking(path: &Path) -> Result<f32, String> {
 #[tauri::command]
 pub(crate) async fn compute_track_gain(app: AppHandle, path: String) -> Result<f32, String> {
     let path_buf = resolve_allowed_audio(&app, Path::new(&path))?;
-    let path = path_buf.to_string_lossy().to_string();
-    let key = cover_cache_key(&path_buf).unwrap_or_else(|| path.clone());
+    let key = cover_cache_key(&path_buf).ok_or_else(|| "Track metadata unavailable".to_string())?;
     if let Some(g) = read_loudness(&app, &key) {
         return Ok(g);
     }
     let app2 = app.clone();
+    let source_path = path_buf.clone();
     let gain = tauri::async_runtime::spawn_blocking(move || compute_gain_blocking(&path_buf))
         .await
         .map_err(|e| format!("Loudness task failed: {e}"))??;
-    write_loudness(&app2, &key, gain);
+    write_loudness(&app2, &key, gain, &source_path);
     Ok(gain)
 }
 

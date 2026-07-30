@@ -5,6 +5,7 @@ import { invoke } from '@tauri-apps/api/core';
 export const COMMAND_NAMES = [
   'add_library_root',
   'cancel_online_metadata',
+  'clear_cache',
   'compute_track_gain',
   'db_album_tracks',
   'db_albums',
@@ -118,6 +119,7 @@ export type CommandName = (typeof COMMAND_NAMES)[number];
 export interface CommandArgs {
   'add_library_root': { useParallelism: boolean };
   'cancel_online_metadata': undefined;
+  'clear_cache': { kind?: string | null };
   'compute_track_gain': { path: string };
   'db_album_tracks': { album: string };
   'db_albums': { search?: string | null };
@@ -171,7 +173,7 @@ export interface CommandArgs {
   'db_top_genres': { limit: number };
   'db_track': { path: string };
   'db_tracks_by_paths': { paths: string[] };
-  'db_tracks_page': { sortBy: string; order: string; search?: string | null; offset: number; limit: number };
+  'db_tracks_page': { sortBy: string; order: string; search?: string | null; offset: number; cursor?: number | null; limit: number };
   'db_upsert_playlist': { id: string; name: string; description: string; color?: string | null; cover?: string | null; isSmart: boolean; rules?: unknown | null; sortBy?: string | null; sortOrder?: string | null; limitN?: number | null; liveUpdate?: boolean | null };
   'discord_clear': undefined;
   'discord_cover_art': { title: string; artist: string; album: string };
@@ -229,6 +231,7 @@ export interface CommandArgs {
 export interface CommandResult {
   'add_library_root': unknown /* Rust: IndexSummary */ | null;
   'cancel_online_metadata': void;
+  'clear_cache': unknown /* Rust: CacheCleanup */;
   'compute_track_gain': number;
   'db_album_tracks': unknown /* Rust: MusicTrack */[];
   'db_albums': unknown /* Rust: AlbumRow */[];
@@ -347,6 +350,7 @@ return invoke<CommandResult[K]>(command, args);
 export const ipc = {
   addLibraryRoot: (args: CommandArgs['add_library_root']) => invokeCommand('add_library_root', args),
   cancelOnlineMetadata: () => invokeCommand('cancel_online_metadata', undefined),
+  clearCache: (args: CommandArgs['clear_cache']) => invokeCommand('clear_cache', args),
   computeTrackGain: (args: CommandArgs['compute_track_gain']) => invokeCommand('compute_track_gain', args),
   dbAlbumTracks: (args: CommandArgs['db_album_tracks']) => invokeCommand('db_album_tracks', args),
   dbAlbums: (args: CommandArgs['db_albums']) => invokeCommand('db_albums', args),

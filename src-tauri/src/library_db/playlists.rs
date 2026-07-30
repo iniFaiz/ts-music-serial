@@ -23,9 +23,12 @@ type SmartPlaylistDefinition = (
 
 #[tauri::command]
 pub fn db_favorite_paths(db: State<Db>) -> Result<Vec<String>, String> {
-    let conn = db.0.lock();
+    let conn = db.read();
     let mut stmt = conn
-        .prepare("SELECT path FROM favorites ORDER BY position")
+        .prepare(
+            "SELECT t.path FROM favorites f
+             JOIN tracks t ON t.id = f.track_id ORDER BY f.position",
+        )
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |r| r.get::<_, String>(0))
@@ -35,9 +38,9 @@ pub fn db_favorite_paths(db: State<Db>) -> Result<Vec<String>, String> {
 
 #[tauri::command]
 pub fn db_favorites(db: State<Db>) -> Result<Vec<MusicTrack>, String> {
-    let conn = db.0.lock();
+    let conn = db.read();
     let sql = format!(
-        "SELECT {TRACK_COLS_T} FROM tracks t JOIN favorites f ON f.path = t.path ORDER BY f.position"
+        "SELECT {TRACK_COLS_T} FROM tracks t JOIN favorites f ON f.track_id = t.id ORDER BY f.position"
     );
     collect_tracks(&conn, &sql, params![])
 }
@@ -48,14 +51,17 @@ pub fn db_toggle_favorite(db: State<Db>, path: String) -> Result<bool, String> {
     let conn = db.0.lock();
     let exists: bool = conn
         .query_row(
-            "SELECT 1 FROM favorites WHERE path = ?1",
+            "SELECT 1 FROM favorites f JOIN tracks t ON t.id = f.track_id WHERE t.path = ?1",
             params![path],
             |_| Ok(true),
         )
         .unwrap_or(false);
     if exists {
-        conn.execute("DELETE FROM favorites WHERE path = ?1", params![path])
-            .map_err(|e| e.to_string())?;
+        conn.execute(
+            "DELETE FROM favorites WHERE track_id = (SELECT id FROM tracks WHERE path = ?1)",
+            params![path],
+        )
+        .map_err(|e| e.to_string())?;
         Ok(false)
     } else {
         let next: i64 = conn
@@ -66,7 +72,8 @@ pub fn db_toggle_favorite(db: State<Db>, path: String) -> Result<bool, String> {
             )
             .map_err(|e| e.to_string())?;
         conn.execute(
-            "INSERT INTO favorites(path, position) VALUES (?1, ?2)",
+            "INSERT INTO favorites(track_id, position)
+             SELECT id, ?2 FROM tracks WHERE path = ?1",
             params![path, next],
         )
         .map_err(|e| e.to_string())?;
@@ -77,26 +84,26 @@ pub fn db_toggle_favorite(db: State<Db>, path: String) -> Result<bool, String> {
 #[tauri::command]
 pub fn db_move_favorite(db: State<Db>, from: i64, to: i64) -> Result<(), String> {
     let mut conn = db.0.lock();
-    let mut paths: Vec<String> = {
+    let mut track_ids: Vec<i64> = {
         let mut stmt = conn
-            .prepare("SELECT path FROM favorites ORDER BY position")
+            .prepare("SELECT track_id FROM favorites ORDER BY position")
             .map_err(|e| e.to_string())?;
         let rows = stmt
-            .query_map([], |r| r.get::<_, String>(0))
+            .query_map([], |r| r.get::<_, i64>(0))
             .map_err(|e| e.to_string())?;
         rows.filter_map(|r| r.ok()).collect()
     };
     let (from, to) = (from as usize, to as usize);
-    if from >= paths.len() || to >= paths.len() {
+    if from >= track_ids.len() || to >= track_ids.len() {
         return Ok(());
     }
-    let item = paths.remove(from);
-    paths.insert(to, item);
+    let item = track_ids.remove(from);
+    track_ids.insert(to, item);
     let tx = conn.transaction().map_err(|e| e.to_string())?;
-    for (i, p) in paths.iter().enumerate() {
+    for (i, track_id) in track_ids.iter().enumerate() {
         tx.execute(
-            "UPDATE favorites SET position = ?1 WHERE path = ?2",
-            params![i as i64, p],
+            "UPDATE favorites SET position = ?1 WHERE track_id = ?2",
+            params![i as i64, track_id],
         )
         .map_err(|e| e.to_string())?;
     }
@@ -145,7 +152,7 @@ fn read_playlists(conn: &Connection) -> Result<Vec<PlaylistRow>, String> {
 
 #[tauri::command]
 pub fn db_playlists(db: State<Db>) -> Result<Vec<PlaylistRow>, String> {
-    let conn = db.0.lock();
+    let conn = db.read();
     let mut rows = read_playlists(&conn)?;
 
     // Smart playlists have no playlist_items; their count is the number of tracks
@@ -176,7 +183,7 @@ pub fn db_playlists(db: State<Db>) -> Result<Vec<PlaylistRow>, String> {
 // Normal playlist → its items in order; smart playlist → evaluated rules.
 #[tauri::command]
 pub fn db_playlist_tracks(db: State<Db>, id: String) -> Result<Vec<MusicTrack>, String> {
-    let conn = db.0.lock();
+    let conn = db.read();
     let smart: Option<SmartPlaylistDefinition> = conn
         .query_row(
             "SELECT is_smart, rules, sort_by, sort_order, limit_n FROM playlists WHERE id = ?1",
@@ -200,7 +207,7 @@ pub fn db_playlist_tracks(db: State<Db>, id: String) -> Result<Vec<MusicTrack>, 
         );
     }
     let sql = format!(
-        "SELECT {TRACK_COLS_T} FROM playlist_items i JOIN tracks t ON t.path = i.path
+        "SELECT {TRACK_COLS_T} FROM playlist_items i JOIN tracks t ON t.id = i.track_id
          WHERE i.playlist_id = ?1 ORDER BY i.position"
     );
     collect_tracks(&conn, &sql, params![id])
@@ -365,7 +372,8 @@ pub fn db_playlist_add(db: State<Db>, id: String, paths: Vec<String>) -> Result<
     for p in &paths {
         let inserted = tx
             .execute(
-                "INSERT OR IGNORE INTO playlist_items(playlist_id, path, position) VALUES (?1, ?2, ?3)",
+                "INSERT OR IGNORE INTO playlist_items(playlist_id, track_id, position)
+                 SELECT ?1, id, ?3 FROM tracks WHERE path = ?2",
                 params![id, p, next],
             )
             .map_err(|e| e.to_string())?;
@@ -383,7 +391,9 @@ pub fn db_playlist_remove(db: State<Db>, id: String, path: String) -> Result<(),
     limits::validate_text(&path, "Track path", limits::MAX_PATH_BYTES)?;
     let conn = db.0.lock();
     conn.execute(
-        "DELETE FROM playlist_items WHERE playlist_id = ?1 AND path = ?2",
+        "DELETE FROM playlist_items
+         WHERE playlist_id = ?1
+           AND track_id = (SELECT id FROM tracks WHERE path = ?2)",
         params![id, path],
     )
     .map_err(|e| e.to_string())?;
@@ -394,26 +404,26 @@ pub fn db_playlist_remove(db: State<Db>, id: String, path: String) -> Result<(),
 pub fn db_playlist_move_item(db: State<Db>, id: String, from: i64, to: i64) -> Result<(), String> {
     limits::validate_text(&id, "Playlist ID", 128)?;
     let mut conn = db.0.lock();
-    let mut paths: Vec<String> = {
+    let mut item_ids: Vec<i64> = {
         let mut stmt = conn
-            .prepare("SELECT path FROM playlist_items WHERE playlist_id = ?1 ORDER BY position")
+            .prepare("SELECT id FROM playlist_items WHERE playlist_id = ?1 ORDER BY position")
             .map_err(|e| e.to_string())?;
         let rows = stmt
-            .query_map(params![id], |r| r.get::<_, String>(0))
+            .query_map(params![id], |r| r.get::<_, i64>(0))
             .map_err(|e| e.to_string())?;
         rows.filter_map(|r| r.ok()).collect()
     };
     let (from, to) = (from as usize, to as usize);
-    if from >= paths.len() || to >= paths.len() {
+    if from >= item_ids.len() || to >= item_ids.len() {
         return Ok(());
     }
-    let item = paths.remove(from);
-    paths.insert(to, item);
+    let item = item_ids.remove(from);
+    item_ids.insert(to, item);
     let tx = conn.transaction().map_err(|e| e.to_string())?;
-    for (i, p) in paths.iter().enumerate() {
+    for (i, item_id) in item_ids.iter().enumerate() {
         tx.execute(
-            "UPDATE playlist_items SET position = ?1 WHERE playlist_id = ?2 AND path = ?3",
-            params![i as i64, id, p],
+            "UPDATE playlist_items SET position = ?1 WHERE id = ?2",
+            params![i as i64, item_id],
         )
         .map_err(|e| e.to_string())?;
     }
@@ -425,7 +435,7 @@ pub fn db_playlist_move_item(db: State<Db>, id: String, from: i64, to: i64) -> R
 
 #[tauri::command]
 pub fn db_recents(db: State<Db>) -> Result<Vec<RecentRow>, String> {
-    let conn = db.0.lock();
+    let conn = db.read();
     let mut stmt = conn
         .prepare("SELECT type, key, ts FROM recents ORDER BY ts DESC")
         .map_err(|e| e.to_string())?;

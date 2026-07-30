@@ -3,7 +3,8 @@ import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue';
 import { useWindowDrag } from '../useWindowDrag';
 import { store } from '../store';
 import { loadCover, getCachedCover, hasCachedCover } from '../coverCache';
-import { loadLyrics, activeLineIndex, processLyricLines } from '../lyricsCache';
+import { activeLineIndex, processLyricLines } from '../lyricsCache';
+import { useTrackLyrics } from '../useTrackLyrics';
 import { useRouter } from 'vue-router';
 import LyricContent from './LyricContent.vue';
 import { extractColorsForPath, defaultPalette } from '../colorExtract';
@@ -12,10 +13,7 @@ import { createNyanCatSeekStyle } from '../nyancatTheme';
 
 const router = useRouter();
 const coverUrl = ref(null);
-// undefined = loading, null = not found, object = resolved lyrics
-const lyrics = ref(undefined);
 const linesEl = ref(null);
-const lyricsLoading = ref(false);
 const showLyricsOption = ref(true);
 
 const losslessPopupOpen = ref(false);
@@ -49,6 +47,11 @@ const closeLosslessPopup = () => {
 };
 
 const song = computed(() => store.currentSong);
+const { lyrics, lyricsLoading, fetchLyrics } = useTrackLyrics({
+  song: () => song.value,
+  active: () => store.fullscreenOpen,
+  source: () => store.lyricsSource,
+});
 
 const showLyricsColumn = computed(() => {
   return showLyricsOption.value;
@@ -67,22 +70,6 @@ async function resolveCover(path) {
   if (song.value && song.value.path === path) coverUrl.value = result;
 }
 
-async function fetchLyrics(force = false) {
-  const current = song.value;
-  if (!current) {
-    lyrics.value = null;
-    return;
-  }
-  lyricsLoading.value = true;
-  lyrics.value = undefined;
-  const res = await loadLyrics(current, { force });
-  // Guard against the track changing while we awaited.
-  if (song.value && song.value.path === current.path) {
-    lyrics.value = res;
-  }
-  lyricsLoading.value = false;
-}
-
 // Load cover + lyrics when the overlay opens and whenever the track changes
 // while it's open.
 watch(
@@ -91,7 +78,6 @@ watch(
     losslessPopupOpen.value = false;
     if (open && song.value) {
       resolveCover(song.value.path);
-      fetchLyrics();
     }
   }
 );
@@ -101,16 +87,6 @@ watch(
     losslessPopupOpen.value = false;
     if (store.fullscreenOpen && path) {
       resolveCover(path);
-      fetchLyrics();
-    }
-  }
-);
-watch(
-  () => store.lyricsSource,
-  () => {
-    lyrics.value = undefined;
-    if (store.fullscreenOpen) {
-      fetchLyrics(true);
     }
   }
 );
