@@ -79,7 +79,8 @@ watch(
     if (open && song.value) {
       resolveCover(song.value.path);
     }
-  }
+  },
+  { immediate: true }
 );
 watch(
   () => song.value && song.value.path,
@@ -425,7 +426,7 @@ const goToAlbum = (albumName) => {
               </div>
             </div>
             <button
-              @click="store.toggleFavorite(song.path)"
+              @click="store.runMutation(() => store.toggleFavorite(song.path))"
               class="transition shrink-0 hover:scale-110"
               :class="
                 store.isFavorite(song.path)

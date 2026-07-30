@@ -1,21 +1,14 @@
 <script setup>
-import { ref, onMounted, onUnmounted, nextTick, watch } from 'vue';
+import { defineAsyncComponent, reactive, ref, onMounted, onUnmounted, nextTick, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { listen } from '@tauri-apps/api/event';
 import { store } from './store';
 import { createGlobalShortcuts } from './useGlobalShortcuts';
 import PlayerControls from './components/PlayerControls.vue';
-import QueuePanel from './components/QueuePanel.vue';
-import PlaylistCreateModal from './components/PlaylistCreateModal.vue';
-import SmartPlaylistModal from './components/SmartPlaylistModal.vue';
-import ConfirmationModal from './components/ConfirmationModal.vue';
-import CommandPalette from './components/CommandPalette.vue';
 import PlaylistCover from './components/PlaylistCover.vue';
 import TitleBar from './components/TitleBar.vue';
-import FullScreenPlayer from './components/FullScreenPlayer.vue';
-import MiniPlayer from './components/MiniPlayer.vue';
-import LyricsPanel from './components/LyricsPanel.vue';
+import ToastHost from './components/ToastHost.vue';
 import { navigateWithTransition, smartBack, goForwardWithTransition } from './viewTransition';
 import { prefetchQuery } from './useLibraryData';
 import {
@@ -32,6 +25,47 @@ import { getCollection } from './collections';
 
 const router = useRouter();
 const globalShortcuts = createGlobalShortcuts(store);
+const QueuePanel = defineAsyncComponent(() => import('./components/QueuePanel.vue'));
+const LyricsPanel = defineAsyncComponent(() => import('./components/LyricsPanel.vue'));
+const PlaylistCreateModal = defineAsyncComponent(
+  () => import('./components/PlaylistCreateModal.vue')
+);
+const SmartPlaylistModal = defineAsyncComponent(
+  () => import('./components/SmartPlaylistModal.vue')
+);
+const ConfirmationModal = defineAsyncComponent(() => import('./components/ConfirmationModal.vue'));
+const CommandPalette = defineAsyncComponent(() => import('./components/CommandPalette.vue'));
+const FullScreenPlayer = defineAsyncComponent(() => import('./components/FullScreenPlayer.vue'));
+const MiniPlayer = defineAsyncComponent(() => import('./components/MiniPlayer.vue'));
+const lazyMounted = reactive({
+  queue: false,
+  lyrics: false,
+  playlistModal: false,
+  smartModal: false,
+  confirmation: false,
+  commandPalette: false,
+  fullscreen: false,
+  miniPlayer: false,
+});
+
+const mountOverlayOnFirstOpen = (key, source) => {
+  watch(
+    source,
+    (open) => {
+      if (open) lazyMounted[key] = true;
+    },
+    { immediate: true }
+  );
+};
+
+mountOverlayOnFirstOpen('queue', () => store.queuePanelOpen);
+mountOverlayOnFirstOpen('lyrics', () => store.lyricsPanelOpen);
+mountOverlayOnFirstOpen('playlistModal', () => store.playlistModal.open);
+mountOverlayOnFirstOpen('smartModal', () => store.smartModal.open);
+mountOverlayOnFirstOpen('confirmation', () => store.confirmModal.open);
+mountOverlayOnFirstOpen('commandPalette', () => store.commandPaletteOpen);
+mountOverlayOnFirstOpen('fullscreen', () => store.fullscreenOpen);
+mountOverlayOnFirstOpen('miniPlayer', () => store.miniPlayerOpen);
 
 // Navigate to /songs when typing in search
 watch(
@@ -444,7 +478,9 @@ const onSidebarPlMouseUp = () => {
     sidebarPlOverIndex.value !== -1 &&
     sidebarPlDragIndex.value !== sidebarPlOverIndex.value
   ) {
-    store.movePlaylistOrder(sidebarPlDragIndex.value, sidebarPlOverIndex.value);
+    store.runMutation(() =>
+      store.movePlaylistOrder(sidebarPlDragIndex.value, sidebarPlOverIndex.value)
+    );
   }
   sidebarPlDragIndex.value = -1;
   sidebarPlOverIndex.value = -1;
@@ -922,31 +958,33 @@ const navigatePlaylist = (pl, event) => {
           </div>
 
           <!-- Up-next queue drawer -->
-          <QueuePanel @click.stop />
+          <QueuePanel v-if="lazyMounted.queue" @click.stop />
 
           <!-- Lyrics panel -->
-          <LyricsPanel @click.stop />
+          <LyricsPanel v-if="lazyMounted.lyrics" @click.stop />
         </main>
       </div>
     </div>
 
     <!-- Create-playlist modal (global overlay) -->
-    <PlaylistCreateModal />
+    <PlaylistCreateModal v-if="lazyMounted.playlistModal" />
 
     <!-- Smart-playlist rule editor (global overlay) -->
-    <SmartPlaylistModal />
+    <SmartPlaylistModal v-if="lazyMounted.smartModal" />
 
     <!-- Custom confirmation modal (global overlay) -->
-    <ConfirmationModal />
+    <ConfirmationModal v-if="lazyMounted.confirmation" />
 
     <!-- Command palette (global overlay, Ctrl+K) -->
-    <CommandPalette />
+    <CommandPalette v-if="lazyMounted.commandPalette" />
 
     <!-- Fullscreen Now-Playing + lyrics (global overlay) -->
-    <FullScreenPlayer />
+    <FullScreenPlayer v-if="lazyMounted.fullscreen" />
 
     <!-- Compact mini player (global overlay, Ctrl+Shift+M) -->
-    <MiniPlayer />
+    <MiniPlayer v-if="lazyMounted.miniPlayer" />
+
+    <ToastHost />
 
     <!-- Fullscreen black transition overlay -->
     <Transition name="fullscreen-fade">

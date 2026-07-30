@@ -96,7 +96,8 @@ watch(
       searchSequence++;
       window.removeEventListener('keydown', onKeydown, true);
     }
-  }
+  },
+  { immediate: true }
 );
 
 onUnmounted(() => {

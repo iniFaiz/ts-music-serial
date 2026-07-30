@@ -89,9 +89,7 @@ export function createGlobalShortcuts(store) {
   const isTypingTarget = (event) => {
     const element = event.target;
     if (!element) return false;
-    return (
-      ['INPUT', 'TEXTAREA', 'SELECT'].includes(element.tagName) || element.isContentEditable
-    );
+    return ['INPUT', 'TEXTAREA', 'SELECT'].includes(element.tagName) || element.isContentEditable;
   };
 
   const seekBy = (delta) => {
@@ -226,7 +224,7 @@ export function createGlobalShortcuts(store) {
       case 'KeyL':
         if (store.currentSong) {
           event.preventDefault();
-          store.toggleFavorite(store.currentSong.path);
+          store.runMutation(() => store.toggleFavorite(store.currentSong.path));
         }
         break;
     }

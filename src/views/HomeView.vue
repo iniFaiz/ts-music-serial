@@ -93,16 +93,20 @@ const smartPlaylists = computed(() => store.smartPlaylists);
 const smartCount = (sp) => sp.track_count || 0;
 
 const createFromTemplate = async (t) => {
-  const sp = await store.createSmartPlaylist({
-    name: t.name,
-    description: t.description,
-    color: t.color,
-    rules: JSON.parse(JSON.stringify(t.rules)),
-    sortBy: t.sortBy,
-    sortOrder: t.sortOrder,
-    limit: t.limit,
-  });
-  if (sp) router.push('/smart/' + sp.id);
+  try {
+    const sp = await store.createSmartPlaylist({
+      name: t.name,
+      description: t.description,
+      color: t.color,
+      rules: JSON.parse(JSON.stringify(t.rules)),
+      sortBy: t.sortBy,
+      sortOrder: t.sortOrder,
+      limit: t.limit,
+    });
+    if (sp) router.push('/smart/' + sp.id);
+  } catch {
+    // Store mutation handling has already displayed the failure toast.
+  }
 };
 
 // ---- Stations ----
@@ -342,11 +346,7 @@ watch(recentItems, (newItems, oldItems) => {
         title="Recently Played"
         to="/collection/recently-played"
       >
-        <TransitionGroup
-          name="recent-card"
-          tag="div"
-          class="flex gap-5 relative py-1"
-        >
+        <TransitionGroup name="recent-card" tag="div" class="flex gap-5 relative py-1">
           <div
             v-for="item in recentItems"
             :key="
@@ -363,7 +363,7 @@ watch(recentItems, (newItems, oldItems) => {
                 item.kind === 'station' ? 'rounded-full' : 'rounded-xl',
                 isCurrentPlayingItem(item) && store.isPlaying
                   ? 'ring-2 ring-[var(--accent-color)] shadow-[0_0_18px_rgba(250,45,72,0.45)]'
-                  : ''
+                  : '',
               ]"
             >
               <!-- Art per kind -->
@@ -381,7 +381,9 @@ watch(recentItems, (newItems, oldItems) => {
                       : item.coverPath
                 "
                 :class="
-                  item.kind === 'station' ? 'w-full h-full !rounded-full' : 'w-full h-full rounded-xl'
+                  item.kind === 'station'
+                    ? 'w-full h-full !rounded-full'
+                    : 'w-full h-full rounded-xl'
                 "
                 className="bg-[#282828]"
               />
@@ -412,9 +414,15 @@ watch(recentItems, (newItems, oldItems) => {
                 class="absolute top-2 right-2 bg-black/60 backdrop-blur-md rounded-full px-2.5 h-[22px] flex items-end justify-center pb-[3px] gap-[2.5px] border border-white/10 z-10 shadow-lg pointer-events-none"
                 title="Now Playing"
               >
-                <span class="eq-bar eq-bar-1 bg-[var(--accent-color)] w-[2.5px] rounded-full"></span>
-                <span class="eq-bar eq-bar-2 bg-[var(--accent-color)] w-[2.5px] rounded-full"></span>
-                <span class="eq-bar eq-bar-3 bg-[var(--accent-color)] w-[2.5px] rounded-full"></span>
+                <span
+                  class="eq-bar eq-bar-1 bg-[var(--accent-color)] w-[2.5px] rounded-full"
+                ></span>
+                <span
+                  class="eq-bar eq-bar-2 bg-[var(--accent-color)] w-[2.5px] rounded-full"
+                ></span>
+                <span
+                  class="eq-bar eq-bar-3 bg-[var(--accent-color)] w-[2.5px] rounded-full"
+                ></span>
               </div>
 
               <!-- Play overlay -->
@@ -443,7 +451,7 @@ watch(recentItems, (newItems, oldItems) => {
               class="text-[13px] font-semibold text-white truncate leading-tight transition-colors"
               :class="[
                 item.kind === 'station' ? 'text-center' : '',
-                isCurrentPlayingItem(item) ? 'text-[var(--accent-color)]' : ''
+                isCurrentPlayingItem(item) ? 'text-[var(--accent-color)]' : '',
               ]"
             >
               {{ item.title }}

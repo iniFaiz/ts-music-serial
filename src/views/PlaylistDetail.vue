@@ -45,8 +45,8 @@ const removePlaylist = () => {
     message: `Are you sure you want to delete "${playlist.value.name}"? This action cannot be undone.`,
     confirmText: 'Delete',
     cancelText: 'Cancel',
-    onConfirm: () => {
-      store.deletePlaylist(playlist.value.id);
+    onConfirm: async () => {
+      await store.deletePlaylist(playlist.value.id);
       router.push('/playlists');
     },
   });
@@ -144,9 +144,13 @@ watch(playlistId, () => {
 const addAndRemoveFromSuggestions = async (songPath) => {
   if (addingSongPath.value) return;
   addingSongPath.value = songPath;
+  try {
+    await store.addToPlaylist(playlist.value.id, songPath);
+  } catch {
+    addingSongPath.value = null;
+    return;
+  }
   recentlyAddedPath.value = songPath;
-
-  store.addToPlaylist(playlist.value.id, songPath);
 
   setTimeout(() => {
     if (recentlyAddedPath.value === songPath) {
@@ -472,8 +476,19 @@ const addAndRemoveFromSuggestions = async (songPath) => {
                   fill="none"
                   viewBox="0 0 24 24"
                 >
-                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                  <circle
+                    class="opacity-25"
+                    cx="12"
+                    cy="12"
+                    r="10"
+                    stroke="currentColor"
+                    stroke-width="4"
+                  ></circle>
+                  <path
+                    class="opacity-75"
+                    fill="currentColor"
+                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                  ></path>
                 </svg>
                 {{ addingSongPath === song.path ? 'Adding' : 'Add' }}
               </button>

@@ -7,7 +7,7 @@ const cancel = () => {
 
 const confirm = () => {
   if (typeof store.confirmModal.onConfirm === 'function') {
-    store.confirmModal.onConfirm();
+    store.runMutation(store.confirmModal.onConfirm);
   }
   store.closeConfirm();
 };

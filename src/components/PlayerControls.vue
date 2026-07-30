@@ -740,7 +740,7 @@ const formatTime = (seconds) => {
             class="w-[30px] sm:w-[60px] md:w-[75px] lg:w-[80px] flex items-center justify-end shrink-0"
           >
             <button
-              @click="store.toggleFavorite(store.currentSong.path)"
+              @click="store.runMutation(() => store.toggleFavorite(store.currentSong.path))"
               class="transition hover:scale-110 shrink-0"
               :class="
                 store.isFavorite(store.currentSong.path)

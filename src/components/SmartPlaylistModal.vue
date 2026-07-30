@@ -60,7 +60,8 @@ watch(
   () => store.smartModal.open,
   (open) => {
     if (open) initForm();
-  }
+  },
+  { immediate: true }
 );
 
 // ---- Custom cover image ----
@@ -145,9 +146,11 @@ const usesGenre = computed(() =>
 );
 
 const canSave = computed(() => (form.value.name || '').trim().length > 0);
+const saving = ref(false);
 
 const save = async () => {
-  if (!canSave.value) return;
+  if (!canSave.value || saving.value) return;
+  saving.value = true;
   const payload = {
     name: form.value.name.trim(),
     description: (form.value.description || '').trim(),
@@ -159,13 +162,19 @@ const save = async () => {
     limit: limitEnabled.value ? Math.max(1, Number(form.value.limit) || 1) : 0,
     liveUpdate: form.value.liveUpdate,
   };
-  if (store.smartModal.mode === 'edit') {
-    await store.updateSmartPlaylist(store.smartModal.smartId, payload);
-    store.closeSmartModal();
-  } else {
-    const sp = await store.createSmartPlaylist(payload);
-    store.closeSmartModal();
-    if (sp) router.push('/smart/' + sp.id);
+  try {
+    if (store.smartModal.mode === 'edit') {
+      await store.updateSmartPlaylist(store.smartModal.smartId, payload);
+      store.closeSmartModal();
+    } else {
+      const sp = await store.createSmartPlaylist(payload);
+      store.closeSmartModal();
+      if (sp) router.push('/smart/' + sp.id);
+    }
+  } catch {
+    // The store has already rolled back/reloaded and displayed the error toast.
+  } finally {
+    saving.value = false;
   }
 };
 
@@ -495,10 +504,12 @@ const cancel = () => store.closeSmartModal();
               </button>
               <button
                 @click="save"
-                :disabled="!canSave"
+                :disabled="!canSave || saving"
                 class="px-5 py-2 rounded-lg text-sm font-semibold text-white bg-[var(--accent-color)] hover:bg-red-500 transition shadow-lg disabled:opacity-40 disabled:cursor-not-allowed"
               >
-                {{ store.smartModal.mode === 'edit' ? 'Save Changes' : 'Create' }}
+                {{
+                  saving ? 'Saving…' : store.smartModal.mode === 'edit' ? 'Save Changes' : 'Create'
+                }}
               </button>
             </div>
           </div>

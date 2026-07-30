@@ -209,7 +209,7 @@ const handleMenuAddToExistingPlaylist = async (playlistId) => {
   if (!album) return;
   const songs = await fetchAlbumTracks(album.name);
   const paths = songs.map((s) => s.path);
-  store.addToPlaylist(playlistId, paths);
+  store.runMutation(() => store.addToPlaylist(playlistId, paths));
 };
 
 const handleMenuDelete = async () => {

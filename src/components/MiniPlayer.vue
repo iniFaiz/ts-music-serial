@@ -405,9 +405,7 @@ const { beginWindowDrag } = useWindowDrag();
 
 const closeWindow = () => {
   store.exitMiniPlayer().finally(() => {
-    appWindow
-      .close()
-      .catch(() => {});
+    appWindow.close().catch(() => {});
   });
 };
 
@@ -939,7 +937,7 @@ onUnmounted(() => {
             <div class="mt-1"><LosslessBadge placement="up" /></div>
           </div>
           <button
-            @click="store.toggleFavorite(song.path)"
+            @click="store.runMutation(() => store.toggleFavorite(song.path))"
             class="transition shrink-0 hover:scale-110"
             :class="
               store.isFavorite(song.path)
@@ -1169,7 +1167,7 @@ onUnmounted(() => {
                 </button>
                 <button
                   v-if="song"
-                  @click="store.toggleFavorite(song.path)"
+                  @click="store.runMutation(() => store.toggleFavorite(song.path))"
                   class="flex items-center gap-2 w-full px-3 py-2 text-xs hover:bg-white/10 transition"
                   :class="
                     store.isFavorite(song.path) ? 'text-[var(--accent-color)]' : 'text-white/80'

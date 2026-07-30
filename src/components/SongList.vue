@@ -278,9 +278,11 @@ const onPlMouseUp = () => {
     plDragIndex.value !== plOverIndex.value
   ) {
     if (props.isFavorites) {
-      store.moveInFavorites(plDragIndex.value, plOverIndex.value);
+      store.runMutation(() => store.moveInFavorites(plDragIndex.value, plOverIndex.value));
     } else {
-      store.moveInPlaylist(props.playlistId, plDragIndex.value, plOverIndex.value);
+      store.runMutation(() =>
+        store.moveInPlaylist(props.playlistId, plDragIndex.value, plOverIndex.value)
+      );
     }
     plDragDidReorder = true;
   }
@@ -585,7 +587,7 @@ const addSelectedToQueue = () => {
 };
 
 const addSelectedToPlaylist = (playlistId) => {
-  store.addToPlaylist(playlistId, selectedSongs.value);
+  store.runMutation(() => store.addToPlaylist(playlistId, selectedSongs.value));
   cancelSelection();
 };
 
@@ -596,9 +598,10 @@ const newPlaylistWithSelected = () => {
 
 const removeSelectedFromPlaylist = () => {
   if (props.playlistId) {
-    selectedSongs.value.forEach((path) => {
-      store.removeFromPlaylist(props.playlistId, path);
-    });
+    const paths = [...selectedSongs.value];
+    store.runMutation(() =>
+      Promise.all(paths.map((path) => store.removeFromPlaylist(props.playlistId, path)))
+    );
   }
   cancelSelection();
 };
@@ -751,12 +754,12 @@ const showInFolder = async () => {
 };
 
 const toggleLike = () => {
-  store.toggleFavorite(menu.value.song.path);
+  store.runMutation(() => store.toggleFavorite(menu.value.song.path));
   closeMenu();
 };
 
 const addToPlaylist = (id) => {
-  store.addToPlaylist(id, menu.value.song.path);
+  store.runMutation(() => store.addToPlaylist(id, menu.value.song.path));
   closeMenu();
 };
 
@@ -766,7 +769,9 @@ const newPlaylistWithSong = () => {
 };
 
 const removeFromThisPlaylist = () => {
-  if (props.playlistId) store.removeFromPlaylist(props.playlistId, menu.value.song.path);
+  if (props.playlistId) {
+    store.runMutation(() => store.removeFromPlaylist(props.playlistId, menu.value.song.path));
+  }
   closeMenu();
 };
 
@@ -985,7 +990,7 @@ onUnmounted(() => {
         <!-- Actions + time -->
         <div class="flex items-center justify-end gap-2">
           <button
-            @click.stop="store.toggleFavorite(song.path)"
+            @click.stop="store.runMutation(() => store.toggleFavorite(song.path))"
             class="transition hover:scale-110"
             :class="
               store.isFavorite(song.path)

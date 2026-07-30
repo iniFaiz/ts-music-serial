@@ -91,9 +91,9 @@ const deletePlaylistConfirm = (pl) => {
     cancelText: 'Cancel',
     onConfirm: () => {
       if (isSmart) {
-        store.deleteSmartPlaylist(pl.id);
+        return store.deleteSmartPlaylist(pl.id);
       } else {
-        store.deletePlaylist(pl.id);
+        return store.deletePlaylist(pl.id);
       }
     },
   });
@@ -169,7 +169,7 @@ const onMouseUp = () => {
     overIndex.value !== -1 &&
     dragIndex.value !== overIndex.value
   ) {
-    store.movePlaylistOrder(dragIndex.value, overIndex.value);
+    store.runMutation(() => store.movePlaylistOrder(dragIndex.value, overIndex.value));
     dragDidReorder = true;
   }
   dragIndex.value = -1;
@@ -376,7 +376,10 @@ onUnmounted(() => {
       </div>
     </TransitionGroup>
 
-    <div v-else-if="playlists.length > 0 && filteredPlaylists.length === 0" class="p-20 text-center text-gray-600">
+    <div
+      v-else-if="playlists.length > 0 && filteredPlaylists.length === 0"
+      class="p-20 text-center text-gray-600"
+    >
       <div class="text-4xl mb-4 opacity-20">🔍</div>
       <p>No playlists found matching "{{ searchQuery }}".</p>
     </div>
@@ -395,13 +398,19 @@ onUnmounted(() => {
       @click.stop
     >
       <button
-        @click="openPlaylist(menuState.playlist, $event); closeContextMenu();"
+        @click="
+          openPlaylist(menuState.playlist, $event);
+          closeContextMenu();
+        "
         class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors"
       >
         Open
       </button>
       <button
-        @click="playCard(menuState.playlist); closeContextMenu();"
+        @click="
+          playCard(menuState.playlist);
+          closeContextMenu();
+        "
         class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors"
       >
         Play
@@ -446,7 +455,9 @@ onUnmounted(() => {
 }
 
 .plgrid-leave-active {
-  transition: opacity 0.38s cubic-bezier(0.16, 1, 0.3, 1), transform 0.38s cubic-bezier(0.16, 1, 0.3, 1) !important;
+  transition:
+    opacity 0.38s cubic-bezier(0.16, 1, 0.3, 1),
+    transform 0.38s cubic-bezier(0.16, 1, 0.3, 1) !important;
   position: absolute !important;
   z-index: 0;
   pointer-events: none;

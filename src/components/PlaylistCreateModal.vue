@@ -11,6 +11,7 @@ const description = ref('');
 const cover = ref(null); // downscaled JPEG data URL
 const fileInput = ref(null);
 const titleField = ref(null);
+const saving = ref(false);
 
 // Focus the title when the modal opens; clear fields when it closes.
 // Focus the title when the modal opens; pre-fill fields if editing, or clear if creating.
@@ -33,7 +34,8 @@ watch(
       description.value = '';
       cover.value = null;
     }
-  }
+  },
+  { immediate: true }
 );
 
 const pickImage = () => fileInput.value?.click();
@@ -52,20 +54,28 @@ const onFile = async (e) => {
 const cancel = () => store.closePlaylistModal();
 
 const save = async () => {
-  if (store.playlistModal.mode === 'edit' && store.playlistModal.playlistId) {
-    await store.updatePlaylist(
-      store.playlistModal.playlistId,
-      title.value,
-      description.value,
-      cover.value
-    );
-    store.closePlaylistModal();
-  } else {
-    const pending = store.playlistModal.pendingSongPath;
-    const pl = await store.createPlaylist(title.value, description.value, cover.value);
-    if (pl && pending) await store.addToPlaylist(pl.id, pending);
-    store.closePlaylistModal();
-    if (pl) router.push('/playlists/' + pl.id);
+  if (saving.value) return;
+  saving.value = true;
+  try {
+    if (store.playlistModal.mode === 'edit' && store.playlistModal.playlistId) {
+      await store.updatePlaylist(
+        store.playlistModal.playlistId,
+        title.value,
+        description.value,
+        cover.value
+      );
+      store.closePlaylistModal();
+    } else {
+      const pending = store.playlistModal.pendingSongPath;
+      const pl = await store.createPlaylist(title.value, description.value, cover.value);
+      if (pl && pending) await store.addToPlaylist(pl.id, pending);
+      store.closePlaylistModal();
+      if (pl) router.push('/playlists/' + pl.id);
+    }
+  } catch {
+    // The store has already rolled back/reloaded and displayed the error toast.
+  } finally {
+    saving.value = false;
   }
 };
 </script>
@@ -153,9 +163,10 @@ const save = async () => {
           </button>
           <button
             @click="save"
-            class="px-5 py-2 rounded-lg text-sm font-semibold bg-[var(--accent-color)] text-white hover:bg-red-500 transition shadow-lg"
+            :disabled="saving"
+            class="px-5 py-2 rounded-lg text-sm font-semibold bg-[var(--accent-color)] text-white hover:bg-red-500 transition shadow-lg disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {{ store.playlistModal.mode === 'edit' ? 'Save' : 'Create' }}
+            {{ saving ? 'Saving…' : store.playlistModal.mode === 'edit' ? 'Save' : 'Create' }}
           </button>
         </div>
       </div>

@@ -47,8 +47,8 @@ const removeSmart = () => {
     message: `Are you sure you want to delete smart playlist "${sp.value.name}"? This action cannot be undone.`,
     confirmText: 'Delete',
     cancelText: 'Cancel',
-    onConfirm: () => {
-      store.deleteSmartPlaylist(sp.value.id);
+    onConfirm: async () => {
+      await store.deleteSmartPlaylist(sp.value.id);
       router.push('/playlists');
     },
   });
