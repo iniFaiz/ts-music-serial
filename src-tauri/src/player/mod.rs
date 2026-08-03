@@ -9,7 +9,10 @@ use lofty::prelude::*;
 use lofty::probe::Probe;
 use lofty::tag::ItemKey;
 use parking_lot::Mutex;
-use rodio::{OutputStream, OutputStreamBuilder, Sink, Source};
+use rodio::{
+    DeviceSinkBuilder as OutputStreamBuilder, MixerDeviceSink as OutputStream, Player as Sink,
+    Source,
+};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -1020,17 +1023,21 @@ fn open_device_stream(
             Some(want) => {
                 let host = rodio::cpal::default_host();
                 let device = host.output_devices().ok().and_then(|mut devs| {
-                    devs.find(|d| d.name().map(|n| n == want).unwrap_or(false))
+                    devs.find(|d| {
+                        d.description()
+                            .map(|description| description.name() == want)
+                            .unwrap_or(false)
+                    })
                 });
                 match device {
                     Some(dev) => OutputStreamBuilder::from_device(dev)
                         .and_then(|b| b.open_stream())
                         .ok(),
                     // Requested device vanished — fall back to default.
-                    None => OutputStreamBuilder::open_default_stream().ok(),
+                    None => OutputStreamBuilder::open_default_sink().ok(),
                 }
             }
-            None => OutputStreamBuilder::open_default_stream().ok(),
+            None => OutputStreamBuilder::open_default_sink().ok(),
         };
         if stream.is_some() {
             break;
@@ -1173,13 +1180,23 @@ pub(crate) fn spawn_player_ticker(app: AppHandle, player: AudioPlayer) {
 
         let get_default_device_name = || -> Option<String> {
             let host = rodio::cpal::default_host();
-            host.default_output_device().and_then(|d| d.name().ok())
+            host.default_output_device().and_then(|d| {
+                d.description()
+                    .ok()
+                    .map(|description| description.name().to_owned())
+            })
         };
 
         let get_all_device_names = || -> Vec<String> {
             let host = rodio::cpal::default_host();
             if let Ok(devices) = host.output_devices() {
-                devices.filter_map(|d| d.name().ok()).collect()
+                devices
+                    .filter_map(|d| {
+                        d.description()
+                            .ok()
+                            .map(|description| description.name().to_owned())
+                    })
+                    .collect()
             } else {
                 Vec::new()
             }
@@ -1540,11 +1557,16 @@ pub(crate) struct OutputDeviceInfo {
 pub(crate) fn list_output_devices() -> Vec<OutputDeviceInfo> {
     use rodio::cpal::traits::{DeviceTrait, HostTrait};
     let host = rodio::cpal::default_host();
-    let default_name = host.default_output_device().and_then(|d| d.name().ok());
+    let default_name = host.default_output_device().and_then(|d| {
+        d.description()
+            .ok()
+            .map(|description| description.name().to_owned())
+    });
     let mut out = Vec::new();
     if let Ok(devices) = host.output_devices() {
         for d in devices {
-            if let Ok(name) = d.name() {
+            if let Ok(description) = d.description() {
+                let name = description.name().to_owned();
                 let is_default = default_name.as_deref() == Some(name.as_str());
                 out.push(OutputDeviceInfo { name, is_default });
             }
@@ -1638,8 +1660,8 @@ fn write_loudness(app: &AppHandle, key: &str, gain: f32, source_path: &Path) {
 fn compute_gain_blocking(path: &Path) -> Result<f32, String> {
     use ebur128::{EbuR128, Mode};
     let (decoder, _dur) = build_decoder(path)?;
-    let channels = decoder.channels().max(1) as u32;
-    let sample_rate = decoder.sample_rate().max(1);
+    let channels = u32::from(decoder.channels().get());
+    let sample_rate = decoder.sample_rate().get();
     let mut ebu = EbuR128::new(channels, sample_rate, Mode::I).map_err(|e| e.to_string())?;
     let mut buf: Vec<f32> = Vec::with_capacity(65536);
     for s in decoder {

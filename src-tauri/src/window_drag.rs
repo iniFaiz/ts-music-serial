@@ -9,7 +9,7 @@ pub fn start_window_drag(window: WebviewWindow) -> Result<bool, String> {
     #[cfg(target_os = "windows")]
     {
         use windows::Win32::{
-            Foundation::{LPARAM, POINT, WPARAM},
+            Foundation::{HWND, LPARAM, POINT, WPARAM},
             UI::{
                 Input::KeyboardAndMouse::{GetAsyncKeyState, ReleaseCapture, VK_LBUTTON},
                 WindowsAndMessaging::{GetCursorPos, SendMessageW, HTCAPTION, WM_NCLBUTTONDOWN},
@@ -35,7 +35,7 @@ pub fn start_window_drag(window: WebviewWindow) -> Result<bool, String> {
             return Ok(false);
         }
 
-        let hwnd = window.hwnd().map_err(|error| error.to_string())?;
+        let hwnd = HWND(window.hwnd().map_err(|error| error.to_string())?.0);
         let _ = unsafe { ReleaseCapture() };
         unsafe {
             SendMessageW(

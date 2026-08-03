@@ -16,8 +16,8 @@ const WAVEFORM_BUCKETS: usize = 400;
 // a full decode, so it is only ever called on the blocking pool and cached.
 fn compute_waveform(path: &Path) -> Option<Vec<u8>> {
     let (decoder, dur_secs) = build_decoder(path).ok()?;
-    let channels = decoder.channels().max(1) as f64;
-    let sample_rate = decoder.sample_rate().max(1) as f64;
+    let channels = f64::from(decoder.channels().get());
+    let sample_rate = f64::from(decoder.sample_rate().get());
     // Estimate the total sample count so we can stream into a fixed bar count in
     // O(BUCKETS) memory instead of buffering the whole (possibly huge) file.
     let est_total = (dur_secs.max(0.0) * sample_rate * channels) as u64;

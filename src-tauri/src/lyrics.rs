@@ -838,7 +838,7 @@ fn build_netease_lyrics(v: &serde_json::Value) -> Option<Lyrics> {
 // payload use the same `json` string, so the server's digest check passes.
 fn eapi_params(path: &str, json: &str) -> String {
     use aes::Aes128;
-    use ecb::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyInit};
+    use ecb::cipher::{block_padding::Pkcs7, BlockModeEncrypt, KeyInit};
     use md5::{Digest, Md5};
 
     let message = format!("nobody{path}use{json}md5forencrypt");
@@ -846,7 +846,7 @@ fn eapi_params(path: &str, json: &str) -> String {
     let data = format!("{path}-36cd479b6b5-{json}-36cd479b6b5-{digest}");
 
     let enc = ecb::Encryptor::<Aes128>::new_from_slice(b"e82ckenh8dichen8").unwrap();
-    let ct = enc.encrypt_padded_vec_mut::<Pkcs7>(data.as_bytes());
+    let ct = enc.encrypt_padded_vec::<Pkcs7>(data.as_bytes());
     hex::encode_upper(ct)
 }
 

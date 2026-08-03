@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rodio::source::SeekError;
-use rodio::Source;
+use rodio::{ChannelCount, SampleRate, Source};
 
 // ---------------------------------------------------------------------------
 // 10-band graphic equalizer.
@@ -147,8 +147,8 @@ pub(crate) struct EqualizerSource<S> {
 
 impl<S: Source> EqualizerSource<S> {
     pub(crate) fn new(inner: S, shared: Arc<EqualizerShared>) -> Self {
-        let channels = inner.channels().max(1);
-        let sample_rate = inner.sample_rate().max(1) as f32;
+        let channels = inner.channels().get();
+        let sample_rate = inner.sample_rate().get() as f32;
         let mut me = EqualizerSource {
             inner,
             shared,
@@ -219,10 +219,10 @@ impl<S: Source> Source for EqualizerSource<S> {
     fn current_span_len(&self) -> Option<usize> {
         self.inner.current_span_len()
     }
-    fn channels(&self) -> u16 {
+    fn channels(&self) -> ChannelCount {
         self.inner.channels()
     }
-    fn sample_rate(&self) -> u32 {
+    fn sample_rate(&self) -> SampleRate {
         self.inner.sample_rate()
     }
     fn total_duration(&self) -> Option<Duration> {

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rodio::source::SeekError;
-use rodio::Source;
+use rodio::{ChannelCount, SampleRate, Source};
 
 // ---------------------------------------------------------------------------
 // Real-time spectrum analysis for the UI visualizer.
@@ -123,8 +123,8 @@ impl<S: Source> SpectrumSource<S> {
         player_gen: Arc<AtomicU64>,
         my_gen: u64,
     ) -> Self {
-        let channels = inner.channels().max(1);
-        let sr = inner.sample_rate().max(1) as f32;
+        let channels = inner.channels().get();
+        let sr = inner.sample_rate().get() as f32;
         // Six log-spaced bands spanning sub-bass → presence.
         let edges = [40.0f32, 160.0, 400.0, 1000.0, 2600.0, 6000.0, 14000.0];
         let bin_of =
@@ -233,10 +233,10 @@ impl<S: Source> Source for SpectrumSource<S> {
     fn current_span_len(&self) -> Option<usize> {
         self.inner.current_span_len()
     }
-    fn channels(&self) -> u16 {
+    fn channels(&self) -> ChannelCount {
         self.inner.channels()
     }
-    fn sample_rate(&self) -> u32 {
+    fn sample_rate(&self) -> SampleRate {
         self.inner.sample_rate()
     }
     fn total_duration(&self) -> Option<Duration> {

@@ -34,13 +34,13 @@ parking_lot = "0.12" #faster, non-poisoning Mutex (no lock().unwrap() panic path
 # Embedded library database. `bundled` compiles SQLite from source (no system
 # dependency on Windows) with FTS5 enabled — used for full-text track search,
 # GROUP BY album/artist grouping and SQL smart-playlist evaluation.
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 walkdir = "2.5" #directory traversal
 jwalk = "0.8"
 lofty = "0.21" #audio metadata parsing
 base64 = "0.22" #images encoding
 image = "0.25" #cover art decoding/downscaling
-rodio = { version = "0.21", features = ["symphonia-all"] } #native audio playback/decoding (all formats incl. FLAC)
+rodio = { version = "0.22", features = ["symphonia-all"] } #native audio playback/decoding (all formats incl. FLAC)
 souvlaki = "0.8.3" #OS media controls (Windows SMTC / media keys)
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] } #lyrics HTTP (rustls = no OpenSSL on Windows)
 rusty-chromaprint = "0.3" #pure-Rust AcoustID-compatible audio fingerprints
@@ -48,8 +48,8 @@ notify = "6" #filesystem watching for library auto-update
 ebur128 = "0.1" #EBU R128 loudness analysis for volume normalization (ReplayGain)
 # NetEase eapi request signing (AES-128-ECB + MD5) to fetch word-by-word (yrc)
 # and romanized (romalrc) lyrics, which its plain web API does not expose.
-aes = "0.8"
-ecb = { version = "0.1", features = ["alloc"] }
+aes = "0.9"
+ecb = { version = "0.2", features = ["alloc"] }
 md-5 = "0.10"
 hex = "0.4"
 # Discord Rich Presence (now-playing status). Pure-Rust IPC to the local Discord
@@ -62,13 +62,13 @@ discord-rich-presence = "1.1"
 keyring = { version = "3", features = ["windows-native"] }
 tauri-plugin-updater = "^2.10"
 trash = "^5"
-getrandom = "^0.3"
+getrandom = "^0.4"
 
 # Windows-only: native Taskbar thumbnail toolbar buttons (ITaskbarList3).
 # Pinned to the same `windows` major already pulled in by tauri/tao/wry so the
 # crate is shared (only a few extra feature modules compile).
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.61", features = [
+windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Storage_FileSystem",
     "Win32_System_Com",

@@ -422,8 +422,8 @@ async fn musicbrainz_search(
 
 fn acoustid_fingerprint(path: &Path) -> Result<(String, u64), String> {
     let (decoder, duration) = build_decoder(path)?;
-    let sample_rate = decoder.sample_rate();
-    let channels = decoder.channels() as u32;
+    let sample_rate = decoder.sample_rate().get();
+    let channels = u32::from(decoder.channels().get());
     let max_samples = sample_rate as usize * channels as usize * 120;
     let config = Configuration::default();
     let mut fingerprinter = Fingerprinter::new(&config);

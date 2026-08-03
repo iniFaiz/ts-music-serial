@@ -25,6 +25,7 @@ use std::thread::JoinHandle;
 // Shares Arc<Mutex<f32>> (last_volume/norm_factor) with lib.rs's PlayerState, so
 // this must use the same parking_lot::Mutex type.
 use parking_lot::Mutex;
+use std::num::NonZero;
 use std::time::Duration;
 
 use lofty::prelude::*;
@@ -334,8 +335,8 @@ fn render_loop(
             return;
         }
     };
-    let sample_rate = decoder.sample_rate();
-    let channels = decoder.channels();
+    let sample_rate = decoder.sample_rate().get();
+    let channels = decoder.channels().get();
     let source_bits = source_bit_depth(Path::new(&path));
     let duration = if decoded_dur > 0.0 {
         decoded_dur
@@ -504,7 +505,11 @@ fn render_loop(
     // resampler is last, exactly mirroring the shared-mode signal path.
     let equalized = EqualizerSource::new(decoder, equalizer);
     let tapped = SpectrumSource::new(equalized, spectrum.clone(), generation.clone(), my_gen);
-    let mut src = UniformSourceIterator::new(tapped, dev_ch, dev_rate);
+    let mut src = UniformSourceIterator::new(
+        tapped,
+        NonZero::new(dev_ch).expect("negotiated channel count is non-zero"),
+        NonZero::new(dev_rate).expect("negotiated sample rate is non-zero"),
+    );
 
     if let Some(pos) = start_at {
         if pos > 0.0 {
