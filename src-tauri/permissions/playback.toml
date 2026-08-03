@@ -10,6 +10,7 @@ commands.allow = [
   "player_stop",
   "player_status",
   "playback_session_snapshot",
+  "playback_queue_page",
   "playback_session_intent",
   "player_spectrum",
   "player_set_spectrum_enabled",

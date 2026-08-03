@@ -1,15 +1,14 @@
 <script setup>
 import { ref, watch, nextTick } from 'vue';
 import { useRouter } from 'vue-router';
+import { invokeCommand as invoke } from '../generated/ipc';
 import { store } from '../store';
-import { readPlaylistCover } from '../playlistCover';
 
 const router = useRouter();
 
 const title = ref('');
 const description = ref('');
 const cover = ref(null); // downscaled JPEG data URL
-const fileInput = ref(null);
 const titleField = ref(null);
 const saving = ref(false);
 
@@ -38,16 +37,13 @@ watch(
   { immediate: true }
 );
 
-const pickImage = () => fileInput.value?.click();
-
-const onFile = async (e) => {
-  const file = e.target.files && e.target.files[0];
-  e.target.value = '';
-  if (!file) return;
+const pickImage = async () => {
   try {
-    cover.value = await readPlaylistCover(file);
+    const selected = await invoke('pick_playlist_cover');
+    if (selected) cover.value = selected;
   } catch (error) {
     console.error('Failed to process playlist cover', error);
+    store.showToast(`Could not process cover: ${error}`, { type: 'error' });
   }
 };
 
@@ -151,8 +147,6 @@ const save = async () => {
             ></textarea>
           </div>
         </div>
-
-        <input ref="fileInput" type="file" accept="image/*" class="hidden" @change="onFile" />
 
         <div class="flex justify-end gap-2.5 mt-6">
           <button

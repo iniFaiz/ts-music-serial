@@ -83,7 +83,7 @@ pub(crate) struct PreparedToken {
     pub(crate) generation: u64,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PlaybackSessionSnapshot {
     pub(crate) revision: u64,
@@ -685,6 +685,59 @@ impl PlaybackSession {
         self.inner.lock().update(Vec::new(), None, false)
     }
 
+    /// Restore only durable queue policy. Playback always resumes paused and
+    /// decoder/preparation/accounting state is intentionally rebuilt fresh.
+    pub(crate) fn restore(&self, snapshot: PlaybackSessionSnapshot) -> Result<(), String> {
+        if snapshot.queue.len() > crate::limits::MAX_QUEUE_ENTRIES {
+            return Err(format!(
+                "Persisted queue contains too many entries (max {})",
+                crate::limits::MAX_QUEUE_ENTRIES
+            ));
+        }
+        if !snapshot.crossfade_secs.is_finite() || !(0.0..=60.0).contains(&snapshot.crossfade_secs)
+        {
+            return Err("Persisted crossfade duration is invalid".to_string());
+        }
+        let mut restored = SessionState::default();
+        restored.queue = restored.normalize_entries(snapshot.queue)?;
+        let valid_ids = restored
+            .queue
+            .iter()
+            .map(|entry| entry.id.clone())
+            .collect::<HashSet<_>>();
+        restored.current_entry_id = snapshot
+            .current_entry_id
+            .filter(|id| valid_ids.contains(id));
+        restored.history = snapshot
+            .history
+            .into_iter()
+            .filter(|id| valid_ids.contains(id))
+            .take(MAX_HISTORY)
+            .collect();
+        restored.shuffle = snapshot.shuffle;
+        restored.repeat = snapshot.repeat;
+        restored.autoplay = snapshot.autoplay;
+        restored.playing = false;
+        restored.transition = snapshot.transition;
+        restored.crossfade_secs = snapshot.crossfade_secs;
+        restored.sleep = match snapshot.sleep {
+            SleepMode::Deadline { deadline_ms }
+                if SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|value| value.as_millis() as u64 >= deadline_ms)
+                    .unwrap_or(true) =>
+            {
+                SleepMode::Off
+            }
+            sleep => sleep,
+        };
+        restored.revision = snapshot.revision.wrapping_add(1);
+        restored.generation = snapshot.generation.wrapping_add(1).max(1);
+        restored.plan_next();
+        *self.inner.lock() = restored;
+        Ok(())
+    }
+
     pub(crate) fn apply(&self, intent: PlaybackIntent) -> Result<PlaybackSessionUpdate, String> {
         let mut state = self.inner.lock();
         let mut events = Vec::new();
@@ -1262,6 +1315,36 @@ mod tests {
             Some(PlaybackEffect::Load { entry, .. }) => assert_eq!(entry.id, "second"),
             other => panic!("unexpected effect: {other:?}"),
         }
+    }
+
+    #[test]
+    fn durable_restore_preserves_queue_policy_but_always_resumes_paused() {
+        let source = PlaybackSession::default();
+        play(
+            &source,
+            vec![entry("a", "a.flac"), entry("b", "b.flac")],
+            "b",
+        );
+        source
+            .apply(PlaybackIntent::SetModes {
+                shuffle: true,
+                repeat: RepeatMode::All,
+                autoplay: true,
+            })
+            .expect("set modes");
+        let persisted = source.snapshot();
+        assert!(persisted.playing);
+
+        let restored = PlaybackSession::default();
+        restored.restore(persisted).expect("restore session");
+        let snapshot = restored.snapshot();
+        assert_eq!(snapshot.queue.len(), 2);
+        assert_eq!(snapshot.current_entry_id.as_deref(), Some("b"));
+        assert!(snapshot.shuffle);
+        assert_eq!(snapshot.repeat, RepeatMode::All);
+        assert!(snapshot.autoplay);
+        assert!(!snapshot.playing);
+        assert!(snapshot.prepared.is_none());
     }
 
     #[test]

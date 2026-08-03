@@ -1,6 +1,6 @@
 //! Track, album, artist, genre, search, and station queries.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{params, params_from_iter, Connection};
@@ -12,7 +12,8 @@ use crate::{limits, MusicTrack};
 
 use super::{
     collect_tracks, dir, fts_query, random_u64, row_to_track, row_to_track_at, smart_count,
-    smart_eval, AlbumRow, ArtistRow, Db, GenreRow, Page, StationSession, TRACK_COLS, TRACK_COLS_T,
+    smart_eval, validate_smart_request, AlbumRow, ArtistRow, Db, GenreRow, Page, StationSession,
+    TRACK_COLS, TRACK_COLS_T,
 };
 
 // ---- Track queries ----------------------------------------------------------
@@ -220,7 +221,7 @@ fn global_search(
     genre_limit: i64,
     request_id: u64,
 ) -> Result<GlobalSearchResults, String> {
-    let Some(all_query) = fts_query(&query) else {
+    let Some(all_query) = fts_query(query) else {
         return Ok(GlobalSearchResults {
             request_id,
             songs: Vec::new(),
@@ -256,8 +257,7 @@ fn global_search(
         params![all_query, exact, prefix, song_limit],
     )?;
 
-    let album_query =
-        fts_column_query(&query, "album").expect("non-empty query has an album query");
+    let album_query = fts_column_query(query, "album").expect("non-empty query has an album query");
     let albums_sql = "WITH matches AS MATERIALIZED (
            SELECT rowid, bm25(tracks_search, 0.0, 0.0, 10.0, 0.0) AS relevance
            FROM tracks_search WHERE tracks_search MATCH ?1
@@ -299,7 +299,7 @@ fn global_search(
         .map_err(|error| error.to_string())?;
 
     let artist_query =
-        fts_column_query(&query, "artist").expect("non-empty query has an artist query");
+        fts_column_query(query, "artist").expect("non-empty query has an artist query");
     let artists_sql = "WITH matches AS MATERIALIZED (
            SELECT rowid, bm25(tracks_search, 0.0, 10.0, 0.0, 0.0) AS relevance
            FROM tracks_search WHERE tracks_search MATCH ?1
@@ -340,7 +340,7 @@ fn global_search(
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
 
-    let genre_query = fts_column_query(&query, "genre").expect("non-empty query has a genre query");
+    let genre_query = fts_column_query(query, "genre").expect("non-empty query has a genre query");
     let genres_sql = "WITH matches AS MATERIALIZED (
            SELECT rowid, bm25(tracks_search, 0.0, 0.0, 0.0, 10.0) AS relevance
            FROM tracks_search WHERE tracks_search MATCH ?1
@@ -390,7 +390,11 @@ fn global_search(
 // to rebuild the play queue and playlist views from stored paths).
 #[tauri::command]
 pub fn db_tracks_by_paths(db: State<Db>, paths: Vec<String>) -> Result<Vec<MusicTrack>, String> {
-    limits::validate_paths(&paths, limits::MAX_QUEUE_ENTRIES)?;
+    tracks_by_paths(db.inner(), &paths)
+}
+
+pub(crate) fn tracks_by_paths(db: &Db, paths: &[String]) -> Result<Vec<MusicTrack>, String> {
+    limits::validate_paths(paths, limits::MAX_QUEUE_ENTRIES)?;
     if paths.is_empty() {
         return Ok(Vec::new());
     }
@@ -428,6 +432,151 @@ pub fn db_random_track(
 ) -> Result<Option<MusicTrack>, String> {
     let conn = db.read();
     random_track(&conn, exclude.as_deref().unwrap_or(""))
+}
+
+/// Select uniformly from a caller's current result set without using webview
+/// randomness. Only the chosen track is hydrated from SQLite.
+#[tauri::command]
+pub fn db_random_track_from_paths(
+    db: State<Db>,
+    paths: Vec<String>,
+    exclude: Option<String>,
+) -> Result<Option<MusicTrack>, String> {
+    limits::validate_paths(&paths, limits::MAX_BATCH_PATHS)?;
+    let exclude = exclude.as_deref().unwrap_or("");
+    let candidates = paths
+        .into_iter()
+        .filter(|path| path != exclude)
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+    let start = (random_u64() % candidates.len() as u64) as usize;
+    let conn = db.read();
+    let sql = format!("SELECT {TRACK_COLS} FROM tracks WHERE path = ?1");
+    let mut statement = conn.prepare(&sql).map_err(|error| error.to_string())?;
+    for offset in 0..candidates.len() {
+        let path = &candidates[(start + offset) % candidates.len()];
+        let mut rows = statement
+            .query_map(params![path], row_to_track)
+            .map_err(|error| error.to_string())?;
+        if let Some(track) = rows.next() {
+            return track.map(Some).map_err(|error| error.to_string());
+        }
+    }
+    Ok(None)
+}
+
+/// Native Auto-DJ choice. It samples a bounded random window, avoids recent
+/// queue history, then favors related genre/artist/album and long-unplayed
+/// tracks. This keeps policy and randomness out of the webview without loading
+/// the whole library into memory.
+#[tauri::command]
+pub fn db_auto_dj_next(
+    db: State<Db>,
+    current_path: Option<String>,
+    recent_paths: Vec<String>,
+) -> Result<Option<MusicTrack>, String> {
+    limits::validate_paths(&recent_paths, 100)?;
+    if let Some(path) = current_path.as_deref() {
+        limits::validate_text(path, "Current track path", limits::MAX_PATH_BYTES)?;
+    }
+    auto_dj_next(&db, current_path.as_deref().unwrap_or(""), &recent_paths)
+}
+
+fn auto_dj_next(
+    db: &Db,
+    current_path: &str,
+    recent_paths: &[String],
+) -> Result<Option<MusicTrack>, String> {
+    let conn = db.read();
+    let current = conn
+        .query_row(
+            "SELECT artist, album, genre FROM tracks WHERE path = ?1",
+            params![current_path],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            },
+        )
+        .unwrap_or_default();
+    let max_id: i64 = conn
+        .query_row("SELECT COALESCE(MAX(id), 0) FROM tracks", [], |row| {
+            row.get(0)
+        })
+        .map_err(|error| error.to_string())?;
+    if max_id <= 0 {
+        return Ok(None);
+    }
+    let start = (random_u64() % max_id as u64) as i64 + 1;
+    let recent = recent_paths
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    let sql = format!(
+        "SELECT {TRACK_COLS_T}, COALESCE(s.last_played, 0)
+         FROM tracks t LEFT JOIN stats s ON s.track_id = t.id
+         WHERE t.id >= ?1 AND t.path <> ?2 ORDER BY t.id LIMIT 96"
+    );
+    let wrapped_sql = format!(
+        "SELECT {TRACK_COLS_T}, COALESCE(s.last_played, 0)
+         FROM tracks t LEFT JOIN stats s ON s.track_id = t.id
+         WHERE t.id < ?1 AND t.path <> ?2 ORDER BY t.id LIMIT 96"
+    );
+    let mut candidates = Vec::new();
+    for query in [&sql, &wrapped_sql] {
+        if candidates.len() >= 96 {
+            break;
+        }
+        let mut statement = conn.prepare(query).map_err(|error| error.to_string())?;
+        let rows = statement
+            .query_map(params![start, current_path], |row| {
+                Ok((row_to_track(row)?, row.get::<_, i64>(17)?))
+            })
+            .map_err(|error| error.to_string())?;
+        for row in rows {
+            let candidate = row.map_err(|error| error.to_string())?;
+            candidates.push(candidate);
+            if candidates.len() >= 96 {
+                break;
+            }
+        }
+    }
+    let non_recent = candidates
+        .iter()
+        .filter(|(track, _)| !recent.contains(track.path.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    // A small library will eventually have every track in recent history. In
+    // that case allow an older repeat instead of stopping Auto-DJ altogether.
+    let eligible = if non_recent.is_empty() {
+        candidates
+    } else {
+        non_recent
+    };
+    let now = super::now_ms();
+    Ok(eligible
+        .into_iter()
+        .max_by_key(|(track, last_played)| {
+            let relation = i64::from(
+                current
+                    .2
+                    .as_deref()
+                    .is_some_and(|genre| track.genre.as_deref() == Some(genre)),
+            ) * 8
+                + i64::from(!current.0.is_empty() && track.artist == current.0.as_str()) * 4
+                + i64::from(!current.1.is_empty() && track.album == current.1.as_str()) * 2;
+            let stale_days = if *last_played <= 0 {
+                365
+            } else {
+                ((now - *last_played).max(0) / 86_400_000).min(365)
+            };
+            relation * 1_000 + stale_days
+        })
+        .map(|(track, _)| track))
 }
 
 fn random_track(conn: &Connection, exclude: &str) -> Result<Option<MusicTrack>, String> {
@@ -592,7 +741,7 @@ fn hydrate_station_ids(
     let mut statement = conn.prepare(&sql).map_err(|error| error.to_string())?;
     let rows = statement
         .query_map(params_from_iter(ids.iter()), |row| {
-            Ok((row.get::<_, i64>(16)?, row_to_track(row)?))
+            Ok((row.get::<_, i64>(17)?, row_to_track(row)?))
         })
         .map_err(|error| error.to_string())?;
     let mut by_id = HashMap::new();
@@ -720,9 +869,12 @@ pub fn db_smart_tracks(
             return Err("Smart-playlist sort order must be asc or desc".to_string());
         }
     }
-    if limit.is_some_and(|limit| !(0..=100_000).contains(&limit)) {
-        return Err("Smart-playlist limit must be between 0 and 100000".to_string());
-    }
+    validate_smart_request(
+        &rules,
+        sort_by.as_deref().unwrap_or("none"),
+        sort_order.as_deref().unwrap_or("asc"),
+        limit.unwrap_or(0),
+    )?;
     let conn = db.read();
     smart_eval(
         &conn,
@@ -743,9 +895,7 @@ pub fn db_smart_count(db: State<Db>, rules: Value, limit: Option<i64>) -> Result
         limits::MAX_RULES_BYTES,
         limits::MAX_JSON_DEPTH,
     )?;
-    if limit.is_some_and(|value| !(0..=100_000).contains(&value)) {
-        return Err("Smart-playlist limit must be between 0 and 100000".to_string());
-    }
+    validate_smart_request(&rules, "none", "asc", limit.unwrap_or(0))?;
     let conn = db.read();
     smart_count(&conn, &rules, limit.unwrap_or(0))
 }
@@ -822,6 +972,33 @@ mod tests {
                 .expect("other track exists");
             assert_eq!(track.path, "two");
         }
+    }
+
+    #[test]
+    fn auto_dj_avoids_recent_paths_and_prefers_related_tracks() {
+        let db = database();
+        insert_track(&db, "current", "Current", "Artist", "Album", "Rock");
+        insert_track(&db, "related", "Related", "Other", "Other Album", "Rock");
+        insert_track(&db, "unrelated", "Unrelated", "Else", "Elsewhere", "Jazz");
+
+        let related = auto_dj_next(&db, "current", &[])
+            .expect("select auto-dj track")
+            .expect("candidate exists");
+        assert_eq!(related.path, "related");
+
+        let fallback = auto_dj_next(&db, "current", &["related".to_string()])
+            .expect("select non-recent auto-dj track")
+            .expect("fallback exists");
+        assert_eq!(fallback.path, "unrelated");
+
+        let repeat = auto_dj_next(
+            &db,
+            "current",
+            &["related".to_string(), "unrelated".to_string()],
+        )
+        .expect("select an older repeat")
+        .expect("repeat exists");
+        assert_ne!(repeat.path, "current");
     }
 
     #[test]

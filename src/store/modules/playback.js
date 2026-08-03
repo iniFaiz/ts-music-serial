@@ -135,6 +135,24 @@ currentQueueIndex() {
     return this.queue.findIndex((s) => s.path === this.currentSong.path);
   },
 
+async playRandom(songs, options = {}) {
+    const list = Array.isArray(songs) ? songs : [];
+    if (list.length === 0) return false;
+    try {
+      const selected = await invoke('db_random_track_from_paths', {
+        paths: list.map((song) => song.path),
+        exclude: null,
+      });
+      if (!selected) return false;
+      this.shuffleMode = true;
+      await this.playSong(selected, list, options);
+      return true;
+    } catch (error) {
+      console.error('Failed to select a random track', error);
+      return false;
+    }
+  },
+
 playNext(song) {
     const queueId =
       song.queueId && !this.queue.some((e) => e.queueId === song.queueId)
@@ -224,6 +242,19 @@ removeFromQueue(index) {
       entryId: removed.queueId,
     }).catch((error) => console.error('Failed to remove queue entry', error));
     this.persistState();
+  },
+
+async removeQueuePaths(paths) {
+    const removed = new Set(Array.isArray(paths) ? paths : [paths]);
+    const entryIds = this.queue
+      .filter((entry) => removed.has(entry.path))
+      .map((entry) => entry.queueId)
+      .filter(Boolean);
+    const currentId = this.currentSong?.queueId;
+    entryIds.sort((left, right) => Number(left === currentId) - Number(right === currentId));
+    for (const entryId of entryIds) {
+      await this.sendPlaybackIntent({ type: 'remove_queue_item', entryId });
+    }
   },
 
 moveInQueue(from, to) {
@@ -573,8 +604,9 @@ setSleepTimer(mode) {
 
 async pickRandomSong() {
     try {
-      return await invoke('db_random_track', {
-        exclude: this.currentSong ? this.currentSong.path : null,
+      return await invoke('db_auto_dj_next', {
+        currentPath: this.currentSong ? this.currentSong.path : null,
+        recentPaths: this.queue.slice(-100).map((entry) => entry.path),
       });
     } catch {
       return null;

@@ -7,8 +7,8 @@ use tauri::State;
 use crate::{limits, MusicTrack};
 
 use super::{
-    collect_tracks, library_fingerprint, now_ms, smart_count, smart_eval, Db, OptionalString,
-    PlaylistRow, RecentRow, TRACK_COLS_T,
+    collect_tracks, library_fingerprint, now_ms, smart_count, smart_eval, validate_smart_request,
+    Db, OptionalString, PlaylistRow, RecentRow, TRACK_COLS_T,
 };
 
 type SmartPlaylistDefinition = (
@@ -239,10 +239,7 @@ pub fn db_upsert_playlist(
         limits::validate_text(color, "Playlist color", 32)?;
     }
     if let Some(cover) = cover.as_deref() {
-        limits::validate_text(cover, "Playlist cover", 2 * 1024 * 1024)?;
-        if !cover.starts_with("data:image/") {
-            return Err("Playlist cover must be an image data URL".to_string());
-        }
+        crate::playlist_cover::validate_playlist_cover_data_url(cover)?;
     }
     if let Some(rules) = rules.as_ref() {
         limits::validate_json(
@@ -260,8 +257,18 @@ pub fn db_upsert_playlist(
             return Err("Smart-playlist sort order must be asc or desc".to_string());
         }
     }
-    if limit_n.is_some_and(|limit| !(0..=100_000).contains(&limit)) {
-        return Err("Smart-playlist limit must be between 0 and 100000".to_string());
+    if is_smart {
+        let rules = rules
+            .as_ref()
+            .ok_or_else(|| "Smart playlists require a rules object".to_string())?;
+        validate_smart_request(
+            rules,
+            sort_by.as_deref().unwrap_or("none"),
+            sort_order.as_deref().unwrap_or("asc"),
+            limit_n.unwrap_or(0),
+        )?;
+    } else if limit_n.is_some_and(|limit| !(0..=100_000).contains(&limit)) {
+        return Err("Playlist limit must be between 0 and 100000".to_string());
     }
     let conn = db.0.lock();
     let rules_str = rules.map(|v| v.to_string());

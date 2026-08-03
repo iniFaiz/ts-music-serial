@@ -214,7 +214,7 @@ impl Db {
 }
 
 pub(crate) const APPLICATION_ID: i32 = 0x5453_4D31; // "TSM1"
-pub(crate) const SCHEMA_VERSION: i32 = 4;
+pub(crate) const SCHEMA_VERSION: i32 = 5;
 
 fn configure_connection(connection: &Connection) -> Result<(), String> {
     connection
@@ -256,8 +256,8 @@ fn library_fingerprint(conn: &Connection) -> i64 {
 // Column list shared by every "give me tracks" query, in the order row_to_track
 // expects. `_T` is the alias-qualified variant for queries that JOIN `stats`
 // (which also has a `path` column, so the bare name would be ambiguous).
-const TRACK_COLS: &str = "path, title, artist, album, genre, duration_secs, first_seen_at, year, track_number, has_cover, sample_rate, bit_depth, track_gain_db, track_peak, file_size, mtime_ns";
-const TRACK_COLS_T: &str = "t.path, t.title, t.artist, t.album, t.genre, t.duration_secs, t.first_seen_at, t.year, t.track_number, t.has_cover, t.sample_rate, t.bit_depth, t.track_gain_db, t.track_peak, t.file_size, t.mtime_ns";
+const TRACK_COLS: &str = "path, title, artist, album, genre, duration_secs, first_seen_at, year, track_number, has_cover, sample_rate, bit_depth, track_gain_db, track_peak, file_size, mtime_ns, file_id";
+const TRACK_COLS_T: &str = "t.path, t.title, t.artist, t.album, t.genre, t.duration_secs, t.first_seen_at, t.year, t.track_number, t.has_cover, t.sample_rate, t.bit_depth, t.track_gain_db, t.track_peak, t.file_size, t.mtime_ns, t.file_id";
 
 fn row_to_track(row: &Row) -> rusqlite::Result<MusicTrack> {
     row_to_track_at(row, 0)
@@ -281,6 +281,7 @@ fn row_to_track_at(row: &Row, offset: usize) -> rusqlite::Result<MusicTrack> {
         track_peak: row.get::<_, Option<f64>>(offset + 13)?.map(|v| v as f32),
         file_size: row.get::<_, Option<i64>>(offset + 14)?.unwrap_or(0).max(0) as u64,
         mtime_ns: row.get::<_, Option<i64>>(offset + 15)?.unwrap_or(0),
+        file_id: row.get(offset + 16)?,
     })
 }
 
@@ -619,6 +620,20 @@ fn migrate(conn: &mut Connection) -> Result<(), String> {
         tx.execute_batch("ALTER TABLE tracks ADD COLUMN mtime_ns INTEGER;")
             .map_err(|error| error.to_string())?;
     }
+    let has_file_id: bool = tx
+        .prepare("SELECT 1 FROM pragma_table_info('tracks') WHERE name = 'file_id'")
+        .and_then(|mut statement| statement.exists([]))
+        .map_err(|error| error.to_string())?;
+    if !has_file_id {
+        tx.execute_batch(
+            "ALTER TABLE tracks ADD COLUMN file_id TEXT;
+             CREATE INDEX IF NOT EXISTS idx_tracks_file_id ON tracks(file_id);",
+        )
+        .map_err(|error| error.to_string())?;
+    } else {
+        tx.execute_batch("CREATE INDEX IF NOT EXISTS idx_tracks_file_id ON tracks(file_id);")
+            .map_err(|error| error.to_string())?;
+    }
     let has_first_seen_at: bool = tx
         .prepare("SELECT 1 FROM pragma_table_info('tracks') WHERE name = 'first_seen_at'")
         .and_then(|mut statement| statement.exists([]))
@@ -685,7 +700,8 @@ CREATE TABLE IF NOT EXISTS tracks (
   track_peak    REAL,
   fingerprint   TEXT,
   file_size     INTEGER,
-  mtime_ns      INTEGER
+  mtime_ns      INTEGER,
+  file_id       TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_tracks_album  ON tracks(album);
 CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks(artist);
@@ -944,8 +960,8 @@ fn upsert_tracks_with_options(db: &Db, tracks: Vec<MusicTrack>) -> Result<usize,
             .map_err(|e| e.to_string())?;
         let mut upsert = tx
             .prepare(
-                "INSERT INTO tracks (path, title, artist, album, genre, duration_secs, date_added, first_seen_at, year, track_number, has_cover, sample_rate, bit_depth, track_gain_db, track_peak, fingerprint, file_size, mtime_ns)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)
+                "INSERT INTO tracks (path, title, artist, album, genre, duration_secs, date_added, first_seen_at, year, track_number, has_cover, sample_rate, bit_depth, track_gain_db, track_peak, fingerprint, file_size, mtime_ns, file_id)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)
                  ON CONFLICT(path) DO UPDATE SET
                    title=excluded.title, artist=excluded.artist, album=excluded.album,
                    genre=excluded.genre, duration_secs=excluded.duration_secs,
@@ -954,7 +970,7 @@ fn upsert_tracks_with_options(db: &Db, tracks: Vec<MusicTrack>) -> Result<usize,
                    sample_rate=excluded.sample_rate, bit_depth=excluded.bit_depth,
                    track_gain_db=excluded.track_gain_db, track_peak=excluded.track_peak,
                    fingerprint=excluded.fingerprint, file_size=excluded.file_size,
-                   mtime_ns=excluded.mtime_ns",
+                   mtime_ns=excluded.mtime_ns, file_id=excluded.file_id",
             )
             .map_err(|e| e.to_string())?;
         for t in &tracks {
@@ -978,6 +994,7 @@ fn upsert_tracks_with_options(db: &Db, tracks: Vec<MusicTrack>) -> Result<usize,
                     fps.get(&t.path),
                     t.file_size.min(i64::MAX as u64) as i64,
                     t.mtime_ns,
+                    t.file_id,
                 ])
                 .map_err(|e| e.to_string())?;
             if is_new {
@@ -993,20 +1010,26 @@ fn upsert_tracks_with_options(db: &Db, tracks: Vec<MusicTrack>) -> Result<usize,
 /// indexed row. NULL signatures are the one-time migration/backfill case.
 pub(crate) fn paths_requiring_metadata(
     db: &Db,
-    candidates: &[(std::path::PathBuf, i64, i64)],
+    candidates: &[(std::path::PathBuf, i64, i64, Option<String>)],
 ) -> Result<Vec<std::path::PathBuf>, String> {
     let conn = db.read();
     let mut statement = conn
-        .prepare("SELECT file_size, mtime_ns FROM tracks WHERE path = ?1")
+        .prepare("SELECT file_size, mtime_ns, file_id FROM tracks WHERE path = ?1")
         .map_err(|error| error.to_string())?;
     let mut changed = Vec::new();
-    for (path, file_size, mtime_ns) in candidates {
+    for (path, file_size, mtime_ns, file_id) in candidates {
         let indexed = statement.query_row(params![path.to_string_lossy()], |row| {
-            Ok((row.get::<_, Option<i64>>(0)?, row.get::<_, Option<i64>>(1)?))
+            Ok((
+                row.get::<_, Option<i64>>(0)?,
+                row.get::<_, Option<i64>>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
         });
         match indexed {
-            Ok((Some(indexed_size), Some(indexed_mtime)))
-                if indexed_size == *file_size && indexed_mtime == *mtime_ns => {}
+            Ok((Some(indexed_size), Some(indexed_mtime), indexed_file_id))
+                if indexed_size == *file_size
+                    && indexed_mtime == *mtime_ns
+                    && indexed_file_id.as_ref() == file_id.as_ref() => {}
             Ok(_) | Err(rusqlite::Error::QueryReturnedNoRows) => changed.push(path.clone()),
             Err(error) => return Err(error.to_string()),
         }
@@ -1065,17 +1088,21 @@ pub fn db_remove_paths(
 // Returns the removed (old) paths so the frontend can drop them from the queue.
 pub fn db_prune_missing(db: State<Db>) -> Result<Vec<String>, String> {
     let mut conn = db.0.lock();
-    let gone: Vec<(String, Option<String>)> = {
+    let gone: Vec<(String, Option<String>, Option<String>)> = {
         let mut stmt = conn
-            .prepare("SELECT path, fingerprint FROM tracks")
+            .prepare("SELECT path, fingerprint, file_id FROM tracks")
             .map_err(|e| e.to_string())?;
         let rows = stmt
             .query_map([], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                ))
             })
             .map_err(|e| e.to_string())?;
         rows.filter_map(Result::ok)
-            .filter(|(path, _)| !Path::new(path).exists())
+            .filter(|(path, _, _)| !Path::new(path).exists())
             .collect()
     };
     prune_gone_rows(&mut conn, gone)
@@ -1083,7 +1110,7 @@ pub fn db_prune_missing(db: State<Db>) -> Result<Vec<String>, String> {
 
 fn prune_gone_rows(
     conn: &mut Connection,
-    gone: Vec<(String, Option<String>)>,
+    gone: Vec<(String, Option<String>, Option<String>)>,
 ) -> Result<Vec<String>, String> {
     if gone.is_empty() {
         return Ok(Vec::new());
@@ -1091,8 +1118,26 @@ fn prune_gone_rows(
 
     let mut claimed_targets = HashSet::new();
     let tx = conn.transaction().map_err(|e| e.to_string())?;
-    for (old_path, fp) in &gone {
-        let target = if let Some(fingerprint) = fp.as_ref().filter(|value| !value.is_empty()) {
+    for (old_path, fp, file_id) in &gone {
+        let by_file_id = if let Some(file_id) = file_id.as_ref().filter(|value| !value.is_empty()) {
+            let mut statement = tx
+                .prepare("SELECT id, path FROM tracks WHERE file_id = ?1 AND path <> ?2")
+                .map_err(|error| error.to_string())?;
+            let rows = statement
+                .query_map(params![file_id, old_path], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                })
+                .map_err(|error| error.to_string())?;
+            let found = rows.filter_map(Result::ok).find(|(_, candidate)| {
+                Path::new(candidate).exists() && !claimed_targets.contains(candidate)
+            });
+            found
+        } else {
+            None
+        };
+        let target = if by_file_id.is_some() {
+            by_file_id
+        } else if let Some(fingerprint) = fp.as_ref().filter(|value| !value.is_empty()) {
             let mut stmt = tx
                 .prepare("SELECT id, path FROM tracks WHERE fingerprint = ?1 AND path <> ?2")
                 .map_err(|e| e.to_string())?;
@@ -1152,10 +1197,10 @@ fn prune_gone_rows(
                 "UPDATE tracks AS old SET
                    (title, artist, album, genre, duration_secs, year, track_number,
                     has_cover, sample_rate, bit_depth, track_gain_db, track_peak,
-                    fingerprint, file_size, mtime_ns) =
+                    fingerprint, file_size, mtime_ns, file_id) =
                    (SELECT title, artist, album, genre, duration_secs, year, track_number,
                            has_cover, sample_rate, bit_depth, track_gain_db, track_peak,
-                           fingerprint, file_size, mtime_ns
+                           fingerprint, file_size, mtime_ns, file_id
                     FROM tracks WHERE id = ?2),
                    first_seen_at = MIN(
                      old.first_seen_at,
@@ -1182,7 +1227,7 @@ fn prune_gone_rows(
         }
     }
     tx.commit().map_err(|e| e.to_string())?;
-    Ok(gone.into_iter().map(|(p, _)| p).collect())
+    Ok(gone.into_iter().map(|(path, _, _)| path).collect())
 }
 
 // Watcher removals are path-scoped: query only the missing file or subtree
@@ -1208,10 +1253,10 @@ pub(crate) fn prune_changed_paths(
     let mut conn = db.0.lock();
     let gone = {
         let separator = std::path::MAIN_SEPARATOR.to_string();
-        let mut found: HashMap<String, Option<String>> = HashMap::new();
+        let mut found: HashMap<String, (Option<String>, Option<String>)> = HashMap::new();
         let mut stmt = conn
             .prepare(
-                "SELECT path, fingerprint FROM tracks
+                "SELECT path, fingerprint, file_id FROM tracks
                  WHERE path = ?1
                     OR substr(path, 1, length(?1) + 1) = (?1 || ?2)",
             )
@@ -1219,16 +1264,23 @@ pub(crate) fn prune_changed_paths(
         for path in missing {
             let rows = stmt
                 .query_map(params![path, separator], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
                 })
                 .map_err(|e| e.to_string())?;
-            for (candidate, fingerprint) in rows.filter_map(Result::ok) {
+            for (candidate, fingerprint, file_id) in rows.filter_map(Result::ok) {
                 if !Path::new(&candidate).exists() {
-                    found.insert(candidate, fingerprint);
+                    found.insert(candidate, (fingerprint, file_id));
                 }
             }
         }
-        found.into_iter().collect()
+        found
+            .into_iter()
+            .map(|(path, (fingerprint, file_id))| (path, fingerprint, file_id))
+            .collect()
     };
     prune_gone_rows(&mut conn, gone)
 }
@@ -1249,7 +1301,8 @@ pub(crate) fn reindex_track(
            title=?2, artist=?3, album=?4, genre=?5, duration_secs=?6, year=?7,
            track_number=?8, has_cover=?9, sample_rate=?10, bit_depth=?11,
            track_gain_db=?12, track_peak=?13,
-           fingerprint=COALESCE(?14, fingerprint), file_size=?15, mtime_ns=?16
+           fingerprint=COALESCE(?14, fingerprint), file_size=?15, mtime_ns=?16,
+           file_id=?17
          WHERE path=?1",
         params![
             t.path,
@@ -1268,6 +1321,7 @@ pub(crate) fn reindex_track(
             fingerprint,
             t.file_size.min(i64::MAX as u64) as i64,
             t.mtime_ns,
+            t.file_id,
         ],
     )
     .map_err(|e| e.to_string())?;
@@ -1465,6 +1519,10 @@ pub fn db_kv_get(db: State<Db>, key: String) -> Result<Option<Value>, String> {
     if !matches!(key.as_str(), "settings" | "playback") {
         return Err("Unsupported settings key".to_string());
     }
+    kv_get(db.inner(), &key)
+}
+
+pub(crate) fn kv_get(db: &Db, key: &str) -> Result<Option<Value>, String> {
     let conn = db.read();
     let raw: Option<String> = conn
         .query_row("SELECT v FROM kv WHERE k = ?1", params![key], |r| r.get(0))
@@ -1477,7 +1535,11 @@ pub fn db_kv_set(db: State<Db>, key: String, value: Value) -> Result<(), String>
     if !matches!(key.as_str(), "settings" | "playback") {
         return Err("Unsupported settings key".to_string());
     }
-    limits::validate_json(&value, "Settings value", limits::MAX_KV_BYTES, 12)?;
+    kv_set(db.inner(), &key, &value, limits::MAX_KV_BYTES)
+}
+
+pub(crate) fn kv_set(db: &Db, key: &str, value: &Value, max_bytes: usize) -> Result<(), String> {
+    limits::validate_json(value, "Settings value", max_bytes, 12)?;
     let conn = db.0.lock();
     conn.execute(
         "INSERT INTO kv(k, v) VALUES (?1, ?2) ON CONFLICT(k) DO UPDATE SET v = ?2",
@@ -1657,7 +1719,7 @@ pub fn db_import(
 }
 
 mod smart_playlists;
-use smart_playlists::{smart_count, smart_eval};
+use smart_playlists::{smart_count, smart_eval, validate_smart_request};
 
 // Small helper: turn "no rows" into Ok(None) for optional single-row reads.
 trait OptionalString<T> {
@@ -1762,6 +1824,7 @@ mod indexing_tests {
             track_peak: None,
             file_size,
             mtime_ns,
+            file_id: Some("test-file-id".to_string()),
         }
     }
 
@@ -1771,21 +1834,38 @@ mod indexing_tests {
         db.0.lock()
             .execute(
                 "INSERT INTO tracks
-                 (path, title, artist, album, file_size, mtime_ns)
-                 VALUES ('same.mp3', 'Same', 'Artist', 'Album', 100, 200)",
+                (path, title, artist, album, file_size, mtime_ns, file_id)
+                 VALUES ('same.mp3', 'Same', 'Artist', 'Album', 100, 200, 'same-id')",
                 [],
             )
             .expect("insert signature row");
         let candidates = vec![
-            (PathBuf::from("same.mp3"), 100, 200),
-            (PathBuf::from("changed.mp3"), 101, 201),
+            (PathBuf::from("same.mp3"), 100, 200, Some("same-id".into())),
+            (
+                PathBuf::from("changed.mp3"),
+                101,
+                201,
+                Some("changed-id".into()),
+            ),
         ];
         let changed = paths_requiring_metadata(&db, &candidates).expect("compare signatures");
         assert_eq!(changed, vec![PathBuf::from("changed.mp3")]);
 
-        let changed_signature = vec![(PathBuf::from("same.mp3"), 100, 201)];
+        let changed_signature = vec![(PathBuf::from("same.mp3"), 100, 201, Some("same-id".into()))];
         assert_eq!(
             paths_requiring_metadata(&db, &changed_signature).expect("detect changed mtime"),
+            vec![PathBuf::from("same.mp3")]
+        );
+
+        let replaced_same_size_and_mtime = vec![(
+            PathBuf::from("same.mp3"),
+            100,
+            200,
+            Some("replacement-id".into()),
+        )];
+        assert_eq!(
+            paths_requiring_metadata(&db, &replaced_same_size_and_mtime)
+                .expect("detect replaced file identity"),
             vec![PathBuf::from("same.mp3")]
         );
     }

@@ -3,7 +3,6 @@ import { ref, computed, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { invokeCommand as invoke } from '../generated/ipc';
 import { store } from '../store';
-import { readPlaylistCover } from '../playlistCover';
 import {
   FIELDS,
   FIELD_MAP,
@@ -65,17 +64,13 @@ watch(
 );
 
 // ---- Custom cover image ----
-const fileInput = ref(null);
-const pickImage = () => fileInput.value?.click();
-
-const onFile = async (e) => {
-  const file = e.target.files && e.target.files[0];
-  e.target.value = '';
-  if (!file) return;
+const pickImage = async () => {
   try {
-    form.value.cover = await readPlaylistCover(file);
+    const selected = await invoke('pick_playlist_cover');
+    if (selected) form.value.cover = selected;
   } catch (error) {
     console.error('Failed to process smart-playlist cover', error);
+    store.showToast(`Could not process cover: ${error}`, { type: 'error' });
   }
 };
 
@@ -303,7 +298,6 @@ const cancel = () => store.closeSmartModal();
                 </button>
               </div>
             </div>
-            <input ref="fileInput" type="file" accept="image/*" class="hidden" @change="onFile" />
 
             <!-- Match selector -->
             <div class="flex items-center gap-2 text-sm text-gray-300">

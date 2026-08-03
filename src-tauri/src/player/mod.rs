@@ -14,7 +14,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::cache_manager::{self, CacheKind};
-use crate::{cover_cache_key, library_db, parse_rg_db, resolve_allowed_audio};
+use crate::{cover_cache_key, library_db, parse_rg_db, resolve_allowed_audio, MusicTrack};
 
 #[cfg(target_os = "windows")]
 mod exclusive;
@@ -243,6 +243,18 @@ fn emit_session_update(app: &AppHandle, update: &PlaybackSessionUpdate) {
     // Progress is observed on every status poll; only publish meaningful
     // changes so this typed event does not become a 4 Hz snapshot broadcast.
     if !update.events.is_empty() || update.effect.is_some() {
+        if let Some(database) = app.try_state::<library_db::Db>() {
+            if let Ok(value) = serde_json::to_value(&update.snapshot) {
+                if let Err(error) = library_db::kv_set(
+                    database.inner(),
+                    "native_playback_session",
+                    &value,
+                    8 * 1024 * 1024,
+                ) {
+                    eprintln!("Failed to persist native playback session: {error}");
+                }
+            }
+        }
         let _ = app.emit("playback-session-event", update.clone());
     }
 }
@@ -800,6 +812,82 @@ pub(crate) fn player_set_transition(
 #[tauri::command]
 pub(crate) fn playback_session_snapshot(player: State<AudioPlayer>) -> PlaybackSessionSnapshot {
     player.session.snapshot()
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct QueueMetadataEntry {
+    entry_id: String,
+    track: Option<MusicTrack>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct QueueMetadataPage {
+    revision: u64,
+    total: usize,
+    offset: usize,
+    entries: Vec<QueueMetadataEntry>,
+}
+
+/// Hydrate queue metadata in bounded pages. The durable session keeps only
+/// entry identity/playback hints; full tags are read from SQLite on demand.
+#[tauri::command]
+pub(crate) fn playback_queue_page(
+    player: State<AudioPlayer>,
+    db: State<library_db::Db>,
+    offset: usize,
+    limit: usize,
+) -> Result<QueueMetadataPage, String> {
+    if !(1..=250).contains(&limit) {
+        return Err("Queue metadata page limit must be between 1 and 250".to_string());
+    }
+    if offset > crate::limits::MAX_QUEUE_ENTRIES {
+        return Err("Queue metadata offset is outside the supported range".to_string());
+    }
+    let snapshot = player.session.snapshot();
+    let end = offset.saturating_add(limit).min(snapshot.queue.len());
+    let page = snapshot.queue.get(offset..end).unwrap_or(&[]);
+    let paths = page
+        .iter()
+        .map(|entry| entry.path.clone())
+        .collect::<Vec<_>>();
+    let tracks = library_db::tracks::tracks_by_paths(db.inner(), &paths)?;
+    let mut track_index = 0;
+    let entries = page
+        .iter()
+        .map(|entry| {
+            let track = tracks
+                .get(track_index)
+                .filter(|track| track.path == entry.path)
+                .cloned();
+            if track.is_some() {
+                track_index += 1;
+            }
+            QueueMetadataEntry {
+                entry_id: entry.id.clone(),
+                track,
+            }
+        })
+        .collect();
+    Ok(QueueMetadataPage {
+        revision: snapshot.revision,
+        total: snapshot.queue.len(),
+        offset,
+        entries,
+    })
+}
+
+pub(crate) fn restore_persisted_session(player: &AudioPlayer, db: &library_db::Db) {
+    let restored = library_db::kv_get(db, "native_playback_session")
+        .ok()
+        .flatten()
+        .and_then(|value| serde_json::from_value::<PlaybackSessionSnapshot>(value).ok());
+    if let Some(snapshot) = restored {
+        if let Err(error) = player.session.restore(snapshot) {
+            eprintln!("Failed to restore native playback session: {error}");
+        }
+    }
 }
 
 /// Apply an intent and execute its audio effect before publishing the snapshot.

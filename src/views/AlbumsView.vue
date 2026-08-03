@@ -168,9 +168,7 @@ const handleMenuShuffle = async () => {
   const songs = await fetchAlbumTracks(album.name);
   if (songs.length > 0) {
     store.recordRecent('album', album.name);
-    store.shuffleMode = true;
-    const r = Math.floor(Math.random() * songs.length);
-    store.playSong(songs[r], songs);
+    await store.playRandom(songs);
   }
 };
 

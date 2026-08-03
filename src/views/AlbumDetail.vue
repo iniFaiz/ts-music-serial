@@ -61,12 +61,10 @@ const playAlbum = () => {
   }
 };
 
-const shuffleAlbum = () => {
+const shuffleAlbum = async () => {
   if (albumSongs.value.length > 0) {
     store.recordRecent('album', albumName);
-    store.shuffleMode = true;
-    const randomIndex = Math.floor(Math.random() * albumSongs.value.length);
-    store.playSong(albumSongs.value[randomIndex], albumSongs.value);
+    await store.playRandom(albumSongs.value);
   }
 };
 

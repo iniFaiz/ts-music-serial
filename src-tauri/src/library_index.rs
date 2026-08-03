@@ -17,7 +17,7 @@ use walkdir::WalkDir;
 use crate::library_db as db;
 use crate::library_scan::{
     canonical_roots, canonicalize_directory, canonicalize_existing_path, consume_native_drop,
-    grant_session_audio, path_is_within_roots, register_library_roots,
+    file_identity, grant_session_audio, path_is_within_roots, register_library_roots,
 };
 use crate::{is_audio_file, parse_metadata, MusicTrack};
 
@@ -71,7 +71,13 @@ fn flush_batch(
                 .and_then(|time| time.duration_since(std::time::SystemTime::UNIX_EPOCH).ok())
                 .map(|duration| duration.as_nanos().min(i64::MAX as u128) as i64)
                 .unwrap_or(0);
-            Some((path, metadata.len().min(i64::MAX as u64) as i64, mtime_ns))
+            let file_id = file_identity(&path, &metadata);
+            Some((
+                path,
+                metadata.len().min(i64::MAX as u64) as i64,
+                mtime_ns,
+                file_id,
+            ))
         })
         .collect::<Vec<_>>();
     summary.scanned += signatures.len();

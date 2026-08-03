@@ -67,12 +67,10 @@ onUnmounted(() => {
   window.removeEventListener('click', closeMenu);
 });
 
-const shufflePlaylist = () => {
+const shufflePlaylist = async () => {
   if (songs.value.length > 0) {
     store.recordRecent('playlist', playlistId.value);
-    store.shuffleMode = true;
-    const randomIndex = Math.floor(Math.random() * songs.value.length);
-    store.playSong(songs.value[randomIndex], songs.value);
+    await store.playRandom(songs.value);
   }
 };
 

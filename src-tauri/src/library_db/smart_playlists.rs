@@ -17,6 +17,130 @@ struct CompiledRules {
     params: Vec<SqlValue>,
 }
 
+const MAX_CONDITIONS: usize = 64;
+pub(super) const MAX_SMART_PLAYLIST_LIMIT: i64 = 100_000;
+
+/// Semantic validation used at every IPC boundary accepting ad-hoc or saved
+/// smart-playlist definitions. The SQL compiler remains tolerant when reading
+/// legacy rows, but new untrusted input must use the documented allowlists.
+pub(super) fn validate_smart_request(
+    rules: &Value,
+    sort_by: &str,
+    sort_order: &str,
+    limit: i64,
+) -> Result<(), String> {
+    if !(0..=MAX_SMART_PLAYLIST_LIMIT).contains(&limit) {
+        return Err(format!(
+            "Smart-playlist limit must be between 0 and {MAX_SMART_PLAYLIST_LIMIT}"
+        ));
+    }
+    if !matches!(sort_order, "asc" | "desc") {
+        return Err("Smart-playlist sort order must be asc or desc".to_string());
+    }
+    if !matches!(
+        sort_by,
+        "none"
+            | "random"
+            | "title"
+            | "artist"
+            | "album"
+            | "genre"
+            | "year"
+            | "duration"
+            | "playCount"
+            | "lastPlayed"
+            | "dateAdded"
+    ) {
+        return Err("Unsupported smart-playlist sort field".to_string());
+    }
+
+    let object = rules
+        .as_object()
+        .ok_or_else(|| "Smart-playlist rules must be an object".to_string())?;
+    if let Some(match_mode) = object.get("match") {
+        if !matches!(match_mode.as_str(), Some("all" | "any")) {
+            return Err("Smart-playlist match mode must be all or any".to_string());
+        }
+    }
+    let Some(conditions) = object.get("conditions") else {
+        return Ok(());
+    };
+    let conditions = conditions
+        .as_array()
+        .ok_or_else(|| "Smart-playlist conditions must be an array".to_string())?;
+    if conditions.len() > MAX_CONDITIONS {
+        return Err(format!(
+            "Smart playlist has too many conditions (max {MAX_CONDITIONS})"
+        ));
+    }
+    for (index, condition) in conditions.iter().enumerate() {
+        validate_condition(condition)
+            .map_err(|error| format!("Smart-playlist condition {}: {error}", index + 1))?;
+    }
+    Ok(())
+}
+
+fn validate_condition(condition: &Value) -> Result<(), String> {
+    let condition = condition
+        .as_object()
+        .ok_or_else(|| "must be an object".to_string())?;
+    let field = condition
+        .get("field")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "field is required".to_string())?;
+    let op = condition
+        .get("op")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "operator is required".to_string())?;
+
+    let valid_op = match field {
+        "title" | "artist" | "album" | "genre" => matches!(
+            op,
+            "contains" | "notContains" | "is" | "isNot" | "startsWith" | "endsWith"
+        ),
+        "year" | "playCount" => matches!(op, "is" | "isNot" | "gt" | "lt" | "gte" | "lte"),
+        "duration" => matches!(op, "lt" | "gt"),
+        "lastPlayed" | "dateAdded" => {
+            matches!(op, "inLast" | "notInLast" | "played" | "never")
+        }
+        "favorite" => matches!(op, "isTrue" | "isFalse"),
+        _ => return Err(format!("unsupported field '{field}'")),
+    };
+    if !valid_op {
+        return Err(format!("operator '{op}' is not valid for field '{field}'"));
+    }
+
+    if matches!(field, "title" | "artist" | "album" | "genre") {
+        let value = condition
+            .get("value")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "text value must be a string".to_string())?;
+        crate::limits::validate_text(value, "Smart-playlist text value", 1_024)?;
+    } else if matches!(field, "year" | "playCount" | "duration")
+        || (matches!(field, "lastPlayed" | "dateAdded") && matches!(op, "inLast" | "notInLast"))
+    {
+        let number = condition
+            .get("value")
+            .and_then(strict_json_number)
+            .ok_or_else(|| "numeric value must be a finite number".to_string())?;
+        if !number.is_finite() || !(0.0..=1_000_000_000.0).contains(&number) {
+            return Err("numeric value is outside the supported range".to_string());
+        }
+        if matches!(field, "lastPlayed" | "dateAdded") && number > 365_000.0 {
+            return Err("day window must be between 0 and 365000".to_string());
+        }
+    }
+    Ok(())
+}
+
+fn strict_json_number(value: &Value) -> Option<f64> {
+    match value {
+        Value::Number(number) => number.as_f64(),
+        Value::String(text) => text.trim().parse::<f64>().ok(),
+        _ => None,
+    }
+}
+
 pub(super) fn smart_eval(
     conn: &Connection,
     rules: &Value,
@@ -362,7 +486,8 @@ mod tests {
                track_gain_db REAL,
                track_peak REAL,
                file_size INTEGER,
-               mtime_ns INTEGER
+               mtime_ns INTEGER,
+               file_id TEXT
              );
              CREATE TABLE stats (
                track_id INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
@@ -580,5 +705,33 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM tracks", [], |row| row.get(0))
             .expect("tracks table remains");
         assert_eq!(table_count, 1);
+    }
+
+    #[test]
+    fn ipc_validation_rejects_unknown_rules_and_invalid_limits() {
+        let unknown = json!({
+            "match": "all",
+            "conditions": [{"field": "path", "op": "contains", "value": "secret"}]
+        });
+        assert!(validate_smart_request(&unknown, "none", "asc", 0).is_err());
+
+        let wrong_operator = json!({
+            "match": "any",
+            "conditions": [{"field": "favorite", "op": "contains", "value": "true"}]
+        });
+        assert!(validate_smart_request(&wrong_operator, "none", "asc", 0).is_err());
+
+        let valid = json!({
+            "match": "all",
+            "conditions": [{"field": "dateAdded", "op": "inLast", "value": 30}]
+        });
+        assert!(validate_smart_request(&valid, "dateAdded", "desc", 100).is_ok());
+        assert!(validate_smart_request(&valid, "none", "asc", 100_001).is_err());
+        assert!(validate_smart_request(&valid, "path", "asc", 0).is_err());
+
+        let invalid_number = json!({
+            "conditions": [{"field": "playCount", "op": "gte", "value": "many"}]
+        });
+        assert!(validate_smart_request(&invalid_number, "none", "asc", 0).is_err());
     }
 }

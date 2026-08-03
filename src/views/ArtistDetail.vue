@@ -28,11 +28,9 @@ const playArtist = () => {
   }
 };
 
-const shuffleArtist = () => {
+const shuffleArtist = async () => {
   if (artistSongs.value.length > 0) {
-    store.shuffleMode = true;
-    const randomIndex = Math.floor(Math.random() * artistSongs.value.length);
-    store.playSong(artistSongs.value[randomIndex], artistSongs.value);
+    await store.playRandom(artistSongs.value);
   }
 };
 </script>

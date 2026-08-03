@@ -19,6 +19,8 @@ commands.allow = [
   "db_tracks_by_paths",
   "db_track",
   "db_random_track",
+  "db_random_track_from_paths",
+  "db_auto_dj_next",
   "db_albums",
   "db_album_tracks",
   "db_artists",

@@ -312,6 +312,45 @@ pub(crate) fn compute_fingerprint(path: &Path) -> Option<String> {
     Some(format!("{len}:{:x}", hasher.finalize()))
 }
 
+/// Return an OS-level identity for the filesystem object. This is deliberately
+/// separate from the content fingerprint: it is cheap enough for every scan
+/// and catches atomic file replacement even when size/mtime are preserved.
+#[cfg(windows)]
+pub(crate) fn file_identity(path: &Path, _metadata: &fs::Metadata) -> Option<String> {
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+    };
+
+    let file = fs::File::open(path).ok()?;
+    let handle = HANDLE(file.as_raw_handle());
+    let mut information = BY_HANDLE_FILE_INFORMATION::default();
+    unsafe { GetFileInformationByHandle(handle, &mut information) }.ok()?;
+    let file_index =
+        (u64::from(information.nFileIndexHigh) << 32) | u64::from(information.nFileIndexLow);
+    Some(format!(
+        "win:{:08x}:{:016x}",
+        information.dwVolumeSerialNumber, file_index
+    ))
+}
+
+#[cfg(unix)]
+pub(crate) fn file_identity(_path: &Path, metadata: &fs::Metadata) -> Option<String> {
+    use std::os::unix::fs::MetadataExt;
+
+    Some(format!(
+        "unix:{:016x}:{:016x}",
+        metadata.dev(),
+        metadata.ino()
+    ))
+}
+
+#[cfg(not(any(windows, unix)))]
+pub(crate) fn file_identity(_path: &Path, _metadata: &fs::Metadata) -> Option<String> {
+    None
+}
+
 // Extract metadata for a single file.
 pub(crate) fn parse_metadata(path: &Path) -> Option<MusicTrack> {
     fn bounded_tag(mut value: String, max_bytes: usize) -> String {
@@ -330,6 +369,7 @@ pub(crate) fn parse_metadata(path: &Path) -> Option<MusicTrack> {
 
     let file_metadata = fs::metadata(path).ok()?;
     let file_size = file_metadata.len();
+    let file_id = file_identity(path, &file_metadata);
     let mtime_ns = file_metadata
         .modified()
         .ok()
@@ -410,6 +450,7 @@ pub(crate) fn parse_metadata(path: &Path) -> Option<MusicTrack> {
         track_peak,
         file_size,
         mtime_ns,
+        file_id,
     })
 }
 

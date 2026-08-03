@@ -32,11 +32,9 @@ onUnmounted(() => {
   window.removeEventListener('click', closeMenu);
 });
 
-const shuffleFavorites = () => {
+const shuffleFavorites = async () => {
   if (songs.value.length > 0) {
-    store.shuffleMode = true;
-    const randomIndex = Math.floor(Math.random() * songs.value.length);
-    store.playSong(songs.value[randomIndex], songs.value);
+    await store.playRandom(songs.value);
   }
 };
 

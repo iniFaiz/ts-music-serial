@@ -38,12 +38,10 @@ const playAll = () => {
   }
 };
 
-const shuffleAll = () => {
+const shuffleAll = async () => {
   if (songs.value.length === 0) return;
   store.recordRecent('collection', route.params.key);
-  store.shuffleMode = true;
-  const i = Math.floor(Math.random() * songs.value.length);
-  store.playSong(songs.value[i], songs.value);
+  await store.playRandom(songs.value);
 };
 </script>
 

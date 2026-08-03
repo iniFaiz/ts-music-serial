@@ -27,6 +27,7 @@ mod lyrics;
 mod metadata_tags;
 mod online_metadata;
 mod player;
+mod playlist_cover;
 mod playlist_io;
 mod security;
 #[cfg(target_os = "windows")]
@@ -52,13 +53,14 @@ pub(crate) use library_scan::{
 use metadata_tags::{preview_image, write_track_tags};
 pub(crate) use player::build_decoder;
 use player::{
-    compute_track_gain, init_audio_player, list_output_devices, playback_session_intent,
-    playback_session_snapshot, player_pause, player_prepare_next, player_resume, player_seek,
-    player_set_equalizer, player_set_normalization, player_set_normalization_settings,
-    player_set_spectrum_enabled, player_set_transition, player_set_volume, player_spectrum,
-    player_status, player_stop, set_output_device, set_wasapi_exclusive, spawn_player_ticker,
-    AudioPlayer,
+    compute_track_gain, init_audio_player, list_output_devices, playback_queue_page,
+    playback_session_intent, playback_session_snapshot, player_pause, player_prepare_next,
+    player_resume, player_seek, player_set_equalizer, player_set_normalization,
+    player_set_normalization_settings, player_set_spectrum_enabled, player_set_transition,
+    player_set_volume, player_spectrum, player_status, player_stop, restore_persisted_session,
+    set_output_device, set_wasapi_exclusive, spawn_player_ticker, AudioPlayer,
 };
+use playlist_cover::pick_playlist_cover;
 use waveform::get_waveform;
 
 // Data sent to the frontend. Also `Deserialize` so a previously-scanned library
@@ -89,6 +91,11 @@ pub struct MusicTrack {
     pub(crate) file_size: u64,
     #[serde(default, skip_serializing)]
     pub(crate) mtime_ns: i64,
+    // Stable filesystem object identity (volume + file index on Windows,
+    // device + inode on Unix). Including it in the cheap signature detects a
+    // replacement file even when an application preserves size and mtime.
+    #[serde(default, skip_serializing)]
+    pub(crate) file_id: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -872,7 +879,9 @@ pub fn run() {
             // playlists, favorites, recents). Managed here so every db_* command
             // can reach it via State<Db>.
             let database = db::init(_app.handle())?;
+            restore_persisted_session(&_app.state::<AudioPlayer>(), &database);
             _app.manage(database);
+            db::backup::start_scheduled_maintenance(_app.handle().clone());
 
             // Backfill content fingerprints for rows that predate the column,
             // in the background. Delayed a bit so it never competes with the
@@ -946,6 +955,7 @@ pub fn run() {
             player_stop,
             player_status,
             playback_session_snapshot,
+            playback_queue_page,
             playback_session_intent,
             player_spectrum,
             player_set_spectrum_enabled,
@@ -968,6 +978,7 @@ pub fn run() {
             security::request_destructive_consent,
             write_track_tags,
             preview_image,
+            pick_playlist_cover,
             probe_files,
             take_pending_open_files,
             tray::set_close_to_tray,
@@ -991,6 +1002,8 @@ pub fn run() {
             db::tracks::db_tracks_by_paths,
             db::tracks::db_track,
             db::tracks::db_random_track,
+            db::tracks::db_random_track_from_paths,
+            db::tracks::db_auto_dj_next,
             db::tracks::db_albums,
             db::tracks::db_album_tracks,
             db::tracks::db_artists,

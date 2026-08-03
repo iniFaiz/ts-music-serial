@@ -5,7 +5,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rusqlite::{params, Connection, OpenFlags, Transaction};
 use serde::Serialize;
@@ -19,6 +19,9 @@ use crate::security::{ConsentAction, DestructiveConsentState};
 use super::{migrate, Db, APPLICATION_ID, SCHEMA, SCHEMA_VERSION};
 
 static TEMP_SERIAL: AtomicU64 = AtomicU64::new(1);
+const AUTOMATIC_BACKUP_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+const MAINTENANCE_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
+const AUTOMATIC_BACKUP_RETENTION: usize = 5;
 
 /// A same-directory temporary database. SQLite sidecars are removed with it,
 /// including on an early-return error.
@@ -344,6 +347,89 @@ pub fn db_export_backup(app: AppHandle, db: State<Db>, dest: String) -> Result<(
     }
     validate_read_only_database(&staging.path)?;
     atomic_replace(&staging.path, dest_path)
+}
+
+fn automatic_backup_files(directory: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut files = fs::read_dir(directory)
+        .map_err(|error| format!("Failed to inspect automatic backups: {error}"))?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("auto-") && name.ends_with(".tsmback"))
+        })
+        .collect::<Vec<_>>();
+    files.sort();
+    Ok(files)
+}
+
+fn automatic_backup_due(files: &[PathBuf], now: SystemTime) -> bool {
+    files
+        .last()
+        .and_then(|path| fs::metadata(path).ok())
+        .and_then(|metadata| metadata.modified().ok())
+        .and_then(|modified| now.duration_since(modified).ok())
+        .is_none_or(|age| age >= AUTOMATIC_BACKUP_INTERVAL)
+}
+
+fn run_scheduled_maintenance(app: &AppHandle, db: &Db) -> Result<(), String> {
+    {
+        let connection = db.0.lock();
+        validate_integrity(&connection)
+            .map_err(|error| format!("Active library integrity check failed: {error}"))?;
+    }
+
+    let directory = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("No app data directory for backups: {error}"))?
+        .join("backups");
+    fs::create_dir_all(&directory)
+        .map_err(|error| format!("Failed to create automatic-backup directory: {error}"))?;
+    let now = SystemTime::now();
+    let mut files = automatic_backup_files(&directory)?;
+    if !automatic_backup_due(&files, now) {
+        return Ok(());
+    }
+
+    let timestamp = now.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    let destination = directory.join(format!("auto-{timestamp:020}.tsmback"));
+    let staging = TemporaryDatabase::sibling_of(&destination, "automatic-backup")?;
+    {
+        let connection = db.0.lock();
+        vacuum_snapshot(&connection, &staging.path)?;
+    }
+    validate_read_only_database(&staging.path)?;
+    atomic_replace(&staging.path, &destination)?;
+
+    files.push(destination);
+    files.sort();
+    let obsolete = files.len().saturating_sub(AUTOMATIC_BACKUP_RETENTION);
+    for path in files.into_iter().take(obsolete) {
+        fs::remove_file(&path).map_err(|error| {
+            format!(
+                "Failed to remove old automatic backup '{}': {error}",
+                path.display()
+            )
+        })?;
+        remove_sidecars_best_effort(&path);
+    }
+    Ok(())
+}
+
+/// Run a quick integrity check every six hours and create at most one verified
+/// automatic backup per day. Only files created in the app-owned backup
+/// directory and matching the `auto-*.tsmback` namespace are rotated.
+pub(crate) fn start_scheduled_maintenance(app: AppHandle) {
+    std::thread::spawn(move || loop {
+        if let Some(database) = app.try_state::<Db>() {
+            if let Err(error) = run_scheduled_maintenance(&app, database.inner()) {
+                eprintln!("Scheduled database maintenance failed: {error}");
+            }
+        }
+        std::thread::sleep(MAINTENANCE_INTERVAL);
+    });
 }
 
 #[derive(Serialize)]

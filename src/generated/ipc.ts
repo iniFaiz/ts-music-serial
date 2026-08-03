@@ -11,6 +11,7 @@ export const COMMAND_NAMES = [
   'db_albums',
   'db_artist_tracks',
   'db_artists',
+  'db_auto_dj_next',
   'db_count',
   'db_delete_playlist',
   'db_export_backup',
@@ -35,6 +36,7 @@ export const COMMAND_NAMES = [
   'db_playlists',
   'db_prune_and_get_missing',
   'db_random_track',
+  'db_random_track_from_paths',
   'db_recently_added',
   'db_recently_played',
   'db_recents',
@@ -77,6 +79,8 @@ export const COMMAND_NAMES = [
   'list_output_devices',
   'musixmatch_token_status',
   'open_vinyl_scratch_window',
+  'pick_playlist_cover',
+  'playback_queue_page',
   'playback_session_intent',
   'playback_session_snapshot',
   'player_delete_file',
@@ -125,6 +129,7 @@ export interface CommandArgs {
   'db_albums': { search?: string | null };
   'db_artist_tracks': { artist: string };
   'db_artists': { search?: string | null };
+  'db_auto_dj_next': { currentPath?: string | null; recentPaths: string[] };
   'db_count': undefined;
   'db_delete_playlist': { id: string; consentToken: string };
   'db_export_backup': { dest: string };
@@ -149,6 +154,7 @@ export interface CommandArgs {
   'db_playlists': undefined;
   'db_prune_and_get_missing': undefined;
   'db_random_track': { exclude?: string | null };
+  'db_random_track_from_paths': { paths: string[]; exclude?: string | null };
   'db_recently_added': { limit: number };
   'db_recently_played': { limit: number };
   'db_recents': undefined;
@@ -191,6 +197,8 @@ export interface CommandArgs {
   'list_output_devices': undefined;
   'musixmatch_token_status': undefined;
   'open_vinyl_scratch_window': undefined;
+  'pick_playlist_cover': undefined;
+  'playback_queue_page': { offset: number; limit: number };
   'playback_session_intent': { intent: unknown /* Rust: PlaybackIntent */ };
   'playback_session_snapshot': undefined;
   'player_delete_file': { path: string; consentToken: string };
@@ -237,6 +245,7 @@ export interface CommandResult {
   'db_albums': unknown /* Rust: AlbumRow */[];
   'db_artist_tracks': unknown /* Rust: MusicTrack */[];
   'db_artists': unknown /* Rust: ArtistRow */[];
+  'db_auto_dj_next': unknown /* Rust: MusicTrack */ | null;
   'db_count': number;
   'db_delete_playlist': void;
   'db_export_backup': void;
@@ -261,6 +270,7 @@ export interface CommandResult {
   'db_playlists': unknown /* Rust: PlaylistRow */[];
   'db_prune_and_get_missing': unknown /* Rust: MissingTrackInfo */[];
   'db_random_track': unknown /* Rust: MusicTrack */ | null;
+  'db_random_track_from_paths': unknown /* Rust: MusicTrack */ | null;
   'db_recently_added': unknown /* Rust: MusicTrack */[];
   'db_recently_played': unknown /* Rust: MusicTrack */[];
   'db_recents': unknown /* Rust: RecentRow */[];
@@ -303,6 +313,8 @@ export interface CommandResult {
   'list_output_devices': unknown /* Rust: OutputDeviceInfo */[];
   'musixmatch_token_status': boolean;
   'open_vinyl_scratch_window': void;
+  'pick_playlist_cover': string | null;
+  'playback_queue_page': unknown /* Rust: QueueMetadataPage */;
   'playback_session_intent': unknown /* Rust: PlaybackSessionUpdate */;
   'playback_session_snapshot': unknown /* Rust: PlaybackSessionSnapshot */;
   'player_delete_file': void;
@@ -356,6 +368,7 @@ export const ipc = {
   dbAlbums: (args: CommandArgs['db_albums']) => invokeCommand('db_albums', args),
   dbArtistTracks: (args: CommandArgs['db_artist_tracks']) => invokeCommand('db_artist_tracks', args),
   dbArtists: (args: CommandArgs['db_artists']) => invokeCommand('db_artists', args),
+  dbAutoDjNext: (args: CommandArgs['db_auto_dj_next']) => invokeCommand('db_auto_dj_next', args),
   dbCount: () => invokeCommand('db_count', undefined),
   dbDeletePlaylist: (args: CommandArgs['db_delete_playlist']) => invokeCommand('db_delete_playlist', args),
   dbExportBackup: (args: CommandArgs['db_export_backup']) => invokeCommand('db_export_backup', args),
@@ -380,6 +393,7 @@ export const ipc = {
   dbPlaylists: () => invokeCommand('db_playlists', undefined),
   dbPruneAndGetMissing: () => invokeCommand('db_prune_and_get_missing', undefined),
   dbRandomTrack: (args: CommandArgs['db_random_track']) => invokeCommand('db_random_track', args),
+  dbRandomTrackFromPaths: (args: CommandArgs['db_random_track_from_paths']) => invokeCommand('db_random_track_from_paths', args),
   dbRecentlyAdded: (args: CommandArgs['db_recently_added']) => invokeCommand('db_recently_added', args),
   dbRecentlyPlayed: (args: CommandArgs['db_recently_played']) => invokeCommand('db_recently_played', args),
   dbRecents: () => invokeCommand('db_recents', undefined),
@@ -422,6 +436,8 @@ export const ipc = {
   listOutputDevices: () => invokeCommand('list_output_devices', undefined),
   musixmatchTokenStatus: () => invokeCommand('musixmatch_token_status', undefined),
   openVinylScratchWindow: () => invokeCommand('open_vinyl_scratch_window', undefined),
+  pickPlaylistCover: () => invokeCommand('pick_playlist_cover', undefined),
+  playbackQueuePage: (args: CommandArgs['playback_queue_page']) => invokeCommand('playback_queue_page', args),
   playbackSessionIntent: (args: CommandArgs['playback_session_intent']) => invokeCommand('playback_session_intent', args),
   playbackSessionSnapshot: () => invokeCommand('playback_session_snapshot', undefined),
   playerDeleteFile: (args: CommandArgs['player_delete_file']) => invokeCommand('player_delete_file', args),

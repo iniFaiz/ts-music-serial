@@ -361,23 +361,7 @@ export function createPlaylistsActions() {
         throw mutationError(this, 'Moving track to Trash', e);
       }
 
-      if (this.currentSong && this.currentSong.path === path) {
-        if (this.queue.length <= 1) {
-          this.isPlaying = false;
-          this.currentSong = null;
-          this.currentTime = 0;
-          this.duration = 0;
-          try {
-            await invoke('player_stop');
-          } catch (err) {
-            console.error(err);
-          }
-        } else {
-          this.nextSong(true);
-        }
-      }
-
-      this.queue = this.queue.filter((s) => s.path !== path);
+      await this.removeQueuePaths([path]);
       const favIdx = this.favorites.indexOf(path);
       if (favIdx >= 0) this.favorites.splice(favIdx, 1);
       try {
@@ -396,28 +380,12 @@ export function createPlaylistsActions() {
     async removeSongFromLibrary(path) {
       const consentToken = await requestDestructiveConsent('remove_library_tracks', [path]);
       if (!consentToken) return false;
-      if (this.currentSong && this.currentSong.path === path) {
-        if (this.queue.length <= 1) {
-          this.isPlaying = false;
-          this.currentSong = null;
-          this.currentTime = 0;
-          this.duration = 0;
-          try {
-            await invoke('player_stop');
-          } catch (err) {
-            console.error(err);
-          }
-        } else {
-          this.nextSong(true);
-        }
-      }
-
-      this.queue = this.queue.filter((s) => s.path !== path);
       try {
         await invoke('db_remove_paths', { paths: [path], consentToken });
       } catch (e) {
         throw mutationError(this, 'Removing track from library', e);
       }
+      await this.removeQueuePaths([path]);
       const favIdx = this.favorites.indexOf(path);
       if (favIdx >= 0) this.favorites.splice(favIdx, 1);
       try {

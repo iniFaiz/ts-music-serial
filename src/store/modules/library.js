@@ -106,17 +106,11 @@ async _writeAppState() {
       await invoke('db_kv_set', {
         key: 'playback',
         value: {
-          songPath: this.currentSong ? this.currentSong.path : null,
-          currentEntryId: this.currentSong ? this.currentSong.queueId || null : null,
+          // Queue identity/order/modes are persisted by the native session on
+          // every mutation. This row only stores presentation/checkpoint state.
           positionSecs: this.currentTime || 0,
-          queueEntries: this.queue.map((s) => ({ id: s.queueId || null, path: s.path })),
-          // Kept for backward compatibility with older persisted sessions.
-          queuePaths: this.queue.map((s) => s.path),
           volume: this.volume,
           isMuted: this.isMuted,
-          loopMode: this.loopMode,
-          shuffleMode: this.shuffleMode,
-          autoplayMode: this.autoplayMode,
           visualizerEnabled: this.visualizerEnabled,
         },
       });
@@ -280,24 +274,53 @@ async restoreState() {
     }
     this.syncEqualizer();
 
-    if (!pb) return;
-
-    if (typeof pb.volume === 'number') this.volume = pb.volume;
-    if (typeof pb.isMuted === 'boolean') this.isMuted = pb.isMuted;
-    this.loopMode = pb.loopMode || 0;
-    this.shuffleMode = !!pb.shuffleMode;
-    this.autoplayMode = !!pb.autoplayMode;
-    if (typeof pb.visualizerEnabled === 'boolean') this.visualizerEnabled = pb.visualizerEnabled;
+    if (pb && typeof pb.volume === 'number') this.volume = pb.volume;
+    if (pb && typeof pb.isMuted === 'boolean') this.isMuted = pb.isMuted;
+    if (pb && typeof pb.visualizerEnabled === 'boolean')
+      this.visualizerEnabled = pb.visualizerEnabled;
     this.syncVisualizer();
 
-    // Rehydrate the saved queue from the DB while retaining each occurrence's
-    // stable ID. Legacy sessions only contain queuePaths and get IDs once.
-    const savedEntries = Array.isArray(pb.queueEntries)
-      ? pb.queueEntries.filter((entry) => entry && typeof entry.path === 'string')
-      : Array.isArray(pb.queuePaths)
-        ? pb.queuePaths.map((path) => ({ id: null, path }))
+    // The native session is the durable source of queue identity/order/modes.
+    // Full track metadata is hydrated from SQLite in bounded pages.
+    let nativeSnapshot;
+    try {
+      nativeSnapshot = await invoke('playback_session_snapshot');
+      const metadata = new Map();
+      for (let offset = 0; offset < nativeSnapshot.queue.length; offset += 250) {
+        const page = await invoke('playback_queue_page', { offset, limit: 250 });
+        if (page.revision !== nativeSnapshot.revision) {
+          throw new Error('Playback queue changed while it was being restored');
+        }
+        for (const entry of page.entries) metadata.set(entry.entryId, entry.track);
+      }
+      this.queue = nativeSnapshot.queue.map((entry) => ({
+        ...(metadata.get(entry.id) || {
+          path: entry.path,
+          title: entry.path.split(/[\\/]/).pop() || entry.path,
+          artist: 'Unknown Artist',
+          album: 'Unknown Album',
+          duration_secs: entry.durationHint || 0,
+        }),
+        queueId: entry.id,
+      }));
+      this.applyPlaybackSessionUpdate({ snapshot: nativeSnapshot });
+    } catch (error) {
+      console.error('Failed to restore native playback queue', error);
+      nativeSnapshot = null;
+      this.queue = [];
+    }
+
+    // One-release compatibility path for sessions saved before native session
+    // persistence existed.
+    const savedEntries =
+      !nativeSnapshot?.queue?.length && pb
+        ? Array.isArray(pb.queueEntries)
+          ? pb.queueEntries.filter((entry) => entry && typeof entry.path === 'string')
+          : Array.isArray(pb.queuePaths)
+            ? pb.queuePaths.map((path) => ({ id: null, path }))
+            : []
         : [];
-    if (savedEntries.length) {
+    if (savedEntries.length > 0) {
       try {
         const tracks = await invoke('db_tracks_by_paths', {
           paths: savedEntries.map((entry) => entry.path),
@@ -310,7 +333,7 @@ async restoreState() {
           return [
             {
               ...track,
-              queueId: entry.id || Math.random().toString(36).substring(2, 9),
+              queueId: entry.id || '',
             },
           ];
         });
@@ -319,8 +342,18 @@ async restoreState() {
       }
     }
 
-    // Restore through one native play-queue intent, paused at the checkpoint.
-    if (pb.songPath) {
+    // Load the native current entry paused at the last presentation checkpoint.
+    const nativeCurrentId = nativeSnapshot?.currentEntryId;
+    if (nativeCurrentId) {
+      this.currentTime = pb?.positionSecs || 0;
+      this.isPlaying = false;
+      await this.sendPlaybackIntent({
+        type: 'select_entry',
+        entryId: nativeCurrentId,
+        autoplay: false,
+        startAt: pb?.positionSecs || 0,
+      }).catch((error) => console.error('Failed to load restored native queue entry', error));
+    } else if (pb?.songPath) {
       const song = await this.getTrackByPath(pb.songPath);
       if (song) {
         this.currentTime = pb.positionSecs || 0;
@@ -332,7 +365,7 @@ async restoreState() {
         if (qIdx !== -1) {
           this.currentSong = { ...this.queue[qIdx] };
         } else {
-          const restored = { ...song, queueId: Math.random().toString(36).substring(2, 9) };
+          const restored = { ...song, queueId: '' };
           this.queue.push(restored);
           this.currentSong = restored;
         }
@@ -372,6 +405,7 @@ async resetLibrary() {
     this.statusMessage = 'Clearing caches...';
     this.bumpLibrary();
     try {
+      await this.sendPlaybackIntent({ type: 'clear' });
       await invoke('player_stop');
       await invoke('clear_cache', { kind: null });
     } catch (e) {
@@ -506,20 +540,7 @@ async removeRoot(root) {
       return;
     }
     if (removed.length) {
-      const removedSet = new Set(removed);
-      // Stop playback if the current track is being removed.
-      if (this.currentSong && removedSet.has(this.currentSong.path)) {
-        this.isPlaying = false;
-        this.currentSong = null;
-        this.currentTime = 0;
-        this.duration = 0;
-        try {
-          await invoke('player_stop');
-        } catch {
-          /* ignore */
-        }
-      }
-      this.queue = this.queue.filter((s) => !removedSet.has(s.path));
+      await this.removeQueuePaths(removed);
       // Favorites/playlist items were cascaded in the DB; refresh the caches.
       await this.refreshFavorites();
       await this.refreshPlaylists();
@@ -588,28 +609,41 @@ async reindexLibrary() {
 
 async reconcileQueueWithLibrary() {
     try {
-      const refreshed = [];
-      const paths = this.queue.map((track) => track.path);
-      for (let offset = 0; offset < paths.length; offset += 400) {
-        refreshed.push(
-          ...(await invoke('db_tracks_by_paths', {
-            paths: paths.slice(offset, offset + 400),
-          }))
-        );
-      }
-      this.queue = refreshed;
-
-      if (this.currentSong) {
-        const current = await invoke('db_track', { path: this.currentSong.path });
-        if (current) {
-          Object.assign(this.currentSong, current);
-        } else {
-          this.isPlaying = false;
-          this.currentSong = null;
-          this.currentTime = 0;
-          this.duration = 0;
-          await invoke('player_stop').catch(() => {});
+      const original = [...this.queue];
+      const metadata = new Map();
+      const missingIds = [];
+      for (let offset = 0; offset < original.length; offset += 400) {
+        const entries = original.slice(offset, offset + 400);
+        const tracks = await invoke('db_tracks_by_paths', {
+          paths: entries.map((entry) => entry.path),
+        });
+        let trackIndex = 0;
+        for (const entry of entries) {
+          const track = tracks[trackIndex];
+          if (track?.path === entry.path) {
+            metadata.set(entry.queueId, track);
+            trackIndex++;
+          } else if (entry.queueId) {
+            missingIds.push(entry.queueId);
+          }
         }
+      }
+
+      // Removing the current entry advances the native state machine. Process it
+      // last so missing neighbours cannot accidentally select it in between.
+      const currentId = this.currentSong?.queueId;
+      missingIds.sort((left, right) => Number(left === currentId) - Number(right === currentId));
+      for (const entryId of missingIds) {
+        await this.sendPlaybackIntent({ type: 'remove_queue_item', entryId });
+      }
+
+      this.queue = this.queue.map((entry) => ({
+        ...(metadata.get(entry.queueId) || entry),
+        queueId: entry.queueId,
+      }));
+      if (this.currentSong) {
+        const current = this.queue.find((entry) => entry.queueId === this.currentSong.queueId);
+        if (current) this.currentSong = current;
       }
     } catch (error) {
       console.error('Failed to reconcile playback queue after indexing', error);
