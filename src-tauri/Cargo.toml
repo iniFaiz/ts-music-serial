@@ -37,7 +37,7 @@ parking_lot = "0.12" #faster, non-poisoning Mutex (no lock().unwrap() panic path
 rusqlite = { version = "0.40", features = ["bundled"] }
 walkdir = "2.5" #directory traversal
 jwalk = "0.8"
-lofty = "0.21" #audio metadata parsing
+lofty = "0.24" #audio metadata parsing
 base64 = "0.22" #images encoding
 image = "0.25" #cover art decoding/downscaling
 rodio = { version = "0.22", features = ["symphonia-all"] } #native audio playback/decoding (all formats incl. FLAC)
