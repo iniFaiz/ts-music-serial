@@ -50,7 +50,7 @@ ebur128 = "0.1" #EBU R128 loudness analysis for volume normalization (ReplayGain
 # and romanized (romalrc) lyrics, which its plain web API does not expose.
 aes = "0.9"
 ecb = { version = "0.2", features = ["alloc"] }
-md-5 = "0.10"
+md-5 = "0.11"
 hex = "0.4"
 # Discord Rich Presence (now-playing status). Pure-Rust IPC to the local Discord
 # client; cross-platform.
