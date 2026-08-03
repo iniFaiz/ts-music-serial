@@ -44,7 +44,7 @@ rodio = { version = "0.22", features = ["symphonia-all"] } #native audio playbac
 souvlaki = "0.8.3" #OS media controls (Windows SMTC / media keys)
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] } #lyrics HTTP (rustls = no OpenSSL on Windows)
 rusty-chromaprint = "0.3" #pure-Rust AcoustID-compatible audio fingerprints
-notify = "6" #filesystem watching for library auto-update
+notify = "8" #filesystem watching for library auto-update
 ebur128 = "0.1" #EBU R128 loudness analysis for volume normalization (ReplayGain)
 # NetEase eapi request signing (AES-128-ECB + MD5) to fetch word-by-word (yrc)
 # and romanized (romalrc) lyrics, which its plain web API does not expose.
