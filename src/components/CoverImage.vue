@@ -124,7 +124,7 @@ watch(coverVersion, () => {
     <img
       v-if="imageData"
       :src="imageData"
-      class="w-full h-full object-cover relative z-10 transition-opacity duration-200"
+      class="w-full h-full object-cover transition-opacity duration-200"
       :class="isLoaded ? 'opacity-100' : 'opacity-0'"
       alt=""
       draggable="false"

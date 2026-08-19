@@ -64,7 +64,7 @@ const goToArtist = (artist, event) => {
 
         <!-- Play overlay -->
         <div
-          class="absolute inset-0 bg-black/25 opacity-0 group-hover:opacity-100 transition-opacity flex items-end justify-end p-2.5"
+          class="absolute inset-0 bg-black/25 opacity-0 group-hover:opacity-100 transition-opacity flex items-end justify-end p-2.5 z-10"
         >
           <div
             class="bg-[var(--accent-color)] text-white rounded-full p-2.5 shadow-xl translate-y-2 opacity-0 group-hover:translate-y-0 group-hover:opacity-100 transition-all duration-300 hover:scale-110 hover:bg-red-500"

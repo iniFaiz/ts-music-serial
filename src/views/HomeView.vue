@@ -427,7 +427,7 @@ watch(recentItems, (newItems, oldItems) => {
 
               <!-- Play overlay -->
               <div
-                class="absolute inset-0 bg-black/25 opacity-0 group-hover:opacity-100 transition-opacity flex items-end justify-end p-2.5"
+                class="absolute inset-0 bg-black/25 opacity-0 group-hover:opacity-100 transition-opacity flex items-end justify-end p-2.5 z-10"
                 :class="item.kind === 'station' ? 'rounded-full' : 'rounded-xl'"
               >
                 <div
@@ -495,7 +495,7 @@ watch(recentItems, (newItems, oldItems) => {
             />
             <div
               @click.stop="playCollection(c.key)"
-              class="absolute bottom-3 right-3 bg-white text-black rounded-full p-3 shadow-xl opacity-0 translate-y-2 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-300 hover:scale-110"
+              class="absolute bottom-3 right-3 bg-white text-black rounded-full p-3 shadow-xl opacity-0 translate-y-2 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-300 hover:scale-110 z-10"
             >
               <svg
                 xmlns="http://www.w3.org/2000/svg"
@@ -543,7 +543,7 @@ watch(recentItems, (newItems, oldItems) => {
             />
             <div
               @click.stop="store.playSmartPlaylist(sp.id)"
-              class="absolute bottom-2.5 right-2.5 bg-white text-black rounded-full p-2.5 shadow-xl opacity-0 translate-y-2 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-300 hover:scale-110"
+              class="absolute bottom-2.5 right-2.5 bg-white text-black rounded-full p-2.5 shadow-xl opacity-0 translate-y-2 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-300 hover:scale-110 z-10"
             >
               <svg
                 xmlns="http://www.w3.org/2000/svg"
@@ -587,7 +587,7 @@ watch(recentItems, (newItems, oldItems) => {
             >
               <PlaylistCover :name="t.name" :size="192" className="w-full h-full" />
               <div
-                class="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center"
+                class="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center z-10"
               >
                 <div
                   class="bg-white/90 text-black rounded-full p-2.5 shadow-xl scale-90 group-hover:scale-100 transition-transform"
@@ -661,7 +661,7 @@ watch(recentItems, (newItems, oldItems) => {
           >
             <CoverImage :path="a.coverPath" className="w-full h-full bg-[#282828]" />
             <div
-              class="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center"
+              class="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center z-10"
             >
               <div
                 class="bg-[var(--accent-color)] text-white rounded-full p-3 shadow-xl scale-90 group-hover:scale-100 transition-transform hover:bg-red-500"
@@ -701,7 +701,7 @@ watch(recentItems, (newItems, oldItems) => {
               className="w-full h-full"
             />
             <div
-              class="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center"
+              class="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center z-10"
             >
               <div
                 class="bg-white text-black rounded-full p-3 shadow-xl scale-90 group-hover:scale-100 transition-transform"

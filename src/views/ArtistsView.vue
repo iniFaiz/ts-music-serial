@@ -360,7 +360,7 @@ const handleMenuDelete = async () => {
           />
           <!-- Hover Play Button -->
           <div
-            class="absolute inset-0 bg-black/35 opacity-0 group-hover:opacity-100 transition-opacity rounded-full flex items-center justify-center"
+            class="absolute inset-0 bg-black/35 opacity-0 group-hover:opacity-100 transition-opacity rounded-full flex items-center justify-center z-10"
           >
             <div
               @click.stop="playArtist(artist.name)"

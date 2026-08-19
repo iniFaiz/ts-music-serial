@@ -333,7 +333,7 @@ onUnmounted(() => {
           />
           <!-- Hover overlay -->
           <div
-            class="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity rounded-md flex items-end p-3"
+            class="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity rounded-md flex items-end p-3 z-10"
           >
             <div
               v-if="cardCount(pl) > 0"
