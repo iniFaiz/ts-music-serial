@@ -18,9 +18,8 @@ const lyricsState = computed(() => {
 // Whether the current lyrics carry a romanization (enables the romaji toggle).
 const hasRomaji = computed(() => !!(lyrics.value && lyrics.value.has_romaji));
 
-// +50ms lookahead: compensates for the ~50ms average lag from the 100ms poll interval
 const currentTimeMs = computed(
-  () => Math.floor(store.currentTime * 1000) + 50 + store.lyricsOffsetMs
+  () => (store.currentTime || 0) * 1000 + 50 + store.lyricsOffsetMs
 );
 
 const panelLines = computed(() => {

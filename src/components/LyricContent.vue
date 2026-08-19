@@ -135,7 +135,8 @@ function wordStyle(w) {
 }
 
 .lc-word.lc-active {
-  transition: --p 0.12s linear;
+  /* No CSS transition on --p: JS interpolates --p smoothly on every animation frame via RAF,
+     preventing trailing lag and premature snap-jumps on fast words/syllables. */
 }
 
 /* Only when a note is sustained (held >= 1000ms) */
@@ -143,7 +144,6 @@ function wordStyle(w) {
   filter: drop-shadow(0 0 10px rgba(255, 255, 255, 0.45));
   z-index: 2;
   transition:
-    --p 0.12s linear,
     transform 0.15s ease-out,
     filter 0.3s ease;
 }
