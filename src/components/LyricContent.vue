@@ -1,10 +1,9 @@
 <script setup>
 // Renders the inner content of a single lyric line, shared by the fullscreen
-// player and the lyrics sidebar:
-//   • word-by-word "karaoke" wipe for the active line when the provider gives
-//     per-word timing (line.words),
+// player, mini player, and lyrics sidebar:
+//   • Apple Music Sing style smooth word-by-word karaoke wipe,
+//   • Organic swell & gentle ambient glow exclusively on sustained notes (held >= 1000ms),
 //   • a smaller romanization (romaji) sub-line beneath, when enabled + present.
-// Non-active lines render as plain text so per-frame work stays on one line.
 const props = defineProps({
   line: { type: Object, required: true },
   active: { type: Boolean, default: false },
@@ -15,48 +14,64 @@ const props = defineProps({
   showRomaji: { type: Boolean, default: false },
 });
 
-// State of one karaoke word relative to the playhead.
+// Threshold for a sustained vocal hold (1 second or longer)
+const HELD_THRESHOLD_MS = 1000;
+
+// State of one karaoke word relative to the playhead
 function wordClass(w) {
   if (props.isPast && props.currentMs === 0) return 'lc-word lc-sung';
   const now = props.currentMs;
   if (now >= w.time_ms + w.duration_ms) return 'lc-word lc-sung';
   if (now < w.time_ms) return 'lc-word lc-unsung';
-  return 'lc-word lc-active';
+  const isHeld = (w.duration_ms || 0) >= HELD_THRESHOLD_MS;
+  return isHeld ? 'lc-word lc-active lc-held' : 'lc-word lc-active';
 }
 
-// Drives the left→right gradient wipe. Every word uses the same 100% width
-// gradient with `--p` defining the wipe position:
-//   • 0%   = unsung (34% opacity),
-//   • 100% = sung (98% opacity),
-//   • 0%…100% = active word (transitioned smoothly).
-// Using the same text-clip on all words maintains identical font weight,
-// antialiasing, and brightness without subpixel edge bleeding.
+// Drives the left→right gradient wipe.
+// On sustained / held notes (duration >= 1000ms), applies Apple Music Sing
+// subtle organic 3D scale swell and soft ambient glow that smoothly settles back.
 function wordStyle(w) {
   if (props.isPast && props.currentMs === 0) return { '--p': '100%' };
   const now = props.currentMs;
   if (now >= w.time_ms + w.duration_ms) return { '--p': '100%' };
   if (now < w.time_ms) return { '--p': '0%' };
-  const p = Math.max(0, Math.min(1, (now - w.time_ms) / Math.max(1, w.duration_ms)));
-  return { '--p': `${(p * 100).toFixed(2)}%` };
+
+  const duration = Math.max(1, w.duration_ms || 0);
+  const p = Math.max(0, Math.min(1, (now - w.time_ms) / duration));
+
+  let scaleStyle = {};
+  if (duration >= HELD_THRESHOLD_MS) {
+    // Dynamic swell for held vocals: gently scales from 1.0 up to ~1.08 - 1.12
+    const maxBonus = Math.min(0.12, 0.05 + ((duration - HELD_THRESHOLD_MS) / 15000) * 0.07);
+    const scale = 1.0 + maxBonus * Math.sin(p * Math.PI * 0.5);
+    scaleStyle = {
+      transform: `scale(${scale.toFixed(3)})`,
+    };
+  }
+
+  return {
+    '--p': `${(p * 100).toFixed(2)}%`,
+    ...scaleStyle,
+  };
 }
 </script>
 
 <template>
   <span class="lc">
-    <span v-if="(active || isPast) && line.words && line.words.length" class="lc-karaoke"
-      ><span v-for="(w, wi) in line.words" :key="wi" :class="wordClass(w)" :style="wordStyle(w)">{{
+    <span v-if="(active || isPast) && line.words && line.words.length" class="lc-karaoke">
+      <span v-for="(w, wi) in line.words" :key="wi" :class="wordClass(w)" :style="wordStyle(w)">{{
         w.text
-      }}</span></span
-    >
+      }}</span>
+    </span>
     <span v-else class="lc-plain">{{ line.text }}</span>
 
     <!-- Background/harmony vocals: a smaller, dimmer secondary tier (Apple-Music
          style). Word-timed wipe on the active/past line, plain text otherwise. -->
-    <span v-if="(active || isPast) && line.bg && line.bg.length" class="lc-bg lc-karaoke"
-      ><span v-for="(w, wi) in line.bg" :key="wi" :class="wordClass(w)" :style="wordStyle(w)">{{
+    <span v-if="(active || isPast) && line.bg && line.bg.length" class="lc-bg lc-karaoke">
+      <span v-for="(w, wi) in line.bg" :key="wi" :class="wordClass(w)" :style="wordStyle(w)">{{
         w.text
-      }}</span></span
-    >
+      }}</span>
+    </span>
     <span v-else-if="line.bg_text" class="lc-bg lc-bg-plain">{{ line.bg_text }}</span>
 
     <span v-if="line.romaji" class="lc-romaji-wrap" :class="{ 'lc-romaji-show': showRomaji }"
@@ -82,10 +97,19 @@ function wordStyle(w) {
   white-space: pre-wrap;
 }
 
-/* Each word is a clipped gradient driven by --p so all words maintain identical
+/* Each word is an inline-block clipped gradient driven by --p so all words maintain identical
    font antialiasing, weight, and baseline brightness across states. */
 .lc-word {
   --p: 0%;
+  display: inline-block;
+  vertical-align: baseline;
+  white-space: pre-wrap;
+  position: relative;
+  transform-origin: center 80%;
+  transform: scale(1);
+  transition:
+    transform 0.4s cubic-bezier(0.25, 1, 0.5, 1),
+    filter 0.4s ease;
   background-image: linear-gradient(
     90deg,
     rgba(255, 255, 255, 0.98) 0%,
@@ -99,7 +123,6 @@ function wordStyle(w) {
   background-clip: text;
   color: transparent;
   -webkit-text-fill-color: transparent;
-  white-space: pre-wrap;
   text-shadow: none;
 }
 
@@ -113,6 +136,16 @@ function wordStyle(w) {
 
 .lc-word.lc-active {
   transition: --p 0.12s linear;
+}
+
+/* Only when a note is sustained (held >= 1000ms) */
+.lc-word.lc-active.lc-held {
+  filter: drop-shadow(0 0 10px rgba(255, 255, 255, 0.45));
+  z-index: 2;
+  transition:
+    --p 0.12s linear,
+    transform 0.15s ease-out,
+    filter 0.3s ease;
 }
 
 /* Background/harmony vocal tier — smaller and dimmer than the main line, on its
