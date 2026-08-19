@@ -20,19 +20,24 @@ function wordClass(w) {
   if (props.isPast && props.currentMs === 0) return 'lc-word lc-sung';
   const now = props.currentMs;
   if (now >= w.time_ms + w.duration_ms) return 'lc-word lc-sung';
-  if (now < w.time_ms) return 'lc-word';
+  if (now < w.time_ms) return 'lc-word lc-unsung';
   return 'lc-word lc-active';
 }
 
-// Drives the left→right gradient wipe. background-size is 200%, so position
-// 100% = fully dim, 0% = fully lit; a CSS transition smooths between ticks.
+// Drives the left→right gradient wipe. Every word uses the same 100% width
+// gradient with `--p` defining the wipe position:
+//   • 0%   = unsung (34% opacity),
+//   • 100% = sung (98% opacity),
+//   • 0%…100% = active word (transitioned smoothly).
+// Using the same text-clip on all words maintains identical font weight,
+// antialiasing, and brightness without subpixel edge bleeding.
 function wordStyle(w) {
-  if (props.isPast && props.currentMs === 0) return { backgroundPositionX: '0%' };
+  if (props.isPast && props.currentMs === 0) return { '--p': '100%' };
   const now = props.currentMs;
-  if (now >= w.time_ms + w.duration_ms) return { backgroundPositionX: '0%' };
-  if (now < w.time_ms) return { backgroundPositionX: '100%' };
+  if (now >= w.time_ms + w.duration_ms) return { '--p': '100%' };
+  if (now < w.time_ms) return { '--p': '0%' };
   const p = Math.max(0, Math.min(1, (now - w.time_ms) / Math.max(1, w.duration_ms)));
-  return { backgroundPositionX: ((1 - p) * 100).toFixed(2) + '%' };
+  return { '--p': `${(p * 100).toFixed(2)}%` };
 }
 </script>
 
@@ -63,6 +68,12 @@ function wordStyle(w) {
 </template>
 
 <style scoped>
+@property --p {
+  syntax: '<percentage>';
+  inherits: false;
+  initial-value: 0%;
+}
+
 .lc {
   display: block;
 }
@@ -71,32 +82,37 @@ function wordStyle(w) {
   white-space: pre-wrap;
 }
 
-/* Each word is its own clipped gradient so the active word fills left→right. */
+/* Each word is a clipped gradient driven by --p so all words maintain identical
+   font antialiasing, weight, and baseline brightness across states. */
 .lc-word {
+  --p: 0%;
   background-image: linear-gradient(
     90deg,
     rgba(255, 255, 255, 0.98) 0%,
-    rgba(255, 255, 255, 0.98) 50%,
-    rgba(255, 255, 255, 0.34) 50%,
+    rgba(255, 255, 255, 0.98) var(--p, 0%),
+    rgba(255, 255, 255, 0.34) var(--p, 0%),
     rgba(255, 255, 255, 0.34) 100%
   );
-  background-size: 200% 100%;
-  background-position-x: 100%;
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
   -webkit-text-fill-color: transparent;
   white-space: pre-wrap;
-  transition: background-position 0.12s linear;
-  /* Karaoke glyphs are filled by a semi-transparent gradient (unsung = 34%
-     opacity). An inherited text-shadow (used by the fullscreen player) would
-     bleed through those low-opacity glyphs and darken them, so the fullscreen
-     karaoke looked muddier than the shadow-less sidebar. Drop the shadow here so
-     both views render the wipe identically. Plain (non-karaoke) lines keep it. */
   text-shadow: none;
 }
+
+.lc-word.lc-unsung {
+  --p: 0%;
+}
+
 .lc-word.lc-sung {
-  background-position-x: 0%;
+  --p: 100%;
+}
+
+.lc-word.lc-active {
+  transition: --p 0.12s linear;
 }
 
 /* Background/harmony vocal tier — smaller and dimmer than the main line, on its
