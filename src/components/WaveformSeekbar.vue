@@ -37,9 +37,7 @@ let reduceMotion = false;
 let motionQuery = null;
 
 function mixedColor(base, target, amount) {
-  const channels = base.map((value, index) =>
-    Math.round(value + (target[index] - value) * amount)
-  );
+  const channels = base.map((value, index) => Math.round(value + (target[index] - value) * amount));
   return `rgb(${channels[0]}, ${channels[1]}, ${channels[2]})`;
 }
 
@@ -48,13 +46,7 @@ function mixedColor(base, target, amount) {
 function nyancatColor(played, index, count, time) {
   const base = played ? [243, 182, 65] : [74, 144, 226];
   if (nyancatMix <= 0) return played ? PLAYED : UNPLAYED;
-  const target = nyancatRainbowRgb(
-    time,
-    index,
-    count,
-    played ? 0.98 : 0.82,
-    played ? 0.62 : 0.44
-  );
+  const target = nyancatRainbowRgb(time, index, count, played ? 0.98 : 0.82, played ? 0.62 : 0.44);
   return mixedColor(base, target, nyancatMix);
 }
 

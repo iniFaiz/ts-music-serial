@@ -31,7 +31,10 @@ export async function fetchTracksPage({
     limit,
   });
   if (result && Array.isArray(result.tracks)) {
-    await prewarmCovers(result.tracks.map((t) => t.path), 50);
+    await prewarmCovers(
+      result.tracks.map((t) => t.path),
+      50
+    );
   }
   return result;
 }
@@ -46,7 +49,10 @@ export async function fetchAlbums() {
     lastPlayed: row.last_played,
     allArtists: row.all_artists,
   }));
-  await prewarmCovers(result.map((r) => r.coverPath), 50);
+  await prewarmCovers(
+    result.map((r) => r.coverPath),
+    50
+  );
   return result;
 }
 
@@ -59,7 +65,10 @@ export async function fetchArtists() {
     coverPath: row.cover_path,
     lastPlayed: row.last_played,
   }));
-  await prewarmCovers(result.map((r) => r.coverPath), 50);
+  await prewarmCovers(
+    result.map((r) => r.coverPath),
+    50
+  );
   return result;
 }
 

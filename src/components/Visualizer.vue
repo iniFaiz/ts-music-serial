@@ -109,9 +109,7 @@ const draw = (now = performance.now()) => {
 
     if (nyancatColorMix > 0) {
       const rainbow = nyancatRainbowRgb(reduceMotion ? 0 : now, i, BAR_COUNT, 0.98, 0.62);
-      const mixed = rainbow.map((channel) =>
-        Math.round(255 + (channel - 255) * nyancatColorMix)
-      );
+      const mixed = rainbow.map((channel) => Math.round(255 + (channel - 255) * nyancatColorMix));
       ctx.fillStyle = `rgb(${mixed[0]}, ${mixed[1]}, ${mixed[2]})`;
     } else {
       ctx.fillStyle = '#ffffff';
@@ -168,12 +166,7 @@ const tick = (now) => {
 
   // Optimize: stop the requestAnimationFrame loop entirely once the bars have fully settled to 0
   // to avoid consuming any CPU while the player is paused/stopped.
-  if (
-    store.isPlaying ||
-    hasChanged ||
-    colorChanging ||
-    (store.nyancatMode && !reduceMotion)
-  ) {
+  if (store.isPlaying || hasChanged || colorChanging || (store.nyancatMode && !reduceMotion)) {
     rafId = requestAnimationFrame(tick);
   } else {
     rafId = null;

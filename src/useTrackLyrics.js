@@ -1,6 +1,6 @@
 import { ref, watch } from 'vue';
 
-import { loadLyrics } from './lyricsCache';
+import { getCachedLyrics, loadLyrics } from './lyricsCache';
 
 export function useTrackLyrics({ song, active, source }) {
   const lyrics = ref(undefined);
@@ -9,7 +9,7 @@ export function useTrackLyrics({ song, active, source }) {
 
   const fetchLyrics = async (force = false) => {
     const current = song();
-    if (!current) {
+    if (!current || !current.path) {
       requestVersion += 1;
       lyrics.value = null;
       loading.value = false;
@@ -17,6 +17,16 @@ export function useTrackLyrics({ song, active, source }) {
     }
     const request = ++requestVersion;
     const path = current.path;
+
+    if (!force) {
+      const cached = getCachedLyrics(path);
+      if (cached !== undefined) {
+        lyrics.value = cached;
+        loading.value = false;
+        return;
+      }
+    }
+
     loading.value = true;
     lyrics.value = undefined;
     const result = await loadLyrics(current, { force });
@@ -35,6 +45,9 @@ export function useTrackLyrics({ song, active, source }) {
         loading.value = false;
       } else if (isActive) {
         fetchLyrics();
+      } else {
+        requestVersion += 1;
+        loading.value = false;
       }
     },
     { immediate: true }

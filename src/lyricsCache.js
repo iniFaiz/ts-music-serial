@@ -53,26 +53,36 @@ export async function loadLyrics(song, { force = false } = {}) {
   }
   if (!force && inflight.has(path)) return inflight.get(path);
 
+  const durationSecs = Math.round(
+    song.duration_secs || (store.currentSong?.path === path ? store.duration : 0) || 0
+  );
+
   const req = invoke('get_lyrics', {
     path,
     title: song.title || '',
     artist: song.artist || '',
     album: song.album || '',
-    durationSecs: Math.round(song.duration_secs || store.duration || 0),
+    durationSecs,
     lyricsSource: store.lyricsSource || 'netease',
     force,
   })
     .then((res) => {
       const value = res || null;
-      cacheSet(path, value);
+      if (inflight.get(path) === req) {
+        cacheSet(path, value);
+      }
       return value;
     })
     .catch(() => {
-      cacheSet(path, null);
+      if (inflight.get(path) === req) {
+        cacheSet(path, null);
+      }
       return null;
     })
     .finally(() => {
-      inflight.delete(path);
+      if (inflight.get(path) === req) {
+        inflight.delete(path);
+      }
     });
 
   inflight.set(path, req);
@@ -212,7 +222,10 @@ export function processLyricLines(rawLines, synced = true, _songDurationMs = 0) 
             if (currentLine.words && currentLine.words.length > 0) {
               const lastWord = currentLine.words[currentLine.words.length - 1];
               if (lastWord.time_ms != null && lastWord.duration_ms != null) {
-                lineVocalEnd = Math.max(lineVocalEnd, lastWord.time_ms + lastWord.duration_ms + 500);
+                lineVocalEnd = Math.max(
+                  lineVocalEnd,
+                  lastWord.time_ms + lastWord.duration_ms + 500
+                );
               }
             }
 

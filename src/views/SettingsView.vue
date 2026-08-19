@@ -599,7 +599,8 @@
         <div>
           <h3 class="text-white font-medium text-sm">Generated cache</h3>
           <p class="text-xs text-gray-500">
-            Clear cached covers, waveforms, lyrics and loudness analysis. They are rebuilt on demand.
+            Clear cached covers, waveforms, lyrics and loudness analysis. They are rebuilt on
+            demand.
           </p>
         </div>
         <button
