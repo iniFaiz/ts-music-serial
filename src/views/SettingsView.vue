@@ -636,6 +636,9 @@
       </div>
     </Section>
 
+    <!-- App Credit & Info Section -->
+    <AppCredit :version="updaterStatus?.currentVersion || '1.0.0'" />
+
     <!-- Backup Report Modal -->
     <Transition name="modal">
       <div
@@ -702,6 +705,7 @@ import SelectInt from '../components/settings/SelectInt.vue';
 import SliderInt from '../components/settings/SliderInt.vue';
 import EqualizerPanel from '../components/EqualizerPanel.vue';
 import CoverImage from '../components/CoverImage.vue';
+import AppCredit from '../components/settings/AppCredit.vue';
 
 const devices = ref([]);
 const updaterStatus = ref(null);
