@@ -42,7 +42,9 @@ mod ipc_contract_tests;
 
 use library_db as db;
 
-pub(crate) use cover_cache::{cover_cache_dir, cover_cache_key};
+#[cfg(target_os = "windows")]
+pub(crate) use cover_cache::cover_cache_dir;
+pub(crate) use cover_cache::cover_cache_key;
 use cover_cache::{get_track_cover, get_track_cover_path, get_track_palette};
 use library_index::index_library;
 use library_scan::{add_library_root, remove_library_root, restore_roots};

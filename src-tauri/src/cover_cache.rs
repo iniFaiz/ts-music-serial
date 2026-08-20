@@ -19,6 +19,7 @@ use crate::{db, is_allowed_audio, limits};
 const THUMB_SIZE: u32 = 300;
 
 // Directory where downscaled cover thumbnails are cached on disk.
+#[cfg(target_os = "windows")]
 pub(crate) fn cover_cache_dir(app: &AppHandle) -> Option<PathBuf> {
     if let Some(cache) = cache_manager::manager(app) {
         return Some(cache.directory(CacheKind::Covers));
