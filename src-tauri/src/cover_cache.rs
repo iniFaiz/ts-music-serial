@@ -11,7 +11,9 @@ use base64::{engine::general_purpose, Engine as _};
 use lofty::picture::MimeType;
 use lofty::prelude::*;
 use lofty::probe::Probe;
-use tauri::{AppHandle, Manager, State};
+#[cfg(target_os = "windows")]
+use tauri::Manager;
+use tauri::{AppHandle, State};
 
 use crate::cache_manager::{self, CacheKind};
 use crate::{db, is_allowed_audio, limits};
