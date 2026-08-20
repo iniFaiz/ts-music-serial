@@ -380,11 +380,9 @@ export async function goBackWithTransition(router, name = 'shared-cover') {
     }
   }
 
-  // On the Album main page (AlbumDetail), back transitions always morph to/from
-  // the main big album header cover image, instead of targeting an individual song row.
-  // For playlists and other track lists, we retarget to the exact clicked song row.
-  const isTargetingAlbumMainPage = backRoute?.name === 'AlbumDetail';
-  const preferredSongPath = isTargetingAlbumMainPage ? null : lastClickedSongPath;
+  // When returning to a track list (such as an album, artist, playlist, or collection),
+  // retarget the morph transition to the exact clicked song row when available.
+  const preferredSongPath = lastClickedSongPath;
 
   document.documentElement.classList.add(transitionClass);
   const radiusTracker = trackMorphRadii(findTransitionElement(name));
