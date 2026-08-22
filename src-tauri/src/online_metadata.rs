@@ -28,10 +28,24 @@ use crate::{
 };
 
 static RUN_ID: AtomicU64 = AtomicU64::new(0);
-const USER_AGENT: &str = "ts-music/0.1.0 (https://github.com/iniFaiz/ts-music-serial)";
 // AcoustID application client key for ts-music. This identifies the application
 // and is not a user's submission key or account password.
 const ACOUSTID_CLIENT_KEY: &str = "MOoO4hWSvE";
+
+// Remote identifiers get interpolated into API URLs, so pin them to the exact
+// shape MusicBrainz/AcoustID emit: a 36-char UUID. A hostile/compromised
+// response must not be able to steer extra path segments or query strings onto
+// the next request.
+fn is_mb_id(value: &str) -> bool {
+    let b = value.as_bytes();
+    if b.len() != 36 {
+        return false;
+    }
+    b.iter().enumerate().all(|(i, c)| match i {
+        8 | 13 | 18 | 23 => *c == b'-',
+        _ => c.is_ascii_hexdigit(),
+    })
+}
 
 #[derive(Clone, Default)]
 struct MissingFields {
@@ -375,6 +389,7 @@ async fn musicbrainz_search(
             ("fmt", "json".to_string()),
             ("limit", "15".to_string()),
         ])
+        .timeout(crate::net::IMPORT_TIMEOUT)
         .send()
         .await
         .map_err(|e| e.to_string())?
@@ -471,6 +486,7 @@ async fn acoustid_lookup(
             ("meta", "recordings"),
             ("format", "json"),
         ])
+        .timeout(crate::net::IMPORT_TIMEOUT)
         .send()
         .await
         .map_err(|e| e.to_string())?
@@ -507,12 +523,16 @@ async fn musicbrainz_recording(
     recording_id: &str,
     album_hint: Option<&str>,
 ) -> Result<Option<Match>, String> {
+    if !is_mb_id(recording_id) {
+        return Err("Unrecognized recording id from AcoustID".to_string());
+    }
     limiter.wait().await;
     let response = client
         .get(format!(
             "https://musicbrainz.org/ws/2/recording/{recording_id}"
         ))
         .query(&[("inc", "artists+releases+genres"), ("fmt", "json")])
+        .timeout(crate::net::IMPORT_TIMEOUT)
         .send()
         .await
         .map_err(|e| e.to_string())?
@@ -524,13 +544,21 @@ async fn musicbrainz_recording(
 }
 
 async fn download_cover(client: &Client, matched: &Match) -> Option<Vec<u8>> {
-    let url = if let Some(id) = matched.release_id.as_deref() {
+    let url = if let Some(id) = matched.release_id.as_deref().filter(|id| is_mb_id(id)) {
         format!("https://coverartarchive.org/release/{id}/front-500")
     } else {
-        let id = matched.release_group_id.as_deref()?;
+        let id = matched
+            .release_group_id
+            .as_deref()
+            .filter(|id| is_mb_id(id))?;
         format!("https://coverartarchive.org/release-group/{id}/front-500")
     };
-    let response = client.get(url).send().await.ok()?;
+    let response = client
+        .get(url)
+        .timeout(crate::net::IMPORT_TIMEOUT)
+        .send()
+        .await
+        .ok()?;
     limits::response_bytes_limited(response, limits::MAX_COVER_BYTES)
         .await
         .ok()
@@ -720,11 +748,8 @@ pub async fn import_online_metadata(
     .map_err(|e| format!("Metadata inspection failed: {e}"))?;
 
     let total = candidates.len();
-    let client = Client::builder()
-        .user_agent(USER_AGENT)
-        .timeout(Duration::from_secs(20))
-        .build()
-        .map_err(|e| e.to_string())?;
+    // One process-wide client shared with the lyrics/cover features (see net.rs).
+    let client = crate::net::shared();
     let mut limiter = MusicBrainzLimiter { last_request: None };
     let mut summary = ImportSummary {
         scanned: total,
@@ -757,10 +782,10 @@ pub async fn import_online_metadata(
 
         let mut matched = None;
         if info.missing.needs_identity() {
-            match acoustid_lookup(&client, path.clone(), ACOUSTID_CLIENT_KEY).await {
+            match acoustid_lookup(client, path.clone(), ACOUSTID_CLIENT_KEY).await {
                 Ok(Some(recording_id)) => {
                     matched = musicbrainz_recording(
-                        &client,
+                        client,
                         &mut limiter,
                         &recording_id,
                         info.album.as_deref(),
@@ -774,7 +799,7 @@ pub async fn import_online_metadata(
             }
         }
         if matched.is_none() {
-            matched = match musicbrainz_search(&client, &mut limiter, &info).await {
+            matched = match musicbrainz_search(client, &mut limiter, &info).await {
                 Ok(value) => value,
                 Err(error) => {
                     eprintln!("MusicBrainz lookup failed for {}: {error}", path.display());
@@ -797,7 +822,7 @@ pub async fn import_online_metadata(
         if let Some(matched) = matched {
             summary.matched += 1;
             let cover = if info.missing.cover {
-                download_cover(&client, &matched).await
+                download_cover(client, &matched).await
             } else {
                 None
             };

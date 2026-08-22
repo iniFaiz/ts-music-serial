@@ -25,6 +25,7 @@ mod library_scan;
 mod limits;
 mod lyrics;
 mod metadata_tags;
+mod net;
 mod online_metadata;
 mod player;
 mod playlist_cover;
@@ -320,15 +321,8 @@ async fn get_lyrics(
             .ok()
             .flatten();
     } else {
-        // Remote providers
-        static HTTP_CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
-        let client = HTTP_CLIENT.get_or_init(|| {
-            reqwest::Client::builder()
-                .timeout(Duration::from_secs(15))
-                .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-                .build()
-                .unwrap_or_else(|_| reqwest::Client::new())
-        });
+        // Remote providers share one process-wide HTTP client (see net.rs).
+        let client = net::shared();
 
         if lyrics_source == "lrclib" {
             result = lyrics::from_lrclib(client, &title, &artist, &album, duration_secs).await;

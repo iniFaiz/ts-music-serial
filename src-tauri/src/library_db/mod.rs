@@ -831,6 +831,18 @@ fn collect_tracks(
     Ok(out)
 }
 
+// SQLite LIKE treats '%' and '_' as wildcards. Album/artist/genre search boxes
+// treat them literally, so escape those characters (and the escape character)
+// before wrapping user input into a contains-pattern. Pair with ESCAPE '^' at
+// the SQL site; smart-playlist rules share the same scheme (escape_like).
+pub(crate) fn like_contains(input: &str) -> String {
+    let escaped = input
+        .replace('^', "^^")
+        .replace('%', "^%")
+        .replace('_', "^_");
+    format!("%{escaped}%")
+}
+
 // ---- Result shapes ----------------------------------------------------------
 
 #[derive(Serialize)]

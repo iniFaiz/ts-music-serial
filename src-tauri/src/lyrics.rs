@@ -313,6 +313,7 @@ pub async fn from_lrclib(
             ("album_name", album),
             ("duration", dur.as_str()),
         ])
+        .header("User-Agent", crate::net::LYRICS_USER_AGENT)
         .send()
         .await
     {
@@ -329,6 +330,7 @@ pub async fn from_lrclib(
     if let Ok(resp) = client
         .get("https://lrclib.net/api/search")
         .query(&[("track_name", title), ("artist_name", artist)])
+        .header("User-Agent", crate::net::LYRICS_USER_AGENT)
         .send()
         .await
     {
@@ -461,8 +463,7 @@ pub fn is_netease_metadata(line: &LyricLine) -> bool {
     ];
 
     for &k in safe_keywords {
-        if t_lower.contains(k) {
-            let idx = t_lower.find(k).unwrap();
+        if let Some(idx) = t_lower.find(k) {
             let after_k = &t_lower[idx + k.len()..];
             let after_trimmed = after_k.trim_start();
             if after_trimmed.starts_with(|c| separators.contains(&c))
@@ -498,8 +499,7 @@ pub fn is_netease_metadata(line: &LyricLine) -> bool {
         "keyboard",
     ];
     for &k in hard_keywords {
-        if t_lower.contains(k) {
-            let idx = t_lower.find(k).unwrap();
+        if let Some(idx) = t_lower.find(k) {
             let after_k = &t_lower[idx + k.len()..];
             let after_trimmed = after_k.trim_start();
             if after_trimmed.starts_with(|c| separators.contains(&c)) {
@@ -845,7 +845,10 @@ fn eapi_params(path: &str, json: &str) -> String {
     let digest = hex::encode(Md5::digest(message.as_bytes()));
     let data = format!("{path}-36cd479b6b5-{json}-36cd479b6b5-{digest}");
 
-    let enc = ecb::Encryptor::<Aes128>::new_from_slice(b"e82ckenh8dichen8").unwrap();
+    // The key is a compile-time 16-byte constant, so cipher construction
+    // cannot fail; expect() just documents that invariant.
+    let enc = ecb::Encryptor::<Aes128>::new_from_slice(b"e82ckenh8dichen8")
+        .expect("NetEase eapi key is a fixed 16-byte constant");
     let ct = enc.encrypt_padded_vec::<Pkcs7>(data.as_bytes());
     hex::encode_upper(ct)
 }

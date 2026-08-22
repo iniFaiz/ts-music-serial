@@ -612,13 +612,13 @@ pub fn db_albums(db: State<Db>, search: Option<String>) -> Result<Vec<AlbumRow>,
     let like = search
         .as_deref()
         .filter(|s| !s.trim().is_empty())
-        .map(|s| format!("%{}%", s.trim()));
+        .map(|s| super::like_contains(s.trim()));
     let sql = "SELECT t.album, MIN(t.artist) AS artist, MAX(t.year) AS year, COUNT(*) AS n,
                  (SELECT path FROM tracks t2 WHERE t2.album = t.album AND t2.has_cover = 1 LIMIT 1) AS cover,
                  COALESCE(MAX(s.last_played), 0) AS last_played,
                  GROUP_CONCAT(DISTINCT t.artist) AS all_artists
                FROM tracks t LEFT JOIN stats s ON s.track_id = t.id
-               WHERE (?1 IS NULL OR t.album LIKE ?1 OR t.artist LIKE ?1)
+               WHERE (?1 IS NULL OR t.album LIKE ?1 ESCAPE '^' OR t.artist LIKE ?1 ESCAPE '^')
                GROUP BY t.album ORDER BY t.album COLLATE NOCASE";
     let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
     let rows = stmt
@@ -656,13 +656,13 @@ pub fn db_artists(db: State<Db>, search: Option<String>) -> Result<Vec<ArtistRow
     let like = search
         .as_deref()
         .filter(|s| !s.trim().is_empty())
-        .map(|s| format!("%{}%", s.trim()));
+        .map(|s| super::like_contains(s.trim()));
     let sql = "SELECT t.artist, COUNT(*) AS n, COUNT(DISTINCT t.album) AS albums,
                  COALESCE(SUM(s.play_count), 0) AS plays,
                  (SELECT path FROM tracks t2 WHERE t2.artist = t.artist AND t2.has_cover = 1 LIMIT 1) AS cover,
                  COALESCE(MAX(s.last_played), 0) AS last_played
                FROM tracks t LEFT JOIN stats s ON s.track_id = t.id
-               WHERE t.artist <> '' AND (?1 IS NULL OR t.artist LIKE ?1)
+               WHERE t.artist <> '' AND (?1 IS NULL OR t.artist LIKE ?1 ESCAPE '^')
                GROUP BY t.artist ORDER BY t.artist COLLATE NOCASE";
     let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
     let rows = stmt

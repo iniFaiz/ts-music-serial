@@ -149,11 +149,12 @@ pub fn discord_update(
         payload = payload.timestamps(activity::Timestamps::new().start(start).end(end));
     }
 
-    let client = inner.client.as_mut().unwrap();
-    if client.set_activity(payload.clone()).is_err() {
-        // Pipe may have dropped (Discord restarted) — try once to reconnect.
-        if client.reconnect().is_ok() {
-            let _ = client.set_activity(payload);
+    if let Some(client) = inner.client.as_mut() {
+        if client.set_activity(payload.clone()).is_err() {
+            // Pipe may have dropped (Discord restarted) — try once to reconnect.
+            if client.reconnect().is_ok() {
+                let _ = client.set_activity(payload);
+            }
         }
     }
 }
@@ -167,17 +168,10 @@ pub fn discord_clear(state: tauri::State<DiscordState>) {
     }
 }
 
-// Shared HTTP client for cover-art lookups (cheap to clone — Arc inside).
-fn cover_http() -> reqwest::Client {
-    static HTTP: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
-    HTTP.get_or_init(|| {
-        reqwest::Client::builder()
-            .user_agent("ts-music")
-            .timeout(std::time::Duration::from_secs(8))
-            .build()
-            .unwrap_or_default()
-    })
-    .clone()
+// Cover-art lookups ride the process-wide shared HTTP client (crate::net) with
+// a short per-request timeout so presence updates never stall on slow lookups.
+fn cover_http() -> &'static reqwest::Client {
+    crate::net::shared()
 }
 
 // Strip bits that hurt catalog matching: bracketed groups like "(feat. …)",
@@ -217,6 +211,7 @@ async fn itunes_cover(client: &reqwest::Client, term: &str, entity: &str) -> Opt
             ("entity", entity),
             ("limit", "1"),
         ])
+        .timeout(crate::net::COVER_TIMEOUT)
         .send()
         .await
         .ok()?;
@@ -238,6 +233,7 @@ async fn deezer_cover(client: &reqwest::Client, q: &str) -> Option<String> {
     let resp = client
         .get("https://api.deezer.com/search")
         .query(&[("q", q), ("limit", "1")])
+        .timeout(crate::net::COVER_TIMEOUT)
         .send()
         .await
         .ok()?;
@@ -277,24 +273,23 @@ pub async fn discord_cover_art(title: String, artist: String, album: String) -> 
     // First hit wins. Album art is identical across a record, so an album lookup
     // is preferred; the track lookups catch singles / mismatched album names.
     if !album.is_empty() {
-        if let Some(url) = itunes_cover(&client, &format!("{} {}", artist, album), "album").await {
+        if let Some(url) = itunes_cover(client, &format!("{} {}", artist, album), "album").await {
             return Some(url);
         }
     }
     if !title.is_empty() {
-        if let Some(url) =
-            itunes_cover(&client, &format!("{} {}", artist, title), "musicTrack").await
+        if let Some(url) = itunes_cover(client, &format!("{} {}", artist, title), "musicTrack").await
         {
             return Some(url);
         }
     }
     if !title.is_empty() {
-        if let Some(url) = deezer_cover(&client, &format!("{} {}", artist, title)).await {
+        if let Some(url) = deezer_cover(client, &format!("{} {}", artist, title)).await {
             return Some(url);
         }
     }
     if !album.is_empty() {
-        if let Some(url) = deezer_cover(&client, &format!("{} {}", artist, album)).await {
+        if let Some(url) = deezer_cover(client, &format!("{} {}", artist, album)).await {
             return Some(url);
         }
     }

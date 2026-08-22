@@ -104,8 +104,19 @@ pub fn db_stats_summary(db: State<Db>) -> Result<StatsSummary, String> {
 
 // ---- Insight collections ----------------------------------------------------
 
+// Insight pages cross IPC as full track rows, so they are bounded exactly like
+// db_tracks_page — a runaway or hostile `limit` must not be able to serialize
+// the whole library to the webview in one response.
+fn validate_limit(limit: i64) -> Result<(), String> {
+    if limit <= 0 || limit > 1_000 {
+        return Err("Invalid insight limit".to_string());
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn db_recently_played(db: State<Db>, limit: i64) -> Result<Vec<MusicTrack>, String> {
+    validate_limit(limit)?;
     let conn = db.read();
     let sql = format!(
         "SELECT {TRACK_COLS_T} FROM tracks t JOIN stats s ON s.track_id = t.id
@@ -116,6 +127,7 @@ pub fn db_recently_played(db: State<Db>, limit: i64) -> Result<Vec<MusicTrack>, 
 
 #[tauri::command]
 pub fn db_most_played(db: State<Db>, limit: i64) -> Result<Vec<MusicTrack>, String> {
+    validate_limit(limit)?;
     let conn = db.read();
     let sql = format!(
         "SELECT {TRACK_COLS_T} FROM tracks t JOIN stats s ON s.track_id = t.id
@@ -126,6 +138,7 @@ pub fn db_most_played(db: State<Db>, limit: i64) -> Result<Vec<MusicTrack>, Stri
 
 #[tauri::command]
 pub fn db_on_repeat(db: State<Db>, limit: i64) -> Result<Vec<MusicTrack>, String> {
+    validate_limit(limit)?;
     let conn = db.read();
     let cutoff = now_ms() - 45 * 86_400_000;
     let sql = format!(
@@ -138,6 +151,7 @@ pub fn db_on_repeat(db: State<Db>, limit: i64) -> Result<Vec<MusicTrack>, String
 
 #[tauri::command]
 pub fn db_recently_added(db: State<Db>, limit: i64) -> Result<Vec<MusicTrack>, String> {
+    validate_limit(limit)?;
     let conn = db.read();
     let sql = format!("SELECT {TRACK_COLS} FROM tracks ORDER BY first_seen_at DESC LIMIT ?1");
     collect_tracks(&conn, &sql, params![limit])
@@ -145,6 +159,7 @@ pub fn db_recently_added(db: State<Db>, limit: i64) -> Result<Vec<MusicTrack>, S
 
 #[tauri::command]
 pub fn db_rediscover(db: State<Db>, limit: i64) -> Result<Vec<MusicTrack>, String> {
+    validate_limit(limit)?;
     let conn = db.read();
     let cutoff = now_ms() - 60 * 86_400_000;
     let max_id: i64 = conn
@@ -187,6 +202,7 @@ pub fn db_rediscover(db: State<Db>, limit: i64) -> Result<Vec<MusicTrack>, Strin
 
 #[tauri::command]
 pub fn db_top_artists(db: State<Db>, limit: i64) -> Result<Vec<ArtistRow>, String> {
+    validate_limit(limit)?;
     let conn = db.read();
     let sql = "SELECT t.artist, COUNT(*) AS n, COUNT(DISTINCT t.album) AS albums,
                  COALESCE(SUM(s.play_count), 0) AS plays,
@@ -217,6 +233,7 @@ pub fn db_top_artists(db: State<Db>, limit: i64) -> Result<Vec<ArtistRow>, Strin
 
 #[tauri::command]
 pub fn db_top_genres(db: State<Db>, limit: i64) -> Result<Vec<GenreRow>, String> {
+    validate_limit(limit)?;
     let conn = db.read();
     let sql = "SELECT t.genre, COUNT(*) AS n, COALESCE(SUM(s.play_count), 0) AS plays,
                  (SELECT path FROM tracks t2 WHERE t2.genre = t.genre AND t2.has_cover = 1 LIMIT 1) AS cover
@@ -247,11 +264,11 @@ pub fn db_genres(db: State<Db>, search: Option<String>) -> Result<Vec<GenreRow>,
     let like = search
         .as_deref()
         .filter(|s| !s.trim().is_empty())
-        .map(|s| format!("%{}%", s.trim()));
+        .map(|s| super::like_contains(s.trim()));
     let sql = "SELECT t.genre, COUNT(*) AS n, COALESCE(SUM(s.play_count), 0) AS plays,
                  (SELECT path FROM tracks t2 WHERE t2.genre = t.genre AND t2.has_cover = 1 LIMIT 1) AS cover
                FROM tracks t LEFT JOIN stats s ON s.track_id = t.id
-               WHERE t.genre IS NOT NULL AND t.genre <> '' AND (?1 IS NULL OR t.genre LIKE ?1)
+               WHERE t.genre IS NOT NULL AND t.genre <> '' AND (?1 IS NULL OR t.genre LIKE ?1 ESCAPE '^')
                GROUP BY t.genre ORDER BY plays DESC, n DESC";
     let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
     let rows = stmt
