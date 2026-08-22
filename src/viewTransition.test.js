@@ -215,7 +215,7 @@ describe('viewTransition', () => {
           return currentRouteValue;
         },
       },
-      resolve: (path) => ({ name: 'AlbumDetail', params: { name: 'Multi Album' } }),
+      resolve: (_path) => ({ name: 'AlbumDetail', params: { name: 'Multi Album' } }),
       back: () => {
         currentRouteValue = { name: 'AlbumDetail', params: { name: 'Multi Album' } };
         if (afterEachCallback) afterEachCallback();

@@ -47,18 +47,49 @@ fn compute_waveform(path: &Path) -> Option<Vec<u8>> {
             peaks.push(cur_peak);
         }
     } else {
-        // Unknown duration: buffer the samples, then bucket them.
-        let all: Vec<f32> = decoder.map(|s| s.abs()).collect();
-        if all.is_empty() {
-            return None;
+        // Unknown duration: reduce peaks on the fly instead of buffering every
+        // sample first — a malformed/huge file could otherwise balloon to
+        // gigabytes of RAM. Buckets start small and are repeatedly pair-folded
+        // as they fill up, so memory stays O(WAVEFORM_BUCKETS) while short and
+        // long tracks still spread evenly across the final bars.
+        const START_BUCKET_SAMPLES: u64 = 4096;
+        let mut bucket_samples = START_BUCKET_SAMPLES;
+        let mut cur_peak = 0.0f32;
+        let mut count: u64 = 0;
+        for s in decoder {
+            let a = s.abs();
+            if a > cur_peak {
+                cur_peak = a;
+            }
+            count += 1;
+            if count >= bucket_samples {
+                peaks.push(cur_peak);
+                cur_peak = 0.0;
+                count = 0;
+                if peaks.len() >= WAVEFORM_BUCKETS {
+                    for i in 0..WAVEFORM_BUCKETS / 2 {
+                        peaks[i] = peaks[2 * i].max(peaks[2 * i + 1]);
+                    }
+                    peaks.truncate(WAVEFORM_BUCKETS / 2);
+                    bucket_samples *= 2;
+                }
+            }
         }
-        let bs = (all.len() / WAVEFORM_BUCKETS).max(1);
-        let mut i = 0;
-        while i < all.len() && peaks.len() < WAVEFORM_BUCKETS {
-            let end = (i + bs).min(all.len());
-            let p = all[i..end].iter().copied().fold(0.0f32, f32::max);
-            peaks.push(p);
-            i = end;
+        if count > 0 {
+            peaks.push(cur_peak);
+        }
+        // Stretch whatever we collected back out to WAVEFORM_BUCKETS bars
+        // (each source bucket feeds 1-2 adjacent bars via max).
+        let collected = peaks.len();
+        if collected > 0 && collected < WAVEFORM_BUCKETS {
+            let stretched: Vec<f32> = (0..WAVEFORM_BUCKETS)
+                .map(|i| {
+                    let start = i * collected / WAVEFORM_BUCKETS;
+                    let end = (((i + 1) * collected) / WAVEFORM_BUCKETS).clamp(start + 1, collected);
+                    peaks[start..end].iter().copied().fold(0.0f32, f32::max)
+                })
+                .collect();
+            peaks = stretched;
         }
     }
 

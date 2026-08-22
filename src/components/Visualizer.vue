@@ -21,6 +21,13 @@ const targets = new Array(BAR_COUNT).fill(0.0);
 let rafId = null;
 let isVisible = null; // Unset initially to force the first updateVisibilityState to run
 let unlistenSpectrum = null;
+let unlistenBlur = null;
+let unlistenFocus = null;
+// Set when the component unmounts. Lifecycle hooks must be registered
+// synchronously during setup — calling onUnmounted after an await inside
+// onMounted silently no-ops (no active instance), leaking every listener.
+// This flag also detaches anything that resolves after an early unmount.
+let disposed = false;
 let nyancatColorMix = store.nyancatMode ? 1 : 0;
 let reduceMotion = false;
 let motionQuery = null;
@@ -220,6 +227,22 @@ const setupCanvas = () => {
   draw();
 };
 
+// Tear-down must be registered synchronously in setup, not inside the async
+// onMounted callback below (after awaits there is no active instance and the
+// hook would never attach).
+onUnmounted(() => {
+  disposed = true;
+  document.removeEventListener('visibilitychange', checkWindowStatus);
+  if (motionQuery) motionQuery.removeEventListener('change', onMotionPreferenceChange);
+  if (unlistenSpectrum) unlistenSpectrum();
+  if (unlistenBlur) unlistenBlur();
+  if (unlistenFocus) unlistenFocus();
+  if (rafId) {
+    cancelAnimationFrame(rafId);
+    rafId = null;
+  }
+});
+
 onMounted(async () => {
   motionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
   reduceMotion = motionQuery.matches;
@@ -227,7 +250,7 @@ onMounted(async () => {
   setupCanvas();
 
   try {
-    unlistenSpectrum = await listen('player-spectrum', (event) => {
+    const unlisten = await listen('player-spectrum', (event) => {
       const vals = event.payload;
       if (!isVisible || !Array.isArray(vals)) return;
       const mapped = mapBandsTo7(vals);
@@ -236,6 +259,11 @@ onMounted(async () => {
       }
       if (!rafId && store.isPlaying) rafId = requestAnimationFrame(tick);
     });
+    if (disposed) {
+      unlisten();
+      return;
+    }
+    unlistenSpectrum = unlisten;
   } catch {
     // Spectrum telemetry is best-effort during development upgrades.
   }
@@ -244,33 +272,28 @@ onMounted(async () => {
   document.addEventListener('visibilitychange', checkWindowStatus);
 
   // Listen to Tauri blur/focus events for prompt responsiveness
-  let unlistenBlur, unlistenFocus;
   try {
-    unlistenBlur = await appWindow.listen('tauri://blur', checkWindowStatus);
-    unlistenFocus = await appWindow.listen('tauri://focus', checkWindowStatus);
+    const blur = await appWindow.listen('tauri://blur', checkWindowStatus);
+    const focus = await appWindow.listen('tauri://focus', checkWindowStatus);
+    if (disposed) {
+      blur();
+      focus();
+      return;
+    }
+    unlistenBlur = blur;
+    unlistenFocus = focus;
   } catch {
     // ignore
   }
 
   // Initial check
   await checkWindowStatus();
+  if (disposed) return;
 
   // If initial check starts in active playback, make sure loop runs
   if ((store.isPlaying || (store.nyancatMode && !reduceMotion)) && isVisible && !rafId) {
     rafId = requestAnimationFrame(tick);
   }
-
-  onUnmounted(() => {
-    document.removeEventListener('visibilitychange', checkWindowStatus);
-    if (motionQuery) motionQuery.removeEventListener('change', onMotionPreferenceChange);
-    if (unlistenSpectrum) unlistenSpectrum();
-    if (unlistenBlur) unlistenBlur();
-    if (unlistenFocus) unlistenFocus();
-    if (rafId) {
-      cancelAnimationFrame(rafId);
-      rafId = null;
-    }
-  });
 });
 </script>
 

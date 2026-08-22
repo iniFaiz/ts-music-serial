@@ -8,8 +8,13 @@ import { invokeCommand as invoke } from './generated/ipc';
 // seek bar re-mounting) is free, and de-dupe concurrent requests for the same
 // path so we never kick off two decodes at once.
 //
-//   cache:    path -> Uint8Array of bar heights, or null when undecodable.
+//   cache:    path -> Uint8Array of bar heights, or null when the track is
+//             genuinely undecodable (Rust answered Ok(None) after trying).
 //   inflight: path -> Promise, shared by concurrent callers.
+//
+// A rejected invoke (transient backend/IPC hiccup) is deliberately NOT cached:
+// callers get null to fall back to the slider, but the next attempt retries
+// instead of staying poisoned until the user runs "Clear Cache".
 const cache = new Map();
 const inflight = new Map();
 const MAX_WAVEFORMS = 300;
@@ -51,7 +56,8 @@ export async function loadWaveform(path) {
       return value;
     })
     .catch(() => {
-      cacheSet(path, null);
+      // Transient failure — degrade to the slider without caching a negative,
+      // so a later attempt can succeed.
       return null;
     })
     .finally(() => {

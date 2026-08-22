@@ -360,29 +360,47 @@ const applyPlayerTelemetry = async (status) => {
 };
 
 // Smoothly advance the visible position between 8 Hz telemetry snapshots. Each
-// backend event snaps currentTime to native truth and corrects any drift.
+// backend event snaps currentTime to native truth and corrects any drift. The
+// loop only reschedules itself while a track is actively playing — once
+// paused/stopped/buffering it stops instead of spinning at ~60fps forever, and
+// the watcher below restarts it when playback resumes.
 let rafId = null;
 let lastFrameTs = 0;
 const interpolate = (ts) => {
-  rafId = requestAnimationFrame(interpolate);
   if (!store.currentSong || !store.isPlaying || store.isBuffering) {
-    lastFrameTs = ts;
+    rafId = null;
+    lastFrameTs = 0; // force a fresh baseline on restart so dt cannot jump
     return;
   }
   // Don't fight an in-progress seek, and skip until we have a baseline frame.
   if (!lastFrameTs || Date.now() - store.lastSeekAt < 500) {
     lastFrameTs = ts;
+    rafId = requestAnimationFrame(interpolate);
     return;
   }
   const dt = (ts - lastFrameTs) / 1000;
   lastFrameTs = ts;
-  if (dt <= 0 || dt > 1) return; // ignore huge gaps (e.g. backgrounded window)
+  if (dt <= 0 || dt > 1) {
+    rafId = requestAnimationFrame(interpolate); // ignore huge gaps (e.g. backgrounded window)
+    return;
+  }
   const dur = store.duration || 0;
   let t = (store.currentTime || 0) + dt;
   if (dur > 0 && t > dur) t = dur;
   store.currentTime = t;
   seekValue.value = t;
+  rafId = requestAnimationFrame(interpolate);
 };
+
+// Restart the interpolation loop when playback resumes or buffering completes.
+watch(
+  () => [store.isPlaying, store.isBuffering],
+  ([playing, buffering]) => {
+    if (playing && !buffering && !rafId && store.currentSong) {
+      rafId = requestAnimationFrame(interpolate);
+    }
+  }
+);
 
 const closeLosslessPopup = () => {
   losslessPopupOpen.value = false;
