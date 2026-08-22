@@ -3,6 +3,11 @@ import { open, save, ask } from '@tauri-apps/plugin-dialog';
 import { invalidateCover } from '../../coverCache';
 import { requestDestructiveConsent } from '../../destructiveConsent';
 
+// In-flight Discord cover lookups keyed by artist␟album, shared so a session
+// snapshot refreshing currentSong mid-lookup never triggers duplicate network
+// fetches for the same record.
+const pendingCoverLookups = new Map();
+
 export const createIntegrationsState = () => ({
   onlineMetadataEnabled: false,
   onlineMetadataRunning: false,
@@ -152,15 +157,26 @@ export function createIntegrationsActions() {
       const key = `${artist}␟${album || title}`.toLowerCase();
       let coverUrl = this.discordCoverCache[key];
       if (coverUrl === undefined) {
+        let pending = pendingCoverLookups.get(key);
+        if (!pending) {
+          pending = invoke('discord_cover_art', { title, artist, album })
+            .then((url) => url || '')
+            .catch(() => '');
+          pendingCoverLookups.set(key, pending);
+        }
         try {
-          coverUrl = (await invoke('discord_cover_art', { title, artist, album })) || '';
-        } catch {
-          coverUrl = '';
+          coverUrl = await pending;
+        } finally {
+          pendingCoverLookups.delete(key);
         }
         this.discordCoverCache[key] = coverUrl;
       }
-      // The track may have changed while we awaited the lookup — bail if so.
-      if (this.currentSong !== song) return;
+      // The track may have changed while we awaited the lookup — bail only on
+      // a genuinely different song. Session snapshots can swap the currentSong
+      // object identity for the SAME path (accounting refreshes); bailing on
+      // those silently dropped updates and left Discord on an older track.
+      const currentPath = this.currentSong ? this.currentSong.path : null;
+      if (currentPath !== song.path) return;
 
       invoke('discord_update', {
         title,

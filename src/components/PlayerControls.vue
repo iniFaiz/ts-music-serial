@@ -353,6 +353,19 @@ const applyPlayerTelemetry = async (status) => {
   } else {
     finishedSince = 0;
   }
+  // Keep the native session's upcoming slot filled in autoplay mode so the
+  // crossfade/gapless boundary has a prepared track to transition into.
+  // (Without this, autoplay only appends AFTER a track ends, which is too
+  // late for any transition.) crossfadeSecs may be undefined until the first
+  // session snapshot arrives, hence the Number()|| fallback.
+  if (
+    store.autoplayMode &&
+    store.loopMode !== 2 &&
+    status.duration > 0 &&
+    status.duration - status.position <= Math.max(30, (Number(store.crossfadeSecs) || 6) + 15)
+  ) {
+    store.ensureAutoplayUpcoming();
+  }
   // Keep the OS media overlay's timeline roughly in sync (~every 2s).
   if (Date.now() - lastMediaPush > 2000 && !store.isBuffering) {
     pushMediaPlayback();

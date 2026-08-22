@@ -15,6 +15,11 @@ use crate::limits;
 // Our Discord application. Controls the app icon/name and base assets. Hardcoded
 // on purpose: the user just flips the toggle in Settings.
 const DISCORD_CLIENT_ID: &str = "1521515050160881775";
+// Fallback large image when no album art was found. Rich presence assets must
+// either be uploaded in the developer portal (none are) or be fetchable https
+// URLs — an unregistered asset key renders as a "?" placeholder, so point at
+// the app icon served from the repository instead.
+const APP_ICON_URL: &str = "https://raw.githubusercontent.com/iniFaiz/ts-music-serial/main/icon.png";
 
 pub struct DiscordState(pub Mutex<DiscordInner>);
 
@@ -119,9 +124,9 @@ pub fn discord_update(
     };
 
     // Large image: the track's album art (a public https URL Discord proxies)
-    // when we found one, otherwise fall back to the app's uploaded "logo" asset.
+    // when we found one, otherwise fall back to the app icon URL.
     let large_image = if cover_url.trim().is_empty() {
-        "logo"
+        APP_ICON_URL
     } else {
         cover_url.trim()
     };
@@ -149,13 +154,23 @@ pub fn discord_update(
         payload = payload.timestamps(activity::Timestamps::new().start(start).end(end));
     }
 
-    if let Some(client) = inner.client.as_mut() {
-        if client.set_activity(payload.clone()).is_err() {
-            // Pipe may have dropped (Discord restarted) — try once to reconnect.
-            if client.reconnect().is_ok() {
-                let _ = client.set_activity(payload);
+    let mut failed = false;
+    match inner.client.as_mut() {
+        Some(client) => {
+            if client.set_activity(payload.clone()).is_err() {
+                // Pipe may have dropped (Discord restarted/slept) — try once
+                // to reconnect on the same client.
+                failed = client.reconnect().is_err() || client.set_activity(payload).is_err();
             }
         }
+        None => return,
+    }
+    if failed {
+        // Dead pipe: drop the client so the next update dials a fresh
+        // connection. Keeping it around made every later update fail silently,
+        // freezing the presence on whichever track was playing when the pipe
+        // died.
+        disconnect(&mut inner);
     }
 }
 

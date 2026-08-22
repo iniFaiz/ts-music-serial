@@ -2,6 +2,7 @@ import { invokeCommand as invoke } from '../../generated/ipc';
 
 const queueMetadata = new Map();
 let activeStationSession = null;
+let autoplayPrefetchInFlight = false;
 const STATION_BATCH_SIZE = 24;
 
 const nativeQueueEntry = (song) => {
@@ -623,6 +624,42 @@ export function createPlaybackActions() {
       const nativeNextId = this.playbackSessionSnapshot?.nextEntryId;
       if (!nativeNextId) return null;
       return this.queue.find((entry) => entry.queueId === nativeNextId) || null;
+    },
+
+    // Autoplay normally appends the next song only AFTER the current one ends
+    // (the native session then asks for it via request_autoplay). That leaves
+    // the queue with no upcoming entry while a track is playing, so the native
+    // crossfade/gapless boundaries have nothing prepared and every transition
+    // degrades to an abrupt stop. Pre-enqueue one random track as the current
+    // one nears its end; the prepare-next watcher then hands it to Rust like
+    // any other queued successor.
+    async ensureAutoplayUpcoming() {
+      if (!this.autoplayMode || !this.currentSong || this.isBuffering) return;
+      if (this.loopMode === 2) return; // repeat-one: the native loop never advances
+      if (this.sleepTimerMode === 'end-queue') return; // finite queue is intentional
+      if (this.nextUpEntry()) return;
+      if (autoplayPrefetchInFlight) return;
+      autoplayPrefetchInFlight = true;
+      try {
+        const song = await this.pickRandomSong();
+        if (!song) return;
+        // The world may have moved on while we picked (track advanced, mode
+        // toggled off, another prefetch landed) — re-validate before touching
+        // the queue.
+        if (!this.autoplayMode || !this.currentSong || this.isBuffering) return;
+        if (this.nextUpEntry()) return;
+        const entry = { ...song, queueId: Math.random().toString(36).substring(2, 9) };
+        this.queue.push(entry);
+        await this.sendPlaybackIntent({
+          type: 'enqueue',
+          entries: [nativeQueueEntry(entry)],
+          afterCurrent: true,
+        });
+      } catch (error) {
+        console.error('Failed to pre-fetch upcoming autoplay track', error);
+      } finally {
+        autoplayPrefetchInFlight = false;
+      }
     },
 
     nextUpPath() {

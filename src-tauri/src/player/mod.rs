@@ -1266,7 +1266,12 @@ pub(crate) fn spawn_player_ticker(app: AppHandle, player: AudioPlayer) {
             if tick_now.duration_since(last_status_emit) >= Duration::from_millis(125) {
                 last_status_emit = tick_now;
                 let status = player_status_snapshot(&app, &player);
-                if telemetry_visible {
+                // End-of-track must be announced even while hidden: the Off and
+                // WASAPI-exclusive paths rely on the frontend seeing
+                // `finished` to advance to the next song, so suppressing this
+                // one tiny payload would stall playback until the window is
+                // restored. The rest of the stream stays visibility-gated.
+                if telemetry_visible || status.finished {
                     let _ = app.emit("player-telemetry", status);
                 }
             }
