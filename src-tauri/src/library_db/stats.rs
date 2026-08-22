@@ -25,7 +25,7 @@ pub(crate) fn record_play_start(db: &Db, path: &str) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_record_play_start(db: State<Db>, path: String) -> Result<(), String> {
     record_play_start(db.inner(), &path)
 }
@@ -42,7 +42,7 @@ pub(crate) fn record_play(db: &Db, path: &str) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_record_play(db: State<Db>, path: String) -> Result<(), String> {
     record_play(db.inner(), &path)
 }
@@ -59,12 +59,12 @@ pub(crate) fn record_skip(db: &Db, path: &str) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_record_skip(db: State<Db>, path: String) -> Result<(), String> {
     record_skip(db.inner(), &path)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_stat(db: State<Db>, path: String) -> Result<StatRow, String> {
     let conn = db.read();
     conn.query_row(
@@ -85,7 +85,7 @@ pub fn db_stat(db: State<Db>, path: String) -> Result<StatRow, String> {
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_stats_summary(db: State<Db>) -> Result<StatsSummary, String> {
     let conn = db.read();
     conn.query_row(
@@ -114,7 +114,7 @@ fn validate_limit(limit: i64) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_recently_played(db: State<Db>, limit: i64) -> Result<Vec<MusicTrack>, String> {
     validate_limit(limit)?;
     let conn = db.read();
@@ -125,7 +125,7 @@ pub fn db_recently_played(db: State<Db>, limit: i64) -> Result<Vec<MusicTrack>, 
     collect_tracks(&conn, &sql, params![limit])
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_most_played(db: State<Db>, limit: i64) -> Result<Vec<MusicTrack>, String> {
     validate_limit(limit)?;
     let conn = db.read();
@@ -136,7 +136,7 @@ pub fn db_most_played(db: State<Db>, limit: i64) -> Result<Vec<MusicTrack>, Stri
     collect_tracks(&conn, &sql, params![limit])
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_on_repeat(db: State<Db>, limit: i64) -> Result<Vec<MusicTrack>, String> {
     validate_limit(limit)?;
     let conn = db.read();
@@ -149,7 +149,7 @@ pub fn db_on_repeat(db: State<Db>, limit: i64) -> Result<Vec<MusicTrack>, String
     collect_tracks(&conn, &sql, params![cutoff, limit])
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_recently_added(db: State<Db>, limit: i64) -> Result<Vec<MusicTrack>, String> {
     validate_limit(limit)?;
     let conn = db.read();
@@ -157,7 +157,7 @@ pub fn db_recently_added(db: State<Db>, limit: i64) -> Result<Vec<MusicTrack>, S
     collect_tracks(&conn, &sql, params![limit])
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_rediscover(db: State<Db>, limit: i64) -> Result<Vec<MusicTrack>, String> {
     validate_limit(limit)?;
     let conn = db.read();
@@ -200,7 +200,7 @@ pub fn db_rediscover(db: State<Db>, limit: i64) -> Result<Vec<MusicTrack>, Strin
     Ok(tracks)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_top_artists(db: State<Db>, limit: i64) -> Result<Vec<ArtistRow>, String> {
     validate_limit(limit)?;
     let conn = db.read();
@@ -231,7 +231,7 @@ pub fn db_top_artists(db: State<Db>, limit: i64) -> Result<Vec<ArtistRow>, Strin
     Ok(out)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_top_genres(db: State<Db>, limit: i64) -> Result<Vec<GenreRow>, String> {
     validate_limit(limit)?;
     let conn = db.read();
@@ -258,7 +258,7 @@ pub fn db_top_genres(db: State<Db>, limit: i64) -> Result<Vec<GenreRow>, String>
     Ok(out)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_genres(db: State<Db>, search: Option<String>) -> Result<Vec<GenreRow>, String> {
     let conn = db.read();
     let like = search
@@ -300,7 +300,7 @@ pub struct InsightCounts {
 // Cheap COUNTs for the Home "Top Picks" cards, which only need to know which
 // collections are non-empty — avoids fetching hundreds of full tracks each on
 // every stats change.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_insight_counts(db: State<Db>) -> Result<InsightCounts, String> {
     let conn = db.read();
     let cutoff45 = now_ms() - 45 * 86_400_000;

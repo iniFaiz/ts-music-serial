@@ -55,7 +55,9 @@ const sortKey = ref(null);
 const sortOrder = ref('asc');
 
 // Whether drag-to-reorder is available (only for playlists/favorites with no active sort)
-const canReorder = computed(() => (!!props.playlistId || props.isFavorites) && !sortKey.value);
+const reorderEligible = computed(
+  () => (!!props.playlistId || props.isFavorites) && !sortKey.value
+);
 
 const toggleSort = (key) => {
   if (sortKey.value === key) {
@@ -111,6 +113,13 @@ const sortedSongs = computed(() => {
 // and the scrollbar stay correct. Reorderable lists (playlists/favorites) are
 // never windowed, so drag-to-reorder keeps every row in the DOM.
 const VIRT_THRESHOLD = 80;
+// Reorderable lists keep every row in the DOM below this size so drag-to-reorder
+// behaves exactly as before. Beyond it, DOM-node and vnode-diff costs dominate
+// (a few thousand tracks make every store change re-diff the whole list), so the
+// list switches to windowing with drag disabled — sorting still provides order,
+// and dragging inside a windowed list would need scroll-aware hit testing that
+// FLIP reorder animations can't express.
+const REORDER_VIRT_THRESHOLD = 400;
 const BUFFER_ROWS = 8;
 const rowsWrapper = ref(null);
 const rowPitch = ref(56); // px per row incl. row gap; measured from real rows
@@ -119,7 +128,14 @@ const viewEnd = ref(60);
 let scrollParentEl = null;
 let scrollRafPending = false;
 
-const virtualize = computed(() => !canReorder.value && sortedSongs.value.length > VIRT_THRESHOLD);
+// Drag stays live only while the whole list is in the DOM.
+const canReorder = computed(
+  () => reorderEligible.value && sortedSongs.value.length <= REORDER_VIRT_THRESHOLD
+);
+const virtualize = computed(() => {
+  const count = sortedSongs.value.length;
+  return count > (reorderEligible.value ? REORDER_VIRT_THRESHOLD : VIRT_THRESHOLD);
+});
 
 // Rows to actually render, each carrying its real index in the full list so the
 // track number / current-song highlight stay correct. Destructured in the

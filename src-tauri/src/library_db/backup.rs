@@ -333,7 +333,7 @@ fn validate_backup_source(path: &Path) -> Result<(), String> {
     validate_read_only_database(path)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_export_backup(app: AppHandle, db: State<Db>, dest: String) -> Result<(), String> {
     let dest_path = Path::new(&dest);
     authorize_backup_path(&app, dest_path)?;
@@ -609,7 +609,7 @@ fn restore_from_path(
     Ok(ImportBackupResult { roots })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_import_backup(
     app: AppHandle,
     db: State<Db>,
@@ -1249,7 +1249,7 @@ mod tests {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_prune_and_get_missing(db: State<Db>) -> Result<Vec<MissingTrackInfo>, String> {
     let mut conn = db.0.lock();
     let mut missing = Vec::new();

@@ -29,6 +29,28 @@ const reloadPlaylists = async (store) => {
 
 const clonePlaylist = (playlist) => JSON.parse(JSON.stringify(playlist));
 
+// List rows render the heart state with several isFavorite() lookups each, so
+// membership checks must not linearly scan the whole favorites array. The Set
+// is rebuilt lazily whenever the backing array's identity, favoritesVersion or
+// length changes — every writer either replaces the array or bumps the version,
+// so the index can never serve stale answers.
+let favIndex = { ref: null, version: -1, len: -1, set: new Set() };
+function favoriteIndexOf(store) {
+  if (
+    favIndex.ref !== store.favorites ||
+    favIndex.version !== store.favoritesVersion ||
+    favIndex.len !== store.favorites.length
+  ) {
+    favIndex = {
+      ref: store.favorites,
+      version: store.favoritesVersion,
+      len: store.favorites.length,
+      set: new Set(store.favorites),
+    };
+  }
+  return favIndex.set;
+}
+
 const recoverFavorites = async (store, snapshot) => {
   store.favorites = [...snapshot];
   try {
@@ -102,7 +124,7 @@ export function createPlaylistsActions() {
     },
 
     isFavorite(path) {
-      return this.favorites.includes(path);
+      return !!path && favoriteIndexOf(this).has(path);
     },
 
     async toggleFavorite(path) {

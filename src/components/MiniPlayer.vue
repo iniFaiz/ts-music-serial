@@ -27,6 +27,7 @@ import MarqueeText from './MarqueeText.vue';
 import { createNyanCatSeekStyle } from '../nyancatTheme';
 import { useQueueReorder } from '../useQueueReorder';
 import { useTrackLyrics } from '../useTrackLyrics';
+import { useLyricAutoScroll } from '../useLyricAutoScroll';
 
 const router = useRouter();
 
@@ -219,101 +220,24 @@ function getDotColor(line, dotIdx) {
   return `rgba(255, 255, 255, ${opacity.toFixed(3)})`;
 }
 
-// ---- Smooth auto-scroll (same approach as the fullscreen player) ----------
-let mpRafId = null;
-let mpIsAutoScrolling = false;
-let mpUserPausedUntil = 0;
-let mpUserScrollTimer = null;
-let mpLastScrolledIdx = -1;
-
-function easeInOutQuart(t) {
-  return t < 0.5 ? 8 * t * t * t * t : 1 - Math.pow(-2 * t + 2, 4) / 2;
-}
-
-function mpSmoothScrollTo(container, target, duration = 600) {
-  if (mpRafId) cancelAnimationFrame(mpRafId);
-  const start = container.scrollTop;
-  const delta = target - start;
-  if (Math.abs(delta) < 2) return;
-  const t0 = performance.now();
-  mpIsAutoScrolling = true;
-  function step(now) {
-    const p = Math.min((now - t0) / duration, 1);
-    container.scrollTop = start + delta * easeInOutQuart(p);
-    if (p < 1) {
-      mpRafId = requestAnimationFrame(step);
-    } else {
-      mpRafId = null;
-      setTimeout(() => {
-        mpIsAutoScrolling = false;
-      }, 80);
-    }
-  }
-  mpRafId = requestAnimationFrame(step);
-}
-
-function mpScrollToLine(idx) {
-  const container = linesEl.value;
-  if (!container) return;
-
-  const el = container.querySelector(`[data-line="${idx}"]`);
-  if (!el) return;
-
-  const containerH = container.clientHeight;
-  const currentLine = lines.value[idx];
-
-  let targetTop = el.offsetTop;
-  let targetH = el.offsetHeight;
-
-  if (currentLine && currentLine.isGap) {
-    const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
-    targetH = 3.25 * rem; // 2.5rem height + 0.75rem margin-bottom
-  } else if (idx > 0) {
-    for (let k = 0; k < idx; k++) {
-      if (lines.value[k] && lines.value[k].isGap) {
-        const gapEl = container.querySelector(`[data-line="${k}"]`);
-        if (gapEl) {
-          const gapH = gapEl.offsetHeight;
-          if (gapH > 0) {
-            const style = window.getComputedStyle(gapEl);
-            const mb = parseFloat(style.marginBottom) || 0;
-            targetTop -= gapH + mb;
-          }
-        }
-      }
-    }
-  }
-
-  const target = Math.max(0, targetTop - containerH / 2 + targetH / 2);
-  mpSmoothScrollTo(container, target, 600);
-}
-
-watch(activeIdx, (idx) => {
-  if (idx < 0 || idx === mpLastScrolledIdx) return;
-  if (Date.now() < mpUserPausedUntil) return;
-  mpLastScrolledIdx = idx;
-  nextTick(() => mpScrollToLine(idx));
+// ---- Smooth auto-scroll (shared engine) -----------------------------------
+const { scrollToLine, resetScrollState, onUserScroll: onLyricsScroll } = useLyricAutoScroll({
+  container: () => linesEl.value,
+  lines,
+  activeIdx,
+  scrollDuration: 600,
+  gapTargetRem: 3.25, // 2.5rem height + 0.75rem margin-bottom
 });
 
 watch(
   () => [song.value && song.value.path, lines.value, view.value],
   () => {
-    mpLastScrolledIdx = -1;
-    mpUserPausedUntil = 0;
+    resetScrollState();
     if (view.value === 'lyrics' && activeIdx.value >= 0) {
-      nextTick(() => mpScrollToLine(activeIdx.value));
+      nextTick(() => scrollToLine(activeIdx.value));
     }
   }
 );
-
-const onLyricsScroll = () => {
-  if (mpIsAutoScrolling) return;
-  mpUserPausedUntil = Date.now() + 3000;
-  if (mpUserScrollTimer) clearTimeout(mpUserScrollTimer);
-  mpUserScrollTimer = setTimeout(() => {
-    mpUserPausedUntil = 0;
-  }, 3100);
-};
 
 // ---- Transport / formatting ----------------------------------------------
 const seekValue = ref(0);
@@ -464,8 +388,6 @@ onMounted(() => document.addEventListener('click', closePopovers));
 onUnmounted(() => {
   document.removeEventListener('click', closePopovers);
   if (hideTimer) clearTimeout(hideTimer);
-  if (mpRafId) cancelAnimationFrame(mpRafId);
-  if (mpUserScrollTimer) clearTimeout(mpUserScrollTimer);
 });
 </script>
 

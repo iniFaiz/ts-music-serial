@@ -1,15 +1,17 @@
-<script setup>
-import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue';
+﻿<script setup>
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue';
 import { useWindowDrag } from '../useWindowDrag';
 import { store } from '../store';
 import { loadCover, getCachedCover, hasCachedCover } from '../coverCache';
 import { activeLineIndex, processLyricLines } from '../lyricsCache';
 import { useTrackLyrics } from '../useTrackLyrics';
+import { useLyricAutoScroll } from '../useLyricAutoScroll';
 import { useRouter } from 'vue-router';
 import LyricContent from './LyricContent.vue';
 import { extractColorsForPath, defaultPalette } from '../colorExtract';
 import MarqueeText from './MarqueeText.vue';
 import { createNyanCatSeekStyle } from '../nyancatTheme';
+import { LOSSLESS_LOGO_PATH } from '../losslessLogo';
 
 const router = useRouter();
 const coverUrl = ref(null);
@@ -122,89 +124,19 @@ function getDotColor(line, dotIdx) {
   return `rgba(255, 255, 255, ${opacity.toFixed(3)})`;
 }
 
-// ---- Smooth scroll (custom RAF, same logic as LyricsPanel) ---------------
-let npRafId = null;
-let npIsAutoScrolling = false;
-let npUserPausedUntil = 0;
-let npUserScrollTimer = null;
-let npLastScrolledIdx = -1;
-
-function easeInOutQuart(t) {
-  return t < 0.5 ? 8 * t * t * t * t : 1 - Math.pow(-2 * t + 2, 4) / 2;
-}
-
-function npSmoothScrollTo(container, target, duration = 650) {
-  if (npRafId) cancelAnimationFrame(npRafId);
-  const start = container.scrollTop;
-  const delta = target - start;
-  if (Math.abs(delta) < 2) return;
-  const t0 = performance.now();
-  npIsAutoScrolling = true;
-  function step(now) {
-    const p = Math.min((now - t0) / duration, 1);
-    container.scrollTop = start + delta * easeInOutQuart(p);
-    if (p < 1) {
-      npRafId = requestAnimationFrame(step);
-    } else {
-      npRafId = null;
-      setTimeout(() => {
-        npIsAutoScrolling = false;
-      }, 80);
-    }
-  }
-  npRafId = requestAnimationFrame(step);
-}
-
-function npScrollToLine(idx) {
-  const container = linesEl.value;
-  if (!container) return;
-
-  const el = container.querySelector(`[data-line="${idx}"]`);
-  if (!el) return;
-
-  const containerH = container.clientHeight;
-  const currentLine = lines.value[idx];
-
-  let targetTop = el.offsetTop;
-  let targetH = el.offsetHeight;
-
-  if (currentLine && currentLine.isGap) {
-    const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
-    targetH = 4.5 * rem; // 3.5rem height + 1rem margin-bottom
-  } else if (idx > 0) {
-    for (let k = 0; k < idx; k++) {
-      if (lines.value[k] && lines.value[k].isGap) {
-        const gapEl = container.querySelector(`[data-line="${k}"]`);
-        if (gapEl) {
-          const gapH = gapEl.offsetHeight;
-          if (gapH > 0) {
-            const style = window.getComputedStyle(gapEl);
-            const mb = parseFloat(style.marginBottom) || 0;
-            targetTop -= gapH + mb;
-          }
-        }
-      }
-    }
-  }
-
-  const target = Math.max(0, targetTop - containerH / 2 + targetH / 2);
-  npSmoothScrollTo(container, target, 650);
-}
-
-watch(activeIdx, (idx) => {
-  if (idx < 0 || idx === npLastScrolledIdx) return;
-  if (Date.now() < npUserPausedUntil) return;
-  npLastScrolledIdx = idx;
-
-  nextTick(() => npScrollToLine(idx));
+// ---- Smooth scroll (shared engine; fullscreen never pauses for user scroll)
+const { resetScrollState } = useLyricAutoScroll({
+  container: () => linesEl.value,
+  lines,
+  activeIdx,
+  scrollDuration: 650,
+  gapTargetRem: 4.5, // 3.5rem height + 1rem margin-bottom
+  trackUserScroll: false,
 });
 
 watch(
   () => [song.value?.path, lines.value],
-  () => {
-    npLastScrolledIdx = -1;
-    npUserPausedUntil = 0;
-  }
+  () => resetScrollState()
 );
 
 onMounted(() => {
@@ -212,8 +144,6 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
-  if (npRafId) cancelAnimationFrame(npRafId);
-  if (npUserScrollTimer) clearTimeout(npUserScrollTimer);
   document.removeEventListener('click', closeLosslessPopup);
 });
 
@@ -415,7 +345,7 @@ const goToAlbum = (albumName) => {
                   {{ song.artist }}
                 </span>
                 <span v-if="song.album">
-                  —
+                  â€”
                   <span
                     @click="goToAlbum(song.album)"
                     class="hover:text-[var(--accent-color)] hover:underline cursor-pointer transition-colors"
@@ -484,7 +414,7 @@ const goToAlbum = (albumName) => {
                   class="h-2 w-[13px] fill-current"
                 >
                   <path
-                    d="M8.184,0.35C9.944,0.35 10.703,3.296 11.338,5.238C11.673,3.842 11.497,3.542 11.857,3.542C11.99,3.542 12.126,3.633 12.126,3.798C12.126,3.809 12.123,3.839 12.117,3.883L12.091,4.058C12.02,4.522 11.845,5.494 11.654,6.144C13.198,10.191 14.345,4.861 14.474,3.772C14.493,3.615 14.612,3.542 14.731,3.542C14.891,3.542 15.022,3.662 14.997,3.843C14.72,5.605 14.295,8.35 12.547,8.35C11.582,8.35 11.04,7.595 10.611,6.73C9.54,4.626 9.047,1.093 7.997,1.093C7.66,1.093 7.411,1.444 7.394,1.444C7.362,1.444 7.337,1.301 7.023,0.909C7.322,0.567 7.734,0.35 8.184,0.35ZM2.458,0.354C5.211,0.354 5.456,7.618 7.014,7.618C7.197,7.618 7.394,7.507 7.61,7.256C7.729,7.458 7.851,7.638 7.978,7.796C7.667,8.151 7.28,8.35 6.795,8.35C5.054,8.349 4.306,5.434 3.663,3.466C3.511,4.097 3.432,4.669 3.402,4.925C3.382,5.088 3.263,5.163 3.143,5.163C3.009,5.163 2.874,5.071 2.874,4.908L2.874,4.908L2.877,4.87C2.966,4.223 3.146,3.243 3.347,2.56C3.079,1.858 2.745,1.091 2.252,1.091C1.257,1.091 0.687,3.591 0.527,4.925C0.508,5.088 0.388,5.163 0.268,5.163C0.135,5.163 0,5.071 0,4.908C0,4.896 0.001,4.883 0.002,4.87C0.283,2.836 0.808,0.354 2.458,0.354ZM5.315,0.35C5.809,0.35 6.339,0.608 6.797,1.211C6.822,1.241 7.078,1.639 7.159,1.777C8.277,3.802 8.818,7.627 9.881,7.627C10.065,7.627 10.264,7.513 10.484,7.256C10.604,7.458 10.726,7.638 10.852,7.796C10.542,8.15 10.155,8.35 9.67,8.35C6.933,8.349 6.636,1.09 5.128,1.09C4.788,1.09 4.536,1.444 4.519,1.444C4.487,1.444 4.462,1.301 4.148,0.909C4.455,0.558 4.87,0.35 5.315,0.35Z"
+                    :d="LOSSLESS_LOGO_PATH"
                   />
                 </svg>
                 <span>lossless</span>
@@ -509,7 +439,7 @@ const goToAlbum = (albumName) => {
                     class="h-5 w-[35px] text-white fill-current"
                   >
                     <path
-                      d="M8.184,0.35C9.944,0.35 10.703,3.296 11.338,5.238C11.673,3.842 11.497,3.542 11.857,3.542C11.99,3.542 12.126,3.633 12.126,3.798C12.126,3.809 12.123,3.839 12.117,3.883L12.091,4.058C12.02,4.522 11.845,5.494 11.654,6.144C13.198,10.191 14.345,4.861 14.474,3.772C14.493,3.615 14.612,3.542 14.731,3.542C14.891,3.542 15.022,3.662 14.997,3.843C14.72,5.605 14.295,8.35 12.547,8.35C11.582,8.35 11.04,7.595 10.611,6.73C9.54,4.626 9.047,1.093 7.997,1.093C7.66,1.093 7.411,1.444 7.394,1.444C7.362,1.444 7.337,1.301 7.023,0.909C7.322,0.567 7.734,0.35 8.184,0.35ZM2.458,0.354C5.211,0.354 5.456,7.618 7.014,7.618C7.197,7.618 7.394,7.507 7.61,7.256C7.729,7.458 7.851,7.638 7.978,7.796C7.667,8.151 7.28,8.35 6.795,8.35C5.054,8.349 4.306,5.434 3.663,3.466C3.511,4.097 3.432,4.669 3.402,4.925C3.382,5.088 3.263,5.163 3.143,5.163C3.009,5.163 2.874,5.071 2.874,4.908L2.874,4.908L2.877,4.87C2.966,4.223 3.146,3.243 3.347,2.56C3.079,1.858 2.745,1.091 2.252,1.091C1.257,1.091 0.687,3.591 0.527,4.925C0.508,5.088 0.388,5.163 0.268,5.163C0.135,5.163 0,5.071 0,4.908C0,4.896 0.001,4.883 0.002,4.87C0.283,2.836 0.808,0.354 2.458,0.354ZM5.315,0.35C5.809,0.35 6.339,0.608 6.797,1.211C6.822,1.241 7.078,1.639 7.159,1.777C8.277,3.802 8.818,7.627 9.881,7.627C10.065,7.627 10.264,7.513 10.484,7.256C10.604,7.458 10.726,7.638 10.852,7.796C10.542,8.15 10.155,8.35 9.67,8.35C6.933,8.349 6.636,1.09 5.128,1.09C4.788,1.09 4.536,1.444 4.519,1.444C4.487,1.444 4.462,1.301 4.148,0.909C4.455,0.558 4.87,0.35 5.315,0.35Z"
+                      :d="LOSSLESS_LOGO_PATH"
                     />
                   </svg>
                 </div>
@@ -709,7 +639,7 @@ const goToAlbum = (albumName) => {
             "
           >
             <!-- Loading -->
-            <div v-if="lyricsLoading" class="text-2xl font-bold text-white/40">Loading lyrics…</div>
+            <div v-if="lyricsLoading" class="text-2xl font-bold text-white/40">Loading lyricsâ€¦</div>
 
             <!-- Found -->
             <template v-else-if="lines.length">
@@ -736,19 +666,19 @@ const goToAlbum = (albumName) => {
                       :style="{
                         color: i === activeIdx ? getDotColor(line, 0) : 'rgba(255,255,255,0.2)',
                       }"
-                      >•</span
+                      >â€¢</span
                     >
                     <span
                       :style="{
                         color: i === activeIdx ? getDotColor(line, 1) : 'rgba(255,255,255,0.2)',
                       }"
-                      >•</span
+                      >â€¢</span
                     >
                     <span
                       :style="{
                         color: i === activeIdx ? getDotColor(line, 2) : 'rgba(255,255,255,0.2)',
                       }"
-                      >•</span
+                      >â€¢</span
                     >
                   </span>
                 </span>
@@ -890,10 +820,10 @@ input[type='range']::-webkit-slider-thumb {
 /* Word-by-word (karaoke) lines drive their brightness with the gradient wipe, so
    entering the active state must NOT also ride the slow opacity ramp: transitioning
    opacity up from 0.28 while the dim (unsung, 34%) fill is shown would dip the text
-   dark before brightening — the "dark flash". A CSS transition is governed by the
+   dark before brightening â€” the "dark flash". A CSS transition is governed by the
    *destination* state, so we strip opacity only on the active state (snap in, no
    dip). The base .np-line keeps opacity in its transition, so leaving active
-   (→ .np-line-dim) still fades the finished line out. */
+   (â†’ .np-line-dim) still fades the finished line out. */
 .np-line.np-words.np-line-active {
   transition:
     color 0.45s cubic-bezier(0.25, 1, 0.5, 1),

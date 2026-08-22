@@ -55,7 +55,7 @@ fn collect_track_page(
     Ok((tracks, next_cursor))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_tracks_page(
     db: State<Db>,
     sort_by: String,
@@ -135,7 +135,7 @@ pub fn db_tracks_page(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_search(db: State<Db>, query: String, limit: i64) -> Result<Vec<MusicTrack>, String> {
     limits::validate_text(&query, "Search query", 512)?;
     if !(1..=100).contains(&limit) {
@@ -177,7 +177,7 @@ fn like_prefix(input: &str) -> String {
 
 /// One bounded command-palette search. Each category is ranked natively and
 /// capped before it crosses IPC; request_id lets the webview reject stale work.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_global_search(
     db: State<Db>,
     query: String,
@@ -388,7 +388,7 @@ fn global_search(
 
 // Hydrate a list of paths into full track objects, preserving input order (used
 // to rebuild the play queue and playlist views from stored paths).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_tracks_by_paths(db: State<Db>, paths: Vec<String>) -> Result<Vec<MusicTrack>, String> {
     tracks_by_paths(db.inner(), &paths)
 }
@@ -417,7 +417,7 @@ pub(crate) fn tracks_by_paths(db: &Db, paths: &[String]) -> Result<Vec<MusicTrac
         .collect())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_track(db: State<Db>, path: String) -> Result<Option<MusicTrack>, String> {
     let conn = db.read();
     let sql = format!("SELECT {TRACK_COLS} FROM tracks WHERE path = ?1");
@@ -425,7 +425,7 @@ pub fn db_track(db: State<Db>, path: String) -> Result<Option<MusicTrack>, Strin
     Ok(tracks.pop())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_random_track(
     db: State<Db>,
     exclude: Option<String>,
@@ -436,7 +436,7 @@ pub fn db_random_track(
 
 /// Select uniformly from a caller's current result set without using webview
 /// randomness. Only the chosen track is hydrated from SQLite.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_random_track_from_paths(
     db: State<Db>,
     paths: Vec<String>,
@@ -471,7 +471,7 @@ pub fn db_random_track_from_paths(
 /// queue history, then favors related genre/artist/album and long-unplayed
 /// tracks. This keeps policy and randomness out of the webview without loading
 /// the whole library into memory.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_auto_dj_next(
     db: State<Db>,
     current_path: Option<String>,
@@ -606,7 +606,7 @@ fn random_track(conn: &Connection, exclude: &str) -> Result<Option<MusicTrack>, 
 
 // ---- Albums / artists / genres ---------------------------------------------
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_albums(db: State<Db>, search: Option<String>) -> Result<Vec<AlbumRow>, String> {
     let conn = db.read();
     let like = search
@@ -641,7 +641,7 @@ pub fn db_albums(db: State<Db>, search: Option<String>) -> Result<Vec<AlbumRow>,
     Ok(out)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_album_tracks(db: State<Db>, album: String) -> Result<Vec<MusicTrack>, String> {
     let conn = db.read();
     let sql = format!(
@@ -650,7 +650,7 @@ pub fn db_album_tracks(db: State<Db>, album: String) -> Result<Vec<MusicTrack>, 
     collect_tracks(&conn, &sql, params![album])
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_artists(db: State<Db>, search: Option<String>) -> Result<Vec<ArtistRow>, String> {
     let conn = db.read();
     let like = search
@@ -684,7 +684,7 @@ pub fn db_artists(db: State<Db>, search: Option<String>) -> Result<Vec<ArtistRow
     Ok(out)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_artist_tracks(db: State<Db>, artist: String) -> Result<Vec<MusicTrack>, String> {
     let conn = db.read();
     let sql = format!(
@@ -773,7 +773,7 @@ fn station_next(db: &Db, session_id: String, limit: usize) -> Result<StationBatc
 
 /// Build only a shuffled integer-ID plan in Rust, then hydrate the first small
 /// window. Full track metadata never crosses IPC all at once.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_station_start(
     db: State<Db>,
     kind: String,
@@ -822,7 +822,7 @@ fn station_start(db: &Db, kind: &str, key: &str, limit: usize) -> Result<Station
     station_next(db, session_id, limit)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_station_next(
     db: State<Db>,
     session_id: String,
@@ -834,7 +834,7 @@ pub fn db_station_next(
 
 // Whether any track carries a non-empty genre (drives the smart-playlist editor's
 // "genre needs reindex" hint).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_has_genre(db: State<Db>) -> Result<bool, String> {
     let conn = db.read();
     conn.query_row(
@@ -847,7 +847,7 @@ pub fn db_has_genre(db: State<Db>) -> Result<bool, String> {
 
 // Evaluate ad-hoc smart-playlist rules (used by the editor's live preview before
 // the playlist is saved). Same engine as db_playlist_tracks for saved ones.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_smart_tracks(
     db: State<Db>,
     rules: Value,
@@ -887,7 +887,7 @@ pub fn db_smart_tracks(
 
 /// Count an ad-hoc smart-playlist preview entirely in SQLite. This mirrors
 /// db_smart_tracks' rule and limit semantics without materializing track rows.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_smart_count(db: State<Db>, rules: Value, limit: Option<i64>) -> Result<i64, String> {
     limits::validate_json(
         &rules,

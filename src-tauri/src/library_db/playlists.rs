@@ -21,7 +21,7 @@ type SmartPlaylistDefinition = (
 
 // ---- Favorites --------------------------------------------------------------
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_favorite_paths(db: State<Db>) -> Result<Vec<String>, String> {
     let conn = db.read();
     let mut stmt = conn
@@ -36,7 +36,7 @@ pub fn db_favorite_paths(db: State<Db>) -> Result<Vec<String>, String> {
     Ok(rows.filter_map(|r| r.ok()).collect())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_favorites(db: State<Db>) -> Result<Vec<MusicTrack>, String> {
     let conn = db.read();
     let sql = format!(
@@ -46,7 +46,7 @@ pub fn db_favorites(db: State<Db>) -> Result<Vec<MusicTrack>, String> {
 }
 
 // Toggle favorite; returns the new state (true = now favorited).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_toggle_favorite(db: State<Db>, path: String) -> Result<bool, String> {
     let conn = db.0.lock();
     let exists: bool = conn
@@ -81,7 +81,7 @@ pub fn db_toggle_favorite(db: State<Db>, path: String) -> Result<bool, String> {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_move_favorite(db: State<Db>, from: i64, to: i64) -> Result<(), String> {
     let mut conn = db.0.lock();
     let mut track_ids: Vec<i64> = {
@@ -150,7 +150,7 @@ fn read_playlists(conn: &Connection) -> Result<Vec<PlaylistRow>, String> {
     Ok(out)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_playlists(db: State<Db>) -> Result<Vec<PlaylistRow>, String> {
     let conn = db.read();
     let mut rows = read_playlists(&conn)?;
@@ -181,7 +181,7 @@ pub fn db_playlists(db: State<Db>) -> Result<Vec<PlaylistRow>, String> {
 }
 
 // Normal playlist → its items in order; smart playlist → evaluated rules.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_playlist_tracks(db: State<Db>, id: String) -> Result<Vec<MusicTrack>, String> {
     let conn = db.read();
     let smart: Option<SmartPlaylistDefinition> = conn
@@ -213,7 +213,7 @@ pub fn db_playlist_tracks(db: State<Db>, id: String) -> Result<Vec<MusicTrack>, 
     collect_tracks(&conn, &sql, params![id])
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 #[allow(clippy::too_many_arguments)]
 pub fn db_upsert_playlist(
     db: State<Db>,
@@ -307,7 +307,7 @@ pub fn db_upsert_playlist(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_delete_playlist(
     db: State<Db>,
     consent: State<crate::security::DestructiveConsentState>,
@@ -333,7 +333,7 @@ pub fn db_delete_playlist(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_move_playlist_order(db: State<Db>, from: i64, to: i64) -> Result<(), String> {
     let mut conn = db.0.lock();
     let mut ids: Vec<String> = {
@@ -363,7 +363,7 @@ pub fn db_move_playlist_order(db: State<Db>, from: i64, to: i64) -> Result<(), S
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_playlist_add(db: State<Db>, id: String, paths: Vec<String>) -> Result<(), String> {
     limits::validate_text(&id, "Playlist ID", 128)?;
     limits::validate_paths(&paths, limits::MAX_BATCH_PATHS)?;
@@ -392,7 +392,7 @@ pub fn db_playlist_add(db: State<Db>, id: String, paths: Vec<String>) -> Result<
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_playlist_remove(db: State<Db>, id: String, path: String) -> Result<(), String> {
     limits::validate_text(&id, "Playlist ID", 128)?;
     limits::validate_text(&path, "Track path", limits::MAX_PATH_BYTES)?;
@@ -407,7 +407,7 @@ pub fn db_playlist_remove(db: State<Db>, id: String, path: String) -> Result<(),
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_playlist_move_item(db: State<Db>, id: String, from: i64, to: i64) -> Result<(), String> {
     limits::validate_text(&id, "Playlist ID", 128)?;
     let mut conn = db.0.lock();
@@ -440,7 +440,7 @@ pub fn db_playlist_move_item(db: State<Db>, id: String, from: i64, to: i64) -> R
 
 // ---- Recents ----------------------------------------------------------------
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_recents(db: State<Db>) -> Result<Vec<RecentRow>, String> {
     let conn = db.read();
     let mut stmt = conn
@@ -462,7 +462,7 @@ pub fn db_recents(db: State<Db>) -> Result<Vec<RecentRow>, String> {
     Ok(out)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_record_recent(db: State<Db>, kind: String, key: String) -> Result<(), String> {
     let conn = db.0.lock();
     conn.execute(

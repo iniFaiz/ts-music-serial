@@ -1,4 +1,4 @@
-<script setup>
+﻿<script setup>
 import { ref, watch, onMounted, onUnmounted, computed } from 'vue';
 import { store } from '../store';
 import { invokeCommand as invoke } from '../generated/ipc';
@@ -11,6 +11,7 @@ import { navigateWithTransition } from '../viewTransition';
 import { loadWaveform, getCachedWaveform } from '../waveformCache';
 import MarqueeText from './MarqueeText.vue';
 import { createNyanCatSeekStyle } from '../nyancatTheme';
+import { LOSSLESS_LOGO_PATH } from '../losslessLogo';
 
 const router = useRouter();
 const playerCoverRef = ref(null);
@@ -212,7 +213,7 @@ async function applyNormalization(song) {
       enabled,
     });
   } catch {
-    // ignore — normalization is best-effort
+    // ignore â€” normalization is best-effort
   }
   // No tag gain: compute loudness in the background, then re-apply if still current.
   if (enabled && gain == null) {
@@ -361,7 +362,7 @@ const applyPlayerTelemetry = async (status) => {
 
 // Smoothly advance the visible position between 8 Hz telemetry snapshots. Each
 // backend event snaps currentTime to native truth and corrects any drift. The
-// loop only reschedules itself while a track is actively playing — once
+// loop only reschedules itself while a track is actively playing â€” once
 // paused/stopped/buffering it stops instead of spinning at ~60fps forever, and
 // the watcher below restarts it when playback resumes.
 let rafId = null;
@@ -420,7 +421,7 @@ onMounted(async () => {
   try {
     unlistenMedia = await listen('media-control', (e) => handleMediaControl(e.payload));
   } catch {
-    // ignore — media controls are best-effort
+    // ignore â€” media controls are best-effort
   }
 
   try {
@@ -692,7 +693,7 @@ const formatTime = (seconds) => {
                     class="h-2.5 w-[17px] fill-current"
                   >
                     <path
-                      d="M8.184,0.35C9.944,0.35 10.703,3.296 11.338,5.238C11.673,3.842 11.497,3.542 11.857,3.542C11.99,3.542 12.126,3.633 12.126,3.798C12.126,3.809 12.123,3.839 12.117,3.883L12.091,4.058C12.02,4.522 11.845,5.494 11.654,6.144C13.198,10.191 14.345,4.861 14.474,3.772C14.493,3.615 14.612,3.542 14.731,3.542C14.891,3.542 15.022,3.662 14.997,3.843C14.72,5.605 14.295,8.35 12.547,8.35C11.582,8.35 11.04,7.595 10.611,6.73C9.54,4.626 9.047,1.093 7.997,1.093C7.66,1.093 7.411,1.444 7.394,1.444C7.362,1.444 7.337,1.301 7.023,0.909C7.322,0.567 7.734,0.35 8.184,0.35ZM2.458,0.354C5.211,0.354 5.456,7.618 7.014,7.618C7.197,7.618 7.394,7.507 7.61,7.256C7.729,7.458 7.851,7.638 7.978,7.796C7.667,8.151 7.28,8.35 6.795,8.35C5.054,8.349 4.306,5.434 3.663,3.466C3.511,4.097 3.432,4.669 3.402,4.925C3.382,5.088 3.263,5.163 3.143,5.163C3.009,5.163 2.874,5.071 2.874,4.908L2.874,4.908L2.877,4.87C2.966,4.223 3.146,3.243 3.347,2.56C3.079,1.858 2.745,1.091 2.252,1.091C1.257,1.091 0.687,3.591 0.527,4.925C0.508,5.088 0.388,5.163 0.268,5.163C0.135,5.163 0,5.071 0,4.908C0,4.896 0.001,4.883 0.002,4.87C0.283,2.836 0.808,0.354 2.458,0.354ZM5.315,0.35C5.809,0.35 6.339,0.608 6.797,1.211C6.822,1.241 7.078,1.639 7.159,1.777C8.277,3.802 8.818,7.627 9.881,7.627C10.065,7.627 10.264,7.513 10.484,7.256C10.604,7.458 10.726,7.638 10.852,7.796C10.542,8.15 10.155,8.35 9.67,8.35C6.933,8.349 6.636,1.09 5.128,1.09C4.788,1.09 4.536,1.444 4.519,1.444C4.487,1.444 4.462,1.301 4.148,0.909C4.455,0.558 4.87,0.35 5.315,0.35Z"
+                      :d="LOSSLESS_LOGO_PATH"
                     />
                   </svg>
                 </button>
@@ -716,7 +717,7 @@ const formatTime = (seconds) => {
                       class="h-5 w-[35px] text-white fill-current"
                     >
                       <path
-                        d="M8.184,0.35C9.944,0.35 10.703,3.296 11.338,5.238C11.673,3.842 11.497,3.542 11.857,3.542C11.99,3.542 12.126,3.633 12.126,3.798C12.126,3.809 12.123,3.839 12.117,3.883L12.091,4.058C12.02,4.522 11.845,5.494 11.654,6.144C13.198,10.191 14.345,4.861 14.474,3.772C14.493,3.615 14.612,3.542 14.731,3.542C14.891,3.542 15.022,3.662 14.997,3.843C14.72,5.605 14.295,8.35 12.547,8.35C11.582,8.35 11.04,7.595 10.611,6.73C9.54,4.626 9.047,1.093 7.997,1.093C7.66,1.093 7.411,1.444 7.394,1.444C7.362,1.444 7.337,1.301 7.023,0.909C7.322,0.567 7.734,0.35 8.184,0.35ZM2.458,0.354C5.211,0.354 5.456,7.618 7.014,7.618C7.197,7.618 7.394,7.507 7.61,7.256C7.729,7.458 7.851,7.638 7.978,7.796C7.667,8.151 7.28,8.35 6.795,8.35C5.054,8.349 4.306,5.434 3.663,3.466C3.511,4.097 3.432,4.669 3.402,4.925C3.382,5.088 3.263,5.163 3.143,5.163C3.009,5.163 2.874,5.071 2.874,4.908L2.874,4.908L2.877,4.87C2.966,4.223 3.146,3.243 3.347,2.56C3.079,1.858 2.745,1.091 2.252,1.091C1.257,1.091 0.687,3.591 0.527,4.925C0.508,5.088 0.388,5.163 0.268,5.163C0.135,5.163 0,5.071 0,4.908C0,4.896 0.001,4.883 0.002,4.87C0.283,2.836 0.808,0.354 2.458,0.354ZM5.315,0.35C5.809,0.35 6.339,0.608 6.797,1.211C6.822,1.241 7.078,1.639 7.159,1.777C8.277,3.802 8.818,7.627 9.881,7.627C10.065,7.627 10.264,7.513 10.484,7.256C10.604,7.458 10.726,7.638 10.852,7.796C10.542,8.15 10.155,8.35 9.67,8.35C6.933,8.349 6.636,1.09 5.128,1.09C4.788,1.09 4.536,1.444 4.519,1.444C4.487,1.444 4.462,1.301 4.148,0.909C4.455,0.558 4.87,0.35 5.315,0.35Z"
+                        :d="LOSSLESS_LOGO_PATH"
                       />
                     </svg>
                   </div>
@@ -880,7 +881,7 @@ const formatTime = (seconds) => {
           </svg>
         </button>
 
-        <!-- Queue toggle (with an ∞ badge when unlimited autoplay is on) -->
+        <!-- Queue toggle (with an âˆž badge when unlimited autoplay is on) -->
         <button
           @click="
             store.lyricsPanelOpen = false;
@@ -1029,8 +1030,8 @@ const formatTime = (seconds) => {
 </template>
 
 <style scoped>
-/* Waveform ↔ slider cross-fade when the seek bar is toggled. The seek track has
-   a fixed height, so only opacity changes — the bars also rise from the baseline
+/* Waveform â†” slider cross-fade when the seek bar is toggled. The seek track has
+   a fixed height, so only opacity changes â€” the bars also rise from the baseline
    in JS (see WaveformSeekbar) for a lively toggle-on. */
 .wf-fade-enter-active,
 .wf-fade-leave-active {

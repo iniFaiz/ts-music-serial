@@ -951,17 +951,52 @@ pub(crate) fn upsert_tracks(db: &Db, tracks: Vec<MusicTrack>) -> Result<usize, S
 }
 
 fn upsert_tracks_with_options(db: &Db, tracks: Vec<MusicTrack>) -> Result<usize, String> {
-    // The scanner only passes new or signature-changed files. Hashing reads
-    // ~128 KiB per file, so it runs in parallel and outside the connection lock.
-    let need_fp: Vec<String> = tracks.iter().map(|track| track.path.clone()).collect();
-    let fps: HashMap<String, String> = need_fp
-        .into_par_iter()
-        .map(|p| {
-            // '' records an attempted but unreadable fingerprint.
-            let fp = crate::compute_fingerprint(Path::new(&p)).unwrap_or_default();
-            (p, fp)
-        })
-        .collect();
+    // A fingerprint depends only on decoded audio content, so a row whose cheap
+    // filesystem signature (size + mtime + file id) still matches keeps the
+    // hash it already stores instead of paying another ~128 KiB read per file.
+    // The native scanner pre-filters unchanged paths, but playlist/M3U imports
+    // and legacy migrations re-pass already-indexed tracks in bulk. Genuinely
+    // new or signature-changed files hash in parallel, outside the write lock;
+    // an empty stored hash always retries so past IO failures self-heal.
+    let mut fps: HashMap<String, String> = HashMap::new();
+    let mut stale: Vec<String> = Vec::new();
+    {
+        let conn = db.0.lock();
+        let mut known = conn
+            .prepare("SELECT fingerprint, file_size, mtime_ns, file_id FROM tracks WHERE path = ?1")
+            .map_err(|e| e.to_string())?;
+        for t in &tracks {
+            let row = known
+                .query_row(
+                    params![t.path],
+                    |row| {
+                        Ok((
+                            row.get::<_, Option<String>>(0)?,
+                            row.get::<_, i64>(1)?,
+                            row.get::<_, i64>(2)?,
+                            row.get::<_, Option<String>>(3)?,
+                        ))
+                    },
+                )
+                .ok();
+            if let Some((Some(fp), size, mtime, file_id)) = row {
+                if !fp.is_empty()
+                    && size == t.file_size.min(i64::MAX as u64) as i64
+                    && mtime == t.mtime_ns
+                    && file_id.as_ref() == t.file_id.as_ref()
+                {
+                    fps.insert(t.path.clone(), fp);
+                    continue;
+                }
+            }
+            stale.push(t.path.clone());
+        }
+    }
+    fps.par_extend(stale.into_par_iter().map(|p| {
+        // '' records an attempted but unreadable fingerprint.
+        let fp = crate::compute_fingerprint(Path::new(&p)).unwrap_or_default();
+        (p, fp)
+    }));
 
     let mut conn = db.0.lock();
     let tx = conn.transaction().map_err(|e| e.to_string())?;
@@ -1061,7 +1096,7 @@ pub(crate) fn remove_paths(db: &Db, paths: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_remove_paths(
     app: AppHandle,
     db: State<Db>,
@@ -1433,7 +1468,7 @@ pub fn db_remove_under_root(db: State<Db>, root: String) -> Result<Vec<String>, 
     Ok(removed)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_count(db: State<Db>) -> Result<i64, String> {
     let conn = db.read();
     conn.query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0))
@@ -1442,7 +1477,7 @@ pub fn db_count(db: State<Db>) -> Result<i64, String> {
 
 // Wipe the entire library (tracks, stats, favorites, playlists, roots, recents).
 // Settings/playback in `kv` are left intact.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_reset(
     db: State<Db>,
     consent: State<security::DestructiveConsentState>,
@@ -1465,7 +1500,7 @@ pub fn db_reset(
 
 // ---- Roots ------------------------------------------------------------------
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_roots(db: State<Db>) -> Result<Vec<String>, String> {
     roots(db.inner())
 }
@@ -1526,7 +1561,7 @@ pub(crate) mod playlists;
 
 // ---- Key/value (settings + playback state) ---------------------------------
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_kv_get(db: State<Db>, key: String) -> Result<Option<Value>, String> {
     if !matches!(key.as_str(), "settings" | "playback") {
         return Err("Unsupported settings key".to_string());
@@ -1542,7 +1577,7 @@ pub(crate) fn kv_get(db: &Db, key: &str) -> Result<Option<Value>, String> {
     Ok(raw.and_then(|s| serde_json::from_str(&s).ok()))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_kv_set(db: State<Db>, key: String, value: Value) -> Result<(), String> {
     if !matches!(key.as_str(), "settings" | "playback") {
         return Err("Unsupported settings key".to_string());
@@ -1568,7 +1603,7 @@ pub(crate) mod backup;
 // Seed the database from the old IndexedDB state. Called once by the frontend
 // when the DB is empty but legacy IndexedDB data exists. `state` is the old
 // `app_state` object (favorites/playlists/stats/recents/settings/playback).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_import(
     db: State<Db>,
     tracks: Vec<MusicTrack>,

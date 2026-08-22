@@ -1,8 +1,9 @@
 <script setup>
-import { ref, computed, watch, nextTick, onUnmounted } from 'vue';
+import { ref, computed, watch } from 'vue';
 import { store } from '../store';
 import { activeLineIndex, processLyricLines } from '../lyricsCache';
 import { useTrackLyrics } from '../useTrackLyrics';
+import { useLyricAutoScroll } from '../useLyricAutoScroll';
 import LyricContent from './LyricContent.vue';
 
 const { lyrics, lyricsLoading, fetchLyrics } = useTrackLyrics({
@@ -59,118 +60,23 @@ function getDotColor(line, dotIdx) {
   return `rgba(255, 255, 255, ${opacity.toFixed(3)})`;
 }
 
-// ---- Smooth scroll --------------------------------------------------------
+// ---- Smooth scroll (shared engine) ----------------------------------------
 
 const scrollRef = ref(null);
-let rafId = null;
-let isAutoScrolling = false; // true while our RAF animation is running
-let userPausedUntil = 0; // epoch ms — ignore auto-scroll until this time
-let userScrollTimer = null;
-let lastScrolledIdx = -1;
 
-// easeInOutQuart — slow start, fast middle, slow end
-function easeInOutQuart(t) {
-  return t < 0.5 ? 8 * t * t * t * t : 1 - Math.pow(-2 * t + 2, 4) / 2;
-}
-
-function smoothScrollTo(container, targetTop, duration = 550) {
-  if (rafId) cancelAnimationFrame(rafId);
-
-  const start = container.scrollTop;
-  const delta = targetTop - start;
-  if (Math.abs(delta) < 2) return;
-
-  const t0 = performance.now();
-  isAutoScrolling = true;
-
-  function step(now) {
-    const elapsed = now - t0;
-    const progress = Math.min(elapsed / duration, 1);
-    container.scrollTop = start + delta * easeInOutQuart(progress);
-    if (progress < 1) {
-      rafId = requestAnimationFrame(step);
-    } else {
-      rafId = null;
-      // Short grace period so the scroll-end event doesn't flip the flag yet
-      setTimeout(() => {
-        isAutoScrolling = false;
-      }, 80);
-    }
-  }
-
-  rafId = requestAnimationFrame(step);
-}
-
-function scrollToLine(idx) {
-  const container = scrollRef.value;
-  if (!container) return;
-
-  const el = container.querySelector(`[data-line="${idx}"]`);
-  if (!el) return;
-
-  const containerH = container.clientHeight;
-  const currentLine = panelLines.value[idx];
-
-  let targetTop = el.offsetTop;
-  let targetH = el.offsetHeight;
-
-  if (currentLine && currentLine.isGap) {
-    const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
-    targetH = 2.2 * rem;
-  } else if (idx > 0) {
-    for (let k = 0; k < idx; k++) {
-      if (panelLines.value[k] && panelLines.value[k].isGap) {
-        const gapEl = container.querySelector(`[data-line="${k}"]`);
-        if (gapEl) {
-          const gapH = gapEl.offsetHeight;
-          if (gapH > 0) {
-            const style = window.getComputedStyle(gapEl);
-            const mb = parseFloat(style.marginBottom) || 0;
-            targetTop -= gapH + mb;
-          }
-        }
-      }
-    }
-  }
-
-  // Center the active line vertically inside the scroll area
-  const target = Math.max(0, targetTop - containerH / 2 + targetH / 2);
-  smoothScrollTo(container, target, 600);
-}
-
-// Pause auto-scroll for 3 s when the user manually scrolls
-function onScroll() {
-  if (isAutoScrolling) return;
-  userPausedUntil = Date.now() + 3000;
-  if (userScrollTimer) clearTimeout(userScrollTimer);
-  userScrollTimer = setTimeout(() => {
-    userPausedUntil = 0;
-  }, 3100);
-}
-
-// Trigger scroll whenever the active line changes
-watch(activeIdx, async (idx) => {
-  if (idx < 0 || idx === lastScrolledIdx) return;
-  if (Date.now() < userPausedUntil) return; // user is in control
-  lastScrolledIdx = idx;
-
-  await nextTick();
-  scrollToLine(idx);
+const { resetScrollState, onUserScroll } = useLyricAutoScroll({
+  container: () => scrollRef.value,
+  lines: panelLines,
+  activeIdx,
+  scrollDuration: 600,
+  gapTargetRem: 2.2,
 });
 
 // Reset scroll state on song/lyrics change
 watch(
   () => [store.currentSong?.path, lyrics.value],
-  () => {
-    lastScrolledIdx = -1;
-    userPausedUntil = 0;
-  }
+  () => resetScrollState()
 );
-
-onUnmounted(() => {
-  if (rafId) cancelAnimationFrame(rafId);
-  if (userScrollTimer) clearTimeout(userScrollTimer);
-});
 
 // ---- Seek on click -------------------------------------------------------
 
@@ -217,7 +123,7 @@ function seekToLine(line) {
       <div
         ref="scrollRef"
         class="flex-1 overflow-y-auto px-5 lyrics-scroll"
-        @scroll.passive="onScroll"
+        @scroll.passive="onUserScroll"
       >
         <!-- Loading -->
         <div v-if="lyricsState === 'loading'" class="flex items-center justify-center h-full">

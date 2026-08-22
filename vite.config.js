@@ -7,6 +7,26 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(async () => ({
   plugins: [vue()],
 
+  build: {
+    rollupOptions: {
+      output: {
+        // The framework/runtime is stable across releases — keep it in its own
+        // chunk so app code changes never invalidate it and the WebView can
+        // cache/parse it independently of route chunks. (Function form is
+        // required — Vite 8 bundles Rolldown, which rejects the object form.)
+        manualChunks(id) {
+          if (/[\\/]node_modules[\\/](vue|vue-router|@vue)[\\/]/.test(id)) {
+            return "vue";
+          }
+          return undefined;
+        },
+      },
+    },
+    // Budget guard: a chunk growing past this warns at build time so bloat is
+    // caught before it ships inside the desktop bundle.
+    chunkSizeWarningLimit: 500,
+  },
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors
