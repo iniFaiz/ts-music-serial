@@ -774,9 +774,10 @@ const transitionOptions = [
   { value: 'crossfade', label: 'Crossfade' },
 ];
 
-// Reference list mirroring the handler in App.vue (handleKeydown).
+// Human-readable shortcut reference for the handler in src/useGlobalShortcuts.js
+// (handleKeydown). Kept in sync manually — update both when changing shortcuts.
 const shortcuts = [
-  { keys: ['Space'], label: 'Play / pause' },
+  { keys: ['Space', 'K'], label: 'Play / pause' },
   { keys: ['Ctrl', '←'], label: 'Previous track' },
   { keys: ['Ctrl', '→'], label: 'Next track' },
   { keys: ['←'], label: 'Seek back 5s' },
@@ -785,6 +786,8 @@ const shortcuts = [
   { keys: ['Shift', '→'], label: 'Seek forward 10s' },
   { keys: ['↑'], label: 'Volume up' },
   { keys: ['↓'], label: 'Volume down' },
+  { keys: ['Shift', '↑'], label: 'Volume up (large step)' },
+  { keys: ['Shift', '↓'], label: 'Volume down (large step)' },
   { keys: ['0 – 9'], label: 'Jump to 0–90%' },
   { keys: ['Home'], label: 'Restart track' },
   { keys: ['M'], label: 'Mute / unmute' },
@@ -792,6 +795,7 @@ const shortcuts = [
   { keys: ['R'], label: 'Repeat mode' },
   { keys: ['L'], label: 'Like current track' },
   { keys: ['Ctrl', 'K'], label: 'Command palette' },
+  { keys: ['Esc'], label: 'Close palette / mini / fullscreen' },
   { keys: ['Ctrl', 'Shift', 'F'], label: 'Fullscreen player' },
   { keys: ['Ctrl', 'Shift', 'M'], label: 'Mini player' },
 ];

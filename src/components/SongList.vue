@@ -8,6 +8,7 @@ import { invalidateCover } from '../coverCache';
 import { requestDestructiveConsent } from '../destructiveConsent';
 import CoverImage from './CoverImage.vue';
 import { navigateWithTransition } from '../viewTransition';
+import { useThresholdReorder } from '../useThresholdReorder';
 
 const props = defineProps({
   songs: { type: Array, required: true },
@@ -239,91 +240,27 @@ const isCurrentSong = (song) => {
   return store.currentSong && store.currentSong.path === song.path;
 };
 
-// ---- Pointer-event based drag-to-reorder (playlist only) ----
-// Uses a movement threshold so clicks (play) vs drags (reorder) are distinct.
-const plDragIndex = ref(-1);
-const plOverIndex = ref(-1);
-const plDragActive = ref(false); // true once threshold exceeded
+// ---- Pointer-event based drag-to-reorder (playlist/favorites only) ----
+// Click-vs-drag handling lives in useThresholdReorder (shared with the
+// sidebar playlist rail).
 const songListContainer = ref(null);
-let plStartY = 0;
-let plPendingIndex = -1;
-const PL_DRAG_THRESHOLD = 5; // px of vertical movement to start drag
-let plDragDidReorder = false;
-
-const getRowIndexFromY = (clientY) => {
-  if (!songListContainer.value) return -1;
-  const rows = songListContainer.value.querySelectorAll('[data-pl-drag-idx]');
-  for (const row of rows) {
-    const rect = row.getBoundingClientRect();
-    if (clientY >= rect.top && clientY <= rect.bottom) {
-      return parseInt(row.dataset.plDragIdx, 10);
-    }
-  }
-  if (rows.length > 0) {
-    const firstRect = rows[0].getBoundingClientRect();
-    if (clientY < firstRect.top) return 0;
-    const lastRect = rows[rows.length - 1].getBoundingClientRect();
-    if (clientY > lastRect.bottom) return rows.length - 1;
-  }
-  return -1;
-};
-
-const onPlMouseMove = (e) => {
-  if (plPendingIndex === -1) return;
-  const dy = Math.abs(e.clientY - plStartY);
-  // Activate drag once threshold is exceeded
-  if (!plDragActive.value && dy >= PL_DRAG_THRESHOLD) {
-    plDragActive.value = true;
-    plDragIndex.value = plPendingIndex;
-    plOverIndex.value = plPendingIndex;
-    document.body.style.userSelect = 'none';
-    document.body.style.cursor = 'grabbing';
-  }
-  if (plDragActive.value) {
-    e.preventDefault();
-    const idx = getRowIndexFromY(e.clientY);
-    if (idx !== -1) plOverIndex.value = idx;
-  }
-};
-
-const onPlMouseUp = () => {
-  if (
-    plDragActive.value &&
-    plDragIndex.value !== -1 &&
-    plOverIndex.value !== -1 &&
-    plDragIndex.value !== plOverIndex.value
-  ) {
+const {
+  dragIndex: plDragIndex,
+  overIndex: plOverIndex,
+  dragDidReorder: plDragDidReorder,
+  onRowMouseDown: onPlRowMouseDown,
+} = useThresholdReorder({
+  container: () => songListContainer.value,
+  rowAttribute: 'plDragIdx',
+  ignoredSelector: 'button, input',
+  move: (from, to) => {
     if (props.isFavorites) {
-      store.runMutation(() => store.moveInFavorites(plDragIndex.value, plOverIndex.value));
+      store.runMutation(() => store.moveInFavorites(from, to));
     } else {
-      store.runMutation(() =>
-        store.moveInPlaylist(props.playlistId, plDragIndex.value, plOverIndex.value)
-      );
+      store.runMutation(() => store.moveInPlaylist(props.playlistId, from, to));
     }
-    plDragDidReorder = true;
-  }
-  plDragIndex.value = -1;
-  plOverIndex.value = -1;
-  plDragActive.value = false;
-  plPendingIndex = -1;
-  document.removeEventListener('mousemove', onPlMouseMove);
-  document.removeEventListener('mouseup', onPlMouseUp);
-  document.body.style.userSelect = '';
-  document.body.style.cursor = '';
-  setTimeout(() => {
-    plDragDidReorder = false;
-  }, 50);
-};
-
-const onPlRowMouseDown = (index, e) => {
-  // Don't initiate drag from buttons or interactive elements
-  if (e.target.closest('button') || e.target.closest('input')) return;
-  plPendingIndex = index;
-  plStartY = e.clientY;
-  plDragDidReorder = false;
-  document.addEventListener('mousemove', onPlMouseMove);
-  document.addEventListener('mouseup', onPlMouseUp);
-};
+  },
+});
 
 const formatDuration = (seconds) => {
   const m = Math.floor(seconds / 60);
@@ -827,11 +764,6 @@ onUnmounted(() => {
   }
   window.removeEventListener('resize', onScrollOrResize);
   hideTooltip();
-  // Cleanup playlist drag listeners
-  document.removeEventListener('mousemove', onPlMouseMove);
-  document.removeEventListener('mouseup', onPlMouseUp);
-  document.body.style.userSelect = '';
-  document.body.style.cursor = '';
 });
 </script>
 

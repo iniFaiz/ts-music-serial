@@ -1,6 +1,6 @@
 ﻿<script setup>
-// Shared "Lossless" badge + details popover, matching the one in PlayerControls
-// and FullScreenPlayer. Click toggles a popover showing the codec/bit-depth/rate.
+// Shared "Lossless" badge + details popover used by the mini player, fullscreen
+// player and player bar. Click toggles a popover showing codec/bit-depth/rate.
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { store } from '../store';
 import { LOSSLESS_LOGO_PATH } from '../losslessLogo';
@@ -8,6 +8,8 @@ import { LOSSLESS_LOGO_PATH } from '../losslessLogo';
 defineProps({
   // Where the popover opens relative to the badge: 'up' (above) or 'down' (below).
   placement: { type: String, default: 'up' },
+  // Compact icon-only variant used in the player bar.
+  iconOnly: { type: Boolean, default: false },
 });
 
 const open = ref(false);
@@ -43,22 +45,24 @@ onUnmounted(() => document.removeEventListener('click', close));
 </script>
 
 <template>
-  <div v-if="isLossless" class="relative inline-flex">
+  <div v-if="isLossless" :class="iconOnly ? 'relative shrink-0' : 'relative inline-flex'">
     <button
       @click.stop="open = !open"
-      class="flex items-center gap-1 px-1.5 py-0.5 rounded bg-white/10 hover:bg-white/15 transition-colors border border-white/10 text-white/70 hover:text-white text-[9px] font-bold uppercase tracking-wider select-none focus:outline-none leading-none"
+      :class="
+        iconOnly
+          ? 'flex shrink-0 items-center justify-center text-gray-500 hover:text-gray-300 transition-colors focus:outline-none'
+          : 'flex items-center gap-1 px-1.5 py-0.5 rounded bg-white/10 hover:bg-white/15 transition-colors border border-white/10 text-white/70 hover:text-white text-[9px] font-bold uppercase tracking-wider select-none focus:outline-none leading-none'
+      "
       title="Lossless Audio"
     >
       <svg
         xmlns="http://www.w3.org/2000/svg"
         viewBox="0 0 15 9"
-        class="block h-2 w-[13px] fill-current shrink-0"
+        :class="iconOnly ? 'h-2.5 w-[17px] fill-current' : 'block h-2 w-[13px] fill-current shrink-0'"
       >
-        <path
-          :d="LOSSLESS_LOGO_PATH"
-        />
+        <path :d="LOSSLESS_LOGO_PATH" />
       </svg>
-      <span class="leading-none">Lossless</span>
+      <span v-if="!iconOnly" class="leading-none">Lossless</span>
     </button>
 
     <div

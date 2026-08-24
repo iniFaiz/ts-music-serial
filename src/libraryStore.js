@@ -41,10 +41,6 @@ export function idbGet(key) {
   return withStore('readonly', (store) => store.get(key));
 }
 
-export function idbSet(key, value) {
-  return withStore('readwrite', (store) => store.put(value, key));
-}
-
 export function idbDelete(key) {
   return withStore('readwrite', (store) => store.delete(key));
 }

@@ -47,9 +47,12 @@ const goBack = () => {
   if (canGoBack.value) smartBack(router);
 };
 
-const minimize = () => appWindow.minimize().catch(() => {});
-const toggleMaximize = () => appWindow.toggleMaximize().catch(() => {});
-const close = () => appWindow.close().catch(() => {});
+// Window controls are user-visible actions — a failure must not vanish
+// silently or the button just appears dead.
+const minimize = () => appWindow.minimize().catch((e) => console.error('Minimize failed', e));
+const toggleMaximize = () =>
+  appWindow.toggleMaximize().catch((e) => console.error('Toggle maximize failed', e));
+const close = () => appWindow.close().catch((e) => console.error('Close failed', e));
 const { beginWindowDrag } = useWindowDrag({ onDoubleClick: toggleMaximize });
 </script>
 

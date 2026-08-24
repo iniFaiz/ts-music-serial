@@ -89,7 +89,8 @@ const checkWindowStatus = async () => {
     const visible = !minimized && !docHidden;
     updateVisibilityState(visible);
   } catch {
-    // ignore
+    // Best-effort polling: the window API can reject during teardown, and a
+    // missed visibility sample only costs one extra spectrum frame.
   }
 };
 

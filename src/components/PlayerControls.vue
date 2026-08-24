@@ -11,7 +11,8 @@ import { navigateWithTransition } from '../viewTransition';
 import { loadWaveform, getCachedWaveform } from '../waveformCache';
 import MarqueeText from './MarqueeText.vue';
 import { createNyanCatSeekStyle } from '../nyancatTheme';
-import { LOSSLESS_LOGO_PATH } from '../losslessLogo';
+import LosslessBadge from './LosslessBadge.vue';
+import { formatTime } from '../timeFormat';
 
 const router = useRouter();
 const playerCoverRef = ref(null);
@@ -56,34 +57,8 @@ const navigateToArtist = (artistName) => {
   navigateWithTransition(navigate, null);
 };
 
-const losslessPopupOpen = ref(false);
-
 const openFullScreen = () => {
   store.toggleFullscreen();
-};
-
-const isLossless = computed(() => {
-  if (!store.currentSong || !store.currentSong.path) return false;
-  const ext = store.currentSong.path.split('.').pop().toLowerCase();
-  return ['flac', 'wav', 'alac', 'm4a'].includes(ext);
-});
-
-const formatLosslessSpecs = () => {
-  if (!store.currentSong || !store.currentSong.path) return '24-bit 48kHz ALAC';
-  const ext = store.currentSong.path.split('.').pop().toLowerCase();
-  const bits = store.currentBitDepth || store.currentSong.bit_depth;
-  const hz = store.currentSampleRate || store.currentSong.sample_rate;
-
-  if (bits && hz) {
-    const bitStr = `${bits}-bit`;
-    const rateStr = hz >= 1000 ? `${(hz / 1000).toFixed(1).replace('.0', '')}kHz` : `${hz}Hz`;
-    const codecStr = ext === 'm4a' ? 'ALAC' : ext.toUpperCase();
-    return `${bitStr} ${rateStr} ${codecStr}`;
-  }
-
-  if (ext === 'flac') return '24-bit 48kHz FLAC';
-  if (ext === 'wav') return '16-bit 44.1kHz WAV';
-  return '24-bit 48kHz ALAC';
 };
 
 const progressPercentage = computed(() => {
@@ -118,7 +93,6 @@ watch(
   () => store.currentSong,
   async (song) => {
     if (!song) {
-      losslessPopupOpen.value = false;
       playbackError.value = null;
       endedHandledFor = null;
       store.isPlaying = false;
@@ -128,7 +102,6 @@ watch(
       store.syncDiscord();
       return;
     }
-    losslessPopupOpen.value = false;
     playbackError.value = null;
     endedHandledFor = null;
 
@@ -416,10 +389,6 @@ watch(
   }
 );
 
-const closeLosslessPopup = () => {
-  losslessPopupOpen.value = false;
-};
-
 onMounted(async () => {
   rafId = requestAnimationFrame(interpolate);
 
@@ -428,7 +397,6 @@ onMounted(async () => {
     if (store.currentSong) store.persistState();
   }, 5000);
   window.addEventListener('beforeunload', flushState);
-  document.addEventListener('click', closeLosslessPopup);
 
   // Forward OS media-key / overlay button presses into the player.
   try {
@@ -468,18 +436,10 @@ onUnmounted(() => {
   if (unlistenPlaybackSession) unlistenPlaybackSession();
   if (unlistenPlayerTelemetry) unlistenPlayerTelemetry();
   window.removeEventListener('beforeunload', flushState);
-  document.removeEventListener('click', closeLosslessPopup);
 });
 
 const flushState = () => {
   if (store.currentSong) store.flushState();
-};
-
-const formatTime = (seconds) => {
-  if (!seconds || isNaN(seconds)) return '0:00';
-  const m = Math.floor(seconds / 60);
-  const s = Math.floor(seconds % 60);
-  return `${m}:${s.toString().padStart(2, '0')}`;
 };
 </script>
 
@@ -693,63 +653,8 @@ const formatTime = (seconds) => {
                 </div>
               </button>
 
-              <!-- Lossless Badge Container -->
-              <div v-if="isLossless" class="relative mt-0.5 shrink-0">
-                <button
-                  @click.stop="losslessPopupOpen = !losslessPopupOpen"
-                  class="flex shrink-0 items-center justify-center text-gray-500 hover:text-gray-300 transition-colors focus:outline-none"
-                  title="Lossless Audio"
-                >
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    viewBox="0 0 15 9"
-                    class="h-2.5 w-[17px] fill-current"
-                  >
-                    <path
-                      :d="LOSSLESS_LOGO_PATH"
-                    />
-                  </svg>
-                </button>
-
-                <!-- Popover (slightly larger) -->
-                <div
-                  v-if="losslessPopupOpen"
-                  class="lossless-popover-content absolute top-full left-1/2 -translate-x-1/2 mt-3 z-[100] bg-[#1c1c1e] border border-[#323236] rounded-xl shadow-2xl p-4 w-[230px] text-center select-none animate-fade-in"
-                  @click.stop
-                >
-                  <!-- Upward pointing arrow -->
-                  <div
-                    class="absolute bottom-full left-1/2 -translate-x-1/2 translate-y-1/2 w-2 h-2 bg-[#1c1c1e] border-l border-t border-[#323236] rotate-45"
-                  ></div>
-
-                  <!-- Lossless Logo (Small) -->
-                  <div class="flex justify-center mb-2">
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      viewBox="0 0 15 9"
-                      class="h-5 w-[35px] text-white fill-current"
-                    >
-                      <path
-                        :d="LOSSLESS_LOGO_PATH"
-                      />
-                    </svg>
-                  </div>
-
-                  <!-- Title -->
-                  <h4 class="text-sm font-bold text-white mb-0.5">Lossless</h4>
-                  <!-- Description -->
-                  <p class="text-xs text-gray-400 mb-3 leading-normal">
-                    This audio is playing with lossless compression.
-                  </p>
-
-                  <!-- Technical Specs -->
-                  <div
-                    class="bg-[#2c2c2e]/60 rounded-lg py-1 px-3 text-xs font-semibold text-[var(--accent-color)] font-variant-numeric tracking-wide border border-white/5"
-                  >
-                    {{ formatLosslessSpecs() }}
-                  </div>
-                </div>
-              </div>
+              <!-- Lossless Badge (shared component, icon-only variant) -->
+              <LosslessBadge placement="down" icon-only class="relative mt-0.5 shrink-0" />
             </div>
           </div>
 

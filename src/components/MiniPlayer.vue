@@ -28,6 +28,8 @@ import { createNyanCatSeekStyle } from '../nyancatTheme';
 import { useQueueReorder } from '../useQueueReorder';
 import { useTrackLyrics } from '../useTrackLyrics';
 import { useLyricAutoScroll } from '../useLyricAutoScroll';
+import { gapDotColor } from '../lyricVisuals';
+import { formatTime } from '../timeFormat';
 
 const router = useRouter();
 
@@ -209,15 +211,7 @@ const activeIdx = computed(() =>
 );
 
 function getDotColor(line, dotIdx) {
-  if (!line.isGap) return 'rgba(255, 255, 255, 0.2)';
-  const duration = line.endTimeMs - line.time_ms;
-  const now = currentMs.value;
-  const elapsed = Math.max(0, Math.min(duration, now - line.time_ms));
-  const p = elapsed / duration;
-  const startRange = dotIdx * 0.33;
-  const dotProgress = Math.max(0, Math.min(1, (p - startRange) / 0.33));
-  const opacity = 0.2 + (0.95 - 0.2) * dotProgress;
-  return `rgba(255, 255, 255, ${opacity.toFixed(3)})`;
+  return gapDotColor(line, dotIdx, currentMs.value);
 }
 
 // ---- Smooth auto-scroll (shared engine) -----------------------------------
@@ -281,12 +275,6 @@ const miniSeekStyle = computed(() =>
 );
 const volumePercentage = computed(() => (store.isMuted ? 0 : store.volume) * 100);
 
-const formatTime = (seconds) => {
-  if (!seconds || isNaN(seconds)) return '0:00';
-  const m = Math.floor(seconds / 60);
-  const s = Math.floor(seconds % 60);
-  return `${m}:${s.toString().padStart(2, '0')}`;
-};
 const remaining = computed(() =>
   formatTime(Math.max(0, (store.duration || 0) - (store.currentTime || 0)))
 );

@@ -1,5 +1,5 @@
-﻿<script setup>
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue';
+<script setup>
+import { ref, computed, watch } from 'vue';
 import { useWindowDrag } from '../useWindowDrag';
 import { store } from '../store';
 import { loadCover, getCachedCover, hasCachedCover } from '../coverCache';
@@ -11,42 +11,14 @@ import LyricContent from './LyricContent.vue';
 import { extractColorsForPath, defaultPalette } from '../colorExtract';
 import MarqueeText from './MarqueeText.vue';
 import { createNyanCatSeekStyle } from '../nyancatTheme';
-import { LOSSLESS_LOGO_PATH } from '../losslessLogo';
+import LosslessBadge from './LosslessBadge.vue';
+import { gapDotColor } from '../lyricVisuals';
+import { formatTime } from '../timeFormat';
 
 const router = useRouter();
 const coverUrl = ref(null);
 const linesEl = ref(null);
 const showLyricsOption = ref(true);
-
-const losslessPopupOpen = ref(false);
-
-const isLossless = computed(() => {
-  if (!store.currentSong || !store.currentSong.path) return false;
-  const ext = store.currentSong.path.split('.').pop().toLowerCase();
-  return ['flac', 'wav', 'alac', 'm4a'].includes(ext);
-});
-
-const formatLosslessSpecs = () => {
-  if (!store.currentSong || !store.currentSong.path) return '24-bit 48kHz ALAC';
-  const ext = store.currentSong.path.split('.').pop().toLowerCase();
-  const bits = store.currentBitDepth || store.currentSong.bit_depth;
-  const hz = store.currentSampleRate || store.currentSong.sample_rate;
-
-  if (bits && hz) {
-    const bitStr = `${bits}-bit`;
-    const rateStr = hz >= 1000 ? `${(hz / 1000).toFixed(1).replace('.0', '')}kHz` : `${hz}Hz`;
-    const codecStr = ext === 'm4a' ? 'ALAC' : ext.toUpperCase();
-    return `${bitStr} ${rateStr} ${codecStr}`;
-  }
-
-  if (ext === 'flac') return '24-bit 48kHz FLAC';
-  if (ext === 'wav') return '16-bit 44.1kHz WAV';
-  return '24-bit 48kHz ALAC';
-};
-
-const closeLosslessPopup = () => {
-  losslessPopupOpen.value = false;
-};
 
 const song = computed(() => store.currentSong);
 const { lyrics, lyricsLoading, fetchLyrics } = useTrackLyrics({
@@ -77,7 +49,6 @@ async function resolveCover(path) {
 watch(
   () => store.fullscreenOpen,
   (open) => {
-    losslessPopupOpen.value = false;
     if (open && song.value) {
       resolveCover(song.value.path);
     }
@@ -87,7 +58,6 @@ watch(
 watch(
   () => song.value && song.value.path,
   (path) => {
-    losslessPopupOpen.value = false;
     if (store.fullscreenOpen && path) {
       resolveCover(path);
     }
@@ -111,41 +81,22 @@ const activeIdx = computed(() =>
 );
 
 function getDotColor(line, dotIdx) {
-  if (!line.isGap) return 'rgba(255, 255, 255, 0.2)';
-  const duration = line.endTimeMs - line.time_ms;
-  const now = currentMs.value;
-  const elapsed = Math.max(0, Math.min(duration, now - line.time_ms));
-  const p = elapsed / duration;
-
-  const startRange = dotIdx * 0.33;
-  const dotProgress = Math.max(0, Math.min(1, (p - startRange) / 0.33));
-  const opacity = 0.2 + (0.95 - 0.2) * dotProgress;
-
-  return `rgba(255, 255, 255, ${opacity.toFixed(3)})`;
+  return gapDotColor(line, dotIdx, currentMs.value);
 }
 
-// ---- Smooth scroll (shared engine; fullscreen never pauses for user scroll)
-const { resetScrollState } = useLyricAutoScroll({
+// ---- Smooth scroll (shared engine)
+const { resetScrollState, onUserScroll } = useLyricAutoScroll({
   container: () => linesEl.value,
   lines,
   activeIdx,
   scrollDuration: 650,
   gapTargetRem: 4.5, // 3.5rem height + 1rem margin-bottom
-  trackUserScroll: false,
 });
 
 watch(
   () => [song.value?.path, lines.value],
   () => resetScrollState()
 );
-
-onMounted(() => {
-  document.addEventListener('click', closeLosslessPopup);
-});
-
-onUnmounted(() => {
-  document.removeEventListener('click', closeLosslessPopup);
-});
 
 // ---- transport ----
 const onSeekInput = (e) => {
@@ -173,12 +124,6 @@ const fullscreenSeekStyle = computed(() =>
 );
 const volumePercentage = computed(() => (store.isMuted ? 0 : store.volume) * 100);
 
-const formatTime = (seconds) => {
-  if (!seconds || isNaN(seconds)) return '0:00';
-  const m = Math.floor(seconds / 60);
-  const s = Math.floor(seconds % 60);
-  return `${m}:${s.toString().padStart(2, '0')}`;
-};
 const remaining = computed(() =>
   formatTime(Math.max(0, (store.duration || 0) - (store.currentTime || 0)))
 );
@@ -400,64 +345,9 @@ const goToAlbum = (albumName) => {
               <span>-{{ remaining }}</span>
             </div>
 
-            <!-- Lossless Badge Container (Centered under seek bar & timestamps) -->
-            <div v-if="isLossless" class="relative flex justify-center mt-0.1">
-              <button
-                @click.stop="losslessPopupOpen = !losslessPopupOpen"
-                class="flex items-center gap-1 px-1.5 py-0.5 rounded bg-white/10 hover:bg-white/15 active:scale-98 transition border border-white/10 text-white/70 hover:text-white text-[9px] font-bold uppercase tracking-wider select-none focus:outline-none"
-                title="Lossless Audio"
-              >
-                <!-- SVG logo same as playercontrol -->
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  viewBox="0 0 15 9"
-                  class="h-2 w-[13px] fill-current"
-                >
-                  <path
-                    :d="LOSSLESS_LOGO_PATH"
-                  />
-                </svg>
-                <span>lossless</span>
-              </button>
-
-              <!-- Popover (slightly larger) -->
-              <div
-                v-if="losslessPopupOpen"
-                class="lossless-popover-content absolute bottom-full left-1/2 -translate-x-1/2 mb-3 z-[100] bg-[#1c1c1e] border border-[#323236] rounded-xl shadow-2xl p-4 w-[230px] text-center select-none animate-fade-in-up"
-                @click.stop
-              >
-                <!-- Downward pointing arrow -->
-                <div
-                  class="absolute top-full left-1/2 -translate-x-1/2 -translate-y-1/2 w-2 h-2 bg-[#1c1c1e] border-r border-b border-[#323236] rotate-45"
-                ></div>
-
-                <!-- Lossless Logo (Small) -->
-                <div class="flex justify-center mb-2">
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    viewBox="0 0 15 9"
-                    class="h-5 w-[35px] text-white fill-current"
-                  >
-                    <path
-                      :d="LOSSLESS_LOGO_PATH"
-                    />
-                  </svg>
-                </div>
-
-                <!-- Title -->
-                <h4 class="text-sm font-bold text-white mb-0.5">Lossless</h4>
-                <!-- Description -->
-                <p class="mb-3 text-xs leading-normal text-gray-400">
-                  This audio is playing with lossless compression.
-                </p>
-
-                <!-- Technical Specs -->
-                <div
-                  class="bg-[#2c2c2e]/60 rounded-lg py-1 px-3 text-xs font-semibold text-[var(--accent-color)] font-variant-numeric tracking-wide border border-white/5"
-                >
-                  {{ formatLosslessSpecs() }}
-                </div>
-              </div>
+            <!-- Lossless Badge (shared component, centered under seek bar) -->
+            <div class="flex justify-center mt-0.1">
+              <LosslessBadge placement="up" />
             </div>
           </div>
 
@@ -627,16 +517,7 @@ const goToAlbum = (albumName) => {
           <div
             ref="linesEl"
             class="flex-1 overflow-y-auto np-lyrics-scroll py-[35vh] w-full lg:w-[650px] lg:min-w-[650px]"
-            @scroll.passive="
-              () => {
-                if (npIsAutoScrolling) return;
-                npUserPausedUntil = Date.now() + 3000;
-                if (npUserScrollTimer) clearTimeout(npUserScrollTimer);
-                npUserScrollTimer = setTimeout(() => {
-                  npUserPausedUntil = 0;
-                }, 3100);
-              }
-            "
+            @scroll.passive="onUserScroll"
           >
             <!-- Loading -->
             <div v-if="lyricsLoading" class="text-2xl font-bold text-white/40">Loading lyricsâ€¦</div>

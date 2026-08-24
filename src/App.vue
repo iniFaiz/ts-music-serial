@@ -11,6 +11,7 @@ import TitleBar from './components/TitleBar.vue';
 import ToastHost from './components/ToastHost.vue';
 import { navigateWithTransition, smartBack, goForwardWithTransition } from './viewTransition';
 import { prefetchQuery } from './useLibraryData';
+import { useThresholdReorder } from './useThresholdReorder';
 import {
   fetchAlbums,
   fetchAlbumTracks,
@@ -260,7 +261,8 @@ router.afterEach((to) => {
 });
 
 // Collapse the sidebar to an icon-only rail when the window gets too narrow.
-// Changed from 980 to 1024 to collapse the sidebar earlier and give player controls more room on medium widths.
+// Below this width the side rail collapses so player controls keep room on
+// medium windows.
 const COMPACT_BREAKPOINT = 1125;
 const compact = ref(false);
 const updateCompact = () => {
@@ -414,11 +416,6 @@ onUnmounted(() => {
   if (unlistenOnlineMetadata) unlistenOnlineMetadata();
   if (unlistenAudioDevices) unlistenAudioDevices();
   if (unlistenVinylPlayback) unlistenVinylPlayback();
-  // Cleanup sidebar playlist drag
-  document.removeEventListener('mousemove', onSidebarPlMouseMove);
-  document.removeEventListener('mouseup', onSidebarPlMouseUp);
-  document.body.style.userSelect = '';
-  document.body.style.cursor = '';
 });
 
 function newPlaylist() {
@@ -426,89 +423,25 @@ function newPlaylist() {
 }
 
 // ---- Sidebar playlist drag-to-reorder ----
-const sidebarPlDragIndex = ref(-1);
-const sidebarPlOverIndex = ref(-1);
-const sidebarPlDragActive = ref(false);
+// Click-vs-drag handling lives in useThresholdReorder (shared with SongList).
 const sidebarPlContainer = ref(null);
-let sidebarPlStartY = 0;
-let sidebarPlPendingIdx = -1;
-const SIDEBAR_DRAG_THRESHOLD = 5;
-let sidebarPlDragDidReorder = false;
-
-const getSidebarPlRowIndex = (clientY) => {
-  if (!sidebarPlContainer.value) return -1;
-  const rows = sidebarPlContainer.value.querySelectorAll('[data-sidebar-pl-idx]');
-  for (const row of rows) {
-    const rect = row.getBoundingClientRect();
-    if (clientY >= rect.top && clientY <= rect.bottom) {
-      return parseInt(row.dataset.sidebarPlIdx, 10);
-    }
-  }
-  if (rows.length > 0) {
-    const firstRect = rows[0].getBoundingClientRect();
-    if (clientY < firstRect.top) return 0;
-    const lastRect = rows[rows.length - 1].getBoundingClientRect();
-    if (clientY > lastRect.bottom) return rows.length - 1;
-  }
-  return -1;
-};
-
-const onSidebarPlMouseMove = (e) => {
-  if (sidebarPlPendingIdx === -1) return;
-  const dy = Math.abs(e.clientY - sidebarPlStartY);
-  if (!sidebarPlDragActive.value && dy >= SIDEBAR_DRAG_THRESHOLD) {
-    sidebarPlDragActive.value = true;
-    sidebarPlDragIndex.value = sidebarPlPendingIdx;
-    sidebarPlOverIndex.value = sidebarPlPendingIdx;
-    sidebarPlDragDidReorder = true;
-    document.body.style.userSelect = 'none';
-    document.body.style.cursor = 'grabbing';
-  }
-  if (sidebarPlDragActive.value) {
-    e.preventDefault();
-    const idx = getSidebarPlRowIndex(e.clientY);
-    if (idx !== -1) sidebarPlOverIndex.value = idx;
-  }
-};
-
-const onSidebarPlMouseUp = () => {
-  if (
-    sidebarPlDragActive.value &&
-    sidebarPlDragIndex.value !== -1 &&
-    sidebarPlOverIndex.value !== -1 &&
-    sidebarPlDragIndex.value !== sidebarPlOverIndex.value
-  ) {
-    store.runMutation(() =>
-      store.movePlaylistOrder(sidebarPlDragIndex.value, sidebarPlOverIndex.value)
-    );
-  }
-  sidebarPlDragIndex.value = -1;
-  sidebarPlOverIndex.value = -1;
-  sidebarPlDragActive.value = false;
-  sidebarPlPendingIdx = -1;
-  document.removeEventListener('mousemove', onSidebarPlMouseMove);
-  document.removeEventListener('mouseup', onSidebarPlMouseUp);
-  document.body.style.userSelect = '';
-  document.body.style.cursor = '';
-  setTimeout(() => {
-    sidebarPlDragDidReorder = false;
-  }, 50);
-};
-
-const onSidebarPlMouseDown = (index, e) => {
-  if (e.target.closest('button')) return;
-  sidebarPlPendingIdx = index;
-  sidebarPlStartY = e.clientY;
-  sidebarPlDragDidReorder = false;
-  document.addEventListener('mousemove', onSidebarPlMouseMove);
-  document.addEventListener('mouseup', onSidebarPlMouseUp);
-};
+const {
+  dragIndex: sidebarPlDragIndex,
+  overIndex: sidebarPlOverIndex,
+  onRowMouseDown: onSidebarPlMouseDown,
+  consumeIfDragged: consumeSidebarDrag,
+} = useThresholdReorder({
+  container: () => sidebarPlContainer.value,
+  rowAttribute: 'sidebarPlIdx',
+  // The rail suppresses navigation for any click that follows an activated
+  // drag (even one that lands back on the same row), matching the old
+  // mark-on-activate behaviour.
+  markOnActivate: true,
+  move: (from, to) => store.runMutation(() => store.movePlaylistOrder(from, to)),
+});
 
 const navigatePlaylist = (pl, event) => {
-  if (sidebarPlDragDidReorder) {
-    sidebarPlDragDidReorder = false;
-    return;
-  }
+  if (consumeSidebarDrag()) return;
   const coverEl =
     event.currentTarget.querySelector('.h-7') ||
     event.currentTarget.querySelector('img') ||

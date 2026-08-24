@@ -4,6 +4,7 @@ import { store } from '../store';
 import { activeLineIndex, processLyricLines } from '../lyricsCache';
 import { useTrackLyrics } from '../useTrackLyrics';
 import { useLyricAutoScroll } from '../useLyricAutoScroll';
+import { gapDotColor } from '../lyricVisuals';
 import LyricContent from './LyricContent.vue';
 
 const { lyrics, lyricsLoading, fetchLyrics } = useTrackLyrics({
@@ -47,17 +48,7 @@ const activeIdx = computed(() => {
 });
 
 function getDotColor(line, dotIdx) {
-  if (!line.isGap) return 'rgba(255, 255, 255, 0.2)';
-  const duration = line.endTimeMs - line.time_ms;
-  const now = currentTimeMs.value;
-  const elapsed = Math.max(0, Math.min(duration, now - line.time_ms));
-  const p = elapsed / duration;
-
-  const startRange = dotIdx * 0.33;
-  const dotProgress = Math.max(0, Math.min(1, (p - startRange) / 0.33));
-  const opacity = 0.2 + (0.95 - 0.2) * dotProgress;
-
-  return `rgba(255, 255, 255, ${opacity.toFixed(3)})`;
+  return gapDotColor(line, dotIdx, currentTimeMs.value);
 }
 
 // ---- Smooth scroll (shared engine) ----------------------------------------

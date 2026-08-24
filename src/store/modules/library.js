@@ -474,35 +474,6 @@ export function createLibraryActions() {
       }
     },
 
-    async scanMusic() {
-      this.loading = true;
-      this.scanComplete = false;
-      this.statusMessage = 'Scanning...';
-
-      try {
-        const result = await invoke('index_library', {
-          useParallelism: this.useParallelism,
-          pruneMissing: false,
-          dndGrant: null,
-        });
-
-        const timeSeconds = (result.durationMs / 1000).toFixed(2);
-        this.statusMessage = `Added ${result.added} new tracks in ${timeSeconds}s`;
-
-        this.scanDuration = timeSeconds;
-        this.scanCount = result.total;
-        this.scanComplete = true;
-        this.bumpLibrary();
-        if (this.onlineMetadataEnabled && result.added > 0) {
-          this.startOnlineMetadataImport();
-        }
-      } catch (error) {
-        this.statusMessage = `Error: ${error}`;
-      } finally {
-        this.loading = false;
-      }
-    },
-
     async addPaths(dndGrant) {
       if (!dndGrant) return;
       this.loading = true;
