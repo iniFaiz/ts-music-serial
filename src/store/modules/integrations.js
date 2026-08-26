@@ -207,7 +207,7 @@ export function createIntegrationsActions() {
       }
     },
 
-    async exportPlaylistM3u(id) {
+    async exportPlaylistM3u(id, { relativePaths = false } = {}) {
       const pl = this.getPlaylist(id);
       if (!pl) return;
       try {
@@ -217,7 +217,7 @@ export function createIntegrationsActions() {
           filters: [{ name: 'Playlist', extensions: ['m3u8', 'm3u'] }],
         });
         if (!dest) return;
-        const count = await invoke('export_m3u', { dest, playlistId: id });
+        const count = await invoke('export_m3u', { dest, playlistId: id, relativePaths });
         this.statusMessage = `Exported ${count} tracks to ${dest}`;
       } catch (e) {
         console.error('Failed to export playlist', e);

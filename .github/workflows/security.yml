@@ -21,7 +21,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
       - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
+        # Version-pinned so a compromised future release of the auditor itself
+        # cannot be pulled automatically. Bump deliberately (latest: crates.io).
+        run: cargo install cargo-audit --locked --version 0.22.2
       - name: Audit Rust dependencies
         run: cargo audit
         working-directory: src-tauri

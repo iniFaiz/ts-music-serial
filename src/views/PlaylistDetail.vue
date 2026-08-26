@@ -86,9 +86,9 @@ const playLastPlaylist = () => {
   }
 };
 
-const exportM3u = () => {
+const exportM3u = (portable = false) => {
   menuOpen.value = false;
-  store.exportPlaylistM3u(playlistId.value);
+  store.exportPlaylistM3u(playlistId.value, { relativePaths: portable });
 };
 
 // Suggest a few random library tracks not already in this playlist, sampled from DB.
@@ -327,11 +327,19 @@ const addAndRemoveFromSuggestions = async (songPath) => {
           </button>
           <div class="border-t border-[#3a3a3a] my-1"></div>
           <button
-            @click="exportM3u"
+            @click="exportM3u(false)"
             :disabled="loading || songs.length === 0"
             class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors disabled:opacity-40"
           >
             Export as M3U…
+          </button>
+          <button
+            @click="exportM3u(true)"
+            :disabled="loading || songs.length === 0"
+            class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors disabled:opacity-40"
+            title="Relative paths — keep this file next to your music folder to share it"
+          >
+            Export portable M3U…
           </button>
           <div class="border-t border-[#3a3a3a] my-1"></div>
           <button

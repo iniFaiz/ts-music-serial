@@ -185,7 +185,7 @@ export interface CommandArgs {
   'discord_cover_art': { title: string; artist: string; album: string };
   'discord_set_enabled': { enabled: boolean };
   'discord_update': { title: string; artist: string; album: string; coverUrl: string; isPlaying: boolean; position: number; duration: number };
-  'export_m3u': { dest: string; playlistId: string };
+  'export_m3u': { dest: string; playlistId: string; relativePaths?: boolean | null };
   'get_lyrics': { path: string; title: string; artist: string; album: string; durationSecs: number; lyricsSource: string; force: boolean };
   'get_track_cover': { path: string };
   'get_track_cover_path': { path: string };
