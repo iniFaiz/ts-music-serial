@@ -164,6 +164,23 @@ impl Deref for DbReadGuard<'_> {
 
 pub struct Db(pub Mutex<ConnectionSlot>, pub DbCache, pub(crate) ReadPool);
 
+// Surface rows that fail to decode instead of silently dropping them: a
+// corrupted or unexpectedly-shaped row should be visible in stderr
+// diagnostics while the surrounding query still succeeds with the remaining
+// rows. Walker/dir-entry filtering elsewhere stays silent by design.
+pub(crate) fn logged_rows<T>(
+    context: &'static str,
+    rows: impl IntoIterator<Item = rusqlite::Result<T>>,
+) -> impl Iterator<Item = T> {
+    rows.into_iter().filter_map(move |row| match row {
+        Ok(value) => Some(value),
+        Err(error) => {
+            eprintln!("[db] {context}: skipping undecodable row: {error}");
+            None
+        }
+    })
+}
+
 pub(crate) struct ReadPoolPause<'a> {
     pool: &'a ReadPool,
     active: bool,
@@ -1148,7 +1165,7 @@ pub fn db_prune_missing(db: State<Db>) -> Result<Vec<String>, String> {
                 ))
             })
             .map_err(|e| e.to_string())?;
-        rows.filter_map(Result::ok)
+        logged_rows("db_prune_missing", rows)
             .filter(|(path, _, _)| !Path::new(path).exists())
             .collect()
     };
@@ -1175,7 +1192,7 @@ fn prune_gone_rows(
                     Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
                 })
                 .map_err(|error| error.to_string())?;
-            let found = rows.filter_map(Result::ok).find(|(_, candidate)| {
+            let found = logged_rows("relocate_by_file_id", rows).find(|(_, candidate)| {
                 Path::new(candidate).exists() && !claimed_targets.contains(candidate)
             });
             found
@@ -1193,7 +1210,7 @@ fn prune_gone_rows(
                     Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
                 })
                 .map_err(|e| e.to_string())?;
-            let found = rows.filter_map(Result::ok).find(|(_, candidate)| {
+            let found = logged_rows("relocate_by_fingerprint", rows).find(|(_, candidate)| {
                 Path::new(candidate).exists() && !claimed_targets.contains(candidate)
             });
             found
@@ -1318,7 +1335,7 @@ pub(crate) fn prune_changed_paths(
                     ))
                 })
                 .map_err(|e| e.to_string())?;
-            for (candidate, fingerprint, file_id) in rows.filter_map(Result::ok) {
+            for (candidate, fingerprint, file_id) in logged_rows("prune_changed_paths", rows) {
                 if !Path::new(&candidate).exists() {
                     found.insert(candidate, (fingerprint, file_id));
                 }
@@ -1387,14 +1404,20 @@ pub(crate) fn all_track_paths(db: &Db) -> Result<Vec<String>, String> {
     let rows = stmt
         .query_map([], |r| r.get::<_, String>(0))
         .map_err(|e| e.to_string())?;
-    Ok(rows.filter_map(|r| r.ok()).collect())
+    Ok(logged_rows("all_track_paths", rows).collect())
 }
 
 // One-time background backfill for libraries that predate the fingerprint
 // column. Batches keep each lock hold short and the hashing itself runs with
-// the lock released, so the UI never stalls behind it.
+// the lock released. This runs WITHOUT the global index-job mutex: between
+// batches it polls index_jobs_active() and sleeps while any foreground scan or
+// watcher refresh is running, so maintenance yields instead of making those
+// jobs queue behind it.
 pub(crate) fn backfill_fingerprints(app: &AppHandle) {
     loop {
+        while crate::library_index::index_jobs_active(app) {
+            std::thread::sleep(std::time::Duration::from_millis(400));
+        }
         let batch: Vec<String> = {
             let db = app.state::<Db>();
             let conn = db.read();
@@ -1406,7 +1429,7 @@ pub(crate) fn backfill_fingerprints(app: &AppHandle) {
             let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(0)) else {
                 return;
             };
-            rows.filter_map(|r| r.ok()).collect()
+            logged_rows("backfill_batch", rows).collect()
         };
         if batch.is_empty() {
             return;
@@ -1446,7 +1469,7 @@ pub fn db_remove_under_root(db: State<Db>, root: String) -> Result<Vec<String>, 
         let rows = stmt
             .query_map([], |r| r.get::<_, String>(0))
             .map_err(|e| e.to_string())?;
-        rows.filter_map(|r| r.ok()).collect()
+        logged_rows("db_remove_under_root", rows).collect()
     };
     let norm = |s: &str| s.replace('\\', "/").to_lowercase();
     let root_n = norm(&root);
@@ -1516,7 +1539,7 @@ pub(crate) fn roots(db: &Db) -> Result<Vec<String>, String> {
     let rows = stmt
         .query_map([], |r| r.get::<_, String>(0))
         .map_err(|e| e.to_string())?;
-    Ok(rows.filter_map(|r| r.ok()).collect())
+    Ok(logged_rows("roots", rows).collect())
 }
 
 pub(crate) fn replace_roots(db: &Db, roots: &[String]) -> Result<(), String> {

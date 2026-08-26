@@ -351,11 +351,9 @@ impl MusicBrainzLimiter {
 }
 
 async fn tokio_sleep(duration: Duration) {
-    // Tauri re-exports the active Tokio runtime without requiring a direct Tokio
-    // dependency in this crate.
-    tauri::async_runtime::spawn_blocking(move || std::thread::sleep(duration))
-        .await
-        .ok();
+    // Genuine async timer: parks the task on the runtime's timer wheel instead
+    // of pinning a blocking-pool thread for the whole wait.
+    tokio::time::sleep(duration).await;
 }
 
 fn safe_query_value(value: &str) -> String {

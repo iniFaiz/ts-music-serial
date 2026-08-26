@@ -1557,8 +1557,9 @@ pub(crate) struct OutputDeviceInfo {
     is_default: bool,
 }
 
-// Enumerate the available audio output devices.
-#[tauri::command]
+// Enumerate the available audio output devices. Runs off the main thread —
+// device enumeration can hit slow audio drivers.
+#[tauri::command(async)]
 pub(crate) fn list_output_devices() -> Vec<OutputDeviceInfo> {
     use rodio::cpal::traits::{DeviceTrait, HostTrait};
     let host = rodio::cpal::default_host();
@@ -1582,7 +1583,9 @@ pub(crate) fn list_output_devices() -> Vec<OutputDeviceInfo> {
 
 // Switch the audio output device (None = system default). Blocks until the new
 // device is open so the frontend can immediately reload the current track.
-#[tauri::command]
+// `(async)` keeps that up-to-5s wait on a worker thread instead of freezing
+// the webview's main thread.
+#[tauri::command(async)]
 pub(crate) fn set_output_device(
     player: State<AudioPlayer>,
     name: Option<String>,

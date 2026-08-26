@@ -115,7 +115,9 @@ fn make_relative(base: &Path, target: &Path) -> Option<PathBuf> {
     Some(out)
 }
 
-#[tauri::command]
+// Both commands touch the filesystem (and import parses full audio tags per
+// entry), so they run off the main thread.
+#[tauri::command(async)]
 pub fn export_m3u(
     app: AppHandle,
     db: State<Db>,
@@ -156,7 +158,7 @@ pub fn export_m3u(
     Ok(tracks.len())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn import_m3u(app: AppHandle, db: State<Db>, src: String) -> Result<Vec<String>, String> {
     let src_path = PathBuf::from(&src);
     authorize_playlist_file(&app, &src_path)?;

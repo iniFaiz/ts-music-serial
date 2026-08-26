@@ -170,6 +170,13 @@ export function createIntegrationsActions() {
           pendingCoverLookups.delete(key);
         }
         this.discordCoverCache[key] = coverUrl;
+        // Bound the cache (plain object, string keys keep insertion order):
+        // every artist␟album pair ever played would otherwise stay forever.
+        const DISCORD_COVER_CACHE_CAP = 200;
+        const cachedKeys = Object.keys(this.discordCoverCache);
+        if (cachedKeys.length > DISCORD_COVER_CACHE_CAP) {
+          delete this.discordCoverCache[cachedKeys[0]];
+        }
       }
       // The track may have changed while we awaited the lookup — bail only on
       // a genuinely different song. Session snapshots can swap the currentSong

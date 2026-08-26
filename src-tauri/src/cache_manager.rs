@@ -79,6 +79,52 @@ pub(crate) struct CacheManager {
     inner: Arc<CacheInner>,
 }
 
+// Install a fully-written staging file onto its final path. Windows uses
+// ReplaceFileW so an existing target is swapped atomically — the previous
+// remove_file+rename dance left a crash window with no target file at all.
+// Everywhere else a same-directory rename is already atomic. Mirrors
+// library_db::backup's database swap.
+#[cfg(windows)]
+fn replace_existing_file(staging: &Path, target: &Path) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::PCWSTR;
+    use windows::Win32::Storage::FileSystem::{ReplaceFileW, REPLACEFILE_WRITE_THROUGH};
+
+    let target_wide: Vec<u16> = target.as_os_str().encode_wide().chain(Some(0)).collect();
+    let staging_wide: Vec<u16> = staging.as_os_str().encode_wide().chain(Some(0)).collect();
+    unsafe {
+        ReplaceFileW(
+            PCWSTR(target_wide.as_ptr()),
+            PCWSTR(staging_wide.as_ptr()),
+            PCWSTR::null(),
+            REPLACEFILE_WRITE_THROUGH,
+            None,
+            None,
+        )
+    }
+    .map_err(|error| {
+        format!(
+            "Failed to atomically replace '{}' with '{}': {error}",
+            target.display(),
+            staging.display()
+        )
+    })
+}
+
+fn install_staged_file(staging: &Path, target: &Path) -> Result<(), String> {
+    #[cfg(windows)]
+    if target.exists() {
+        return replace_existing_file(staging, target);
+    }
+    fs::rename(staging, target).map_err(|error| {
+        format!(
+            "Failed to atomically install '{}' as '{}': {error}",
+            staging.display(),
+            target.display()
+        )
+    })
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CacheCleanup {
@@ -146,12 +192,8 @@ impl CacheManager {
             return Err(error.to_string());
         }
         drop(file);
-        if target.exists() {
-            let _ = fs::remove_file(target);
-        }
-        fs::rename(&temp, target).map_err(|error| {
+        install_staged_file(&temp, target).inspect_err(|_| {
             let _ = fs::remove_file(&temp);
-            error.to_string()
         })
     }
 
@@ -390,7 +432,54 @@ pub(crate) fn manager(app: &AppHandle) -> Option<CacheManager> {
         .map(|state| state.inner().clone())
 }
 
-#[tauri::command]
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_manager(root: &Path) -> CacheManager {
+        CacheManager {
+            inner: Arc::new(CacheInner {
+                root: root.to_path_buf(),
+                index: Mutex::new(CacheIndex::default()),
+                nonce: AtomicU64::new(0),
+            }),
+        }
+    }
+
+    #[test]
+    fn atomic_replace_overwrites_existing_files_without_temp_litter() {
+        let dir = std::env::temp_dir().join(format!(
+            "ts-music-cache-replace-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp cache dir");
+        let manager = test_manager(&dir);
+        let target = dir.join("artifact.bin");
+
+        // First write installs via plain rename; the second exercises the
+        // existing-target path (ReplaceFileW on Windows).
+        manager.atomic_replace(&target, b"first").expect("first write");
+        manager
+            .atomic_replace(&target, b"second-much-longer-payload")
+            .expect("second write");
+        assert_eq!(std::fs::read(&target).expect("read target"), b"second-much-longer-payload");
+
+        let leftovers: Vec<String> = std::fs::read_dir(&dir)
+            .expect("list temp dir")
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.contains("tmp-"))
+            .collect();
+        assert!(leftovers.is_empty(), "staging files left behind: {leftovers:?}");
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+// Clearing walks every cache directory deleting files; run it off the main
+// thread so a large cache can't freeze the UI.
+#[tauri::command(async)]
 pub(crate) fn clear_cache(app: AppHandle, kind: Option<String>) -> Result<CacheCleanup, String> {
     let kind = match kind.as_deref() {
         Some(value) => {

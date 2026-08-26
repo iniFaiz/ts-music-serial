@@ -5,8 +5,22 @@ let activeStationSession = null;
 let autoplayPrefetchInFlight = false;
 const STATION_BATCH_SIZE = 24;
 
+// Hydration cache for queue entries the native session knows by id/path only.
+// Autoplay and station sessions append forever within a session, so bound it
+// (Map preserves insertion order — evict oldest first). The live queue is far
+// smaller; this only limits how far back a stale snapshot can be rehydrated.
+const QUEUE_METADATA_CAP = 3000;
+
+function rememberQueueMetadata(queueId, song) {
+  if (!queueId) return;
+  queueMetadata.set(queueId, song);
+  while (queueMetadata.size > QUEUE_METADATA_CAP) {
+    queueMetadata.delete(queueMetadata.keys().next().value);
+  }
+}
+
 const nativeQueueEntry = (song) => {
-  if (song.queueId) queueMetadata.set(song.queueId, { ...song });
+  if (song.queueId) rememberQueueMetadata(song.queueId, { ...song });
   return {
     id: song.queueId || '',
     path: song.path,
@@ -400,7 +414,7 @@ export function createPlaybackActions() {
                 artist: 'Unknown Artist',
                 album: 'Unknown Album',
               };
-          queueMetadata.set(entry.id, hydrated);
+          rememberQueueMetadata(entry.id, hydrated);
           return hydrated;
         });
         this.queue = queue;

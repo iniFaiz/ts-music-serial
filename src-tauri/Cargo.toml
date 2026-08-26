@@ -43,6 +43,11 @@ image = "0.25" #cover art decoding/downscaling
 rodio = { version = "0.22", features = ["symphonia-all"] } #native audio playback/decoding (all formats incl. FLAC)
 souvlaki = "0.8.3" #OS media controls (Windows SMTC / media keys)
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] } #lyrics HTTP (rustls = no OpenSSL on Windows)
+# Real async timer for the metadata importer's rate-limit pacing. Only the
+# time driver is enabled; Tokio is already compiled in via Tauri/reqwest, so
+# this adds no new dependency code — it just replaces a
+# spawn_blocking(thread::sleep) that pinned a blocking-pool thread per wait.
+tokio = { version = "1", default-features = false, features = ["time"] }
 rusty-chromaprint = "0.3" #pure-Rust AcoustID-compatible audio fingerprints
 notify = "6" #filesystem watching for library auto-update
 ebur128 = "0.1" #EBU R128 loudness analysis for volume normalization (ReplayGain)

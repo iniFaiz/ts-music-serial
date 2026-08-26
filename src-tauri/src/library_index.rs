@@ -6,6 +6,7 @@
 
 use std::mem;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use parking_lot::Mutex;
@@ -28,14 +29,39 @@ const _: () = assert!(INDEX_BATCH_SIZE > 0 && INDEX_BATCH_SIZE <= 256);
 
 pub(crate) struct LibraryIndexState {
     pub(crate) job: Mutex<()>,
+    // Number of currently running indexing jobs (full scans and watcher
+    // refreshes). Background maintenance polls this so it can stand down
+    // without holding — and stalling — the job mutex itself.
+    active_jobs: AtomicUsize,
 }
 
 impl LibraryIndexState {
     pub(crate) fn new() -> Self {
         Self {
             job: Mutex::new(()),
+            active_jobs: AtomicUsize::new(0),
         }
     }
+}
+
+// RAII decrement: a panic inside an indexing job must not leak the count and
+// permanently idle the background backfill.
+struct ActiveJobGuard<'a>(&'a AtomicUsize);
+
+impl Drop for ActiveJobGuard<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// True while any foreground indexing job is running. Background jobs
+/// (fingerprint backfill) poll this between batches instead of taking the
+/// global job mutex, which would make watcher updates and manual reindexes
+/// queue behind them.
+pub(crate) fn index_jobs_active(app: &AppHandle) -> bool {
+    app.try_state::<LibraryIndexState>()
+        .map(|state| state.active_jobs.load(Ordering::SeqCst) > 0)
+        .unwrap_or(false)
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -224,6 +250,7 @@ pub(crate) fn index_authorized_paths(
 ) -> Result<IndexSummary, String> {
     let state = app.state::<LibraryIndexState>();
     let _job = state.job.lock();
+    let _active = ActiveJobGuard(&state.active_jobs);
     index_paths_locked(app, paths, use_parallelism, prune_missing)
 }
 
@@ -280,6 +307,7 @@ pub(crate) fn index_watcher_paths(
 ) -> Result<IndexSummary, String> {
     let state = app.state::<LibraryIndexState>();
     let _job = state.job.lock();
+    let _active = ActiveJobGuard(&state.active_jobs);
     let roots = canonical_roots(app);
     let paths = compact_changed_paths(
         paths

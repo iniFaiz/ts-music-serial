@@ -7,8 +7,8 @@ use tauri::State;
 use crate::{limits, MusicTrack};
 
 use super::{
-    collect_tracks, library_fingerprint, now_ms, smart_count, smart_eval, validate_smart_request,
-    Db, OptionalString, PlaylistRow, RecentRow, TRACK_COLS_T,
+    collect_tracks, library_fingerprint, logged_rows, now_ms, smart_count, smart_eval,
+    validate_smart_request, Db, OptionalString, PlaylistRow, RecentRow, TRACK_COLS_T,
 };
 
 type SmartPlaylistDefinition = (
@@ -33,7 +33,7 @@ pub fn db_favorite_paths(db: State<Db>) -> Result<Vec<String>, String> {
     let rows = stmt
         .query_map([], |r| r.get::<_, String>(0))
         .map_err(|e| e.to_string())?;
-    Ok(rows.filter_map(|r| r.ok()).collect())
+    Ok(logged_rows("db_favorite_paths", rows).collect())
 }
 
 #[tauri::command(async)]
@@ -91,7 +91,7 @@ pub fn db_move_favorite(db: State<Db>, from: i64, to: i64) -> Result<(), String>
         let rows = stmt
             .query_map([], |r| r.get::<_, i64>(0))
             .map_err(|e| e.to_string())?;
-        rows.filter_map(|r| r.ok()).collect()
+        logged_rows("db_move_favorite", rows).collect()
     };
     let (from, to) = (from as usize, to as usize);
     if from >= track_ids.len() || to >= track_ids.len() {
@@ -343,7 +343,7 @@ pub fn db_move_playlist_order(db: State<Db>, from: i64, to: i64) -> Result<(), S
         let rows = stmt
             .query_map([], |r| r.get::<_, String>(0))
             .map_err(|e| e.to_string())?;
-        rows.filter_map(|r| r.ok()).collect()
+        logged_rows("db_move_playlist_order", rows).collect()
     };
     let (from, to) = (from as usize, to as usize);
     if from >= ids.len() || to >= ids.len() {
@@ -418,7 +418,7 @@ pub fn db_playlist_move_item(db: State<Db>, id: String, from: i64, to: i64) -> R
         let rows = stmt
             .query_map(params![id], |r| r.get::<_, i64>(0))
             .map_err(|e| e.to_string())?;
-        rows.filter_map(|r| r.ok()).collect()
+        logged_rows("db_move_playlist_item", rows).collect()
     };
     let (from, to) = (from as usize, to as usize);
     if from >= item_ids.len() || to >= item_ids.len() {

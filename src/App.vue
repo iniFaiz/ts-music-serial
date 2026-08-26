@@ -90,8 +90,18 @@ let unlistenAudioDevices = null;
 let unlistenVinylPlayback = null;
 
 const scrollContainer = ref(null);
+// Per-route scroll restoration. Visits are unbounded within a session, so cap
+// both maps and evict the oldest route when full.
+const SCROLL_CACHE_LIMIT = 120;
 const scrollPositions = new Map();
 const horizontalScrollPositions = new Map();
+
+function rememberScrollPosition(map, key, value) {
+  map.set(key, value);
+  if (map.size > SCROLL_CACHE_LIMIT) {
+    map.delete(map.keys().next().value);
+  }
+}
 let restoreScrollOnBackTo = null;
 
 function firstTracksPage() {
@@ -140,7 +150,7 @@ router.beforeEach((to, from) => {
   if (scrollContainer.value) {
     const container =
       scrollContainer.value.querySelector('.overflow-auto') || scrollContainer.value;
-    scrollPositions.set(from.fullPath, container.scrollTop);
+    rememberScrollPosition(scrollPositions, from.fullPath, container.scrollTop);
 
     // Save horizontal scroll positions
     const horizontalShelves = scrollContainer.value.querySelectorAll('.shelf-row');
@@ -154,7 +164,7 @@ router.beforeEach((to, from) => {
         scrollLeft: el.scrollLeft,
       });
     });
-    horizontalScrollPositions.set(from.fullPath, horizPos);
+    rememberScrollPosition(horizontalScrollPositions, from.fullPath, horizPos);
   }
 });
 

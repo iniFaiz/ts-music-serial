@@ -490,7 +490,9 @@ pub(crate) fn reconfigure_watcher(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
+// Rebuilding the watcher walks every root and touches the filesystem; run it
+// off the main thread so a slow/offline removable drive can't freeze the UI.
+#[tauri::command(async)]
 fn watch_roots(app: AppHandle) -> Result<(), String> {
     reconfigure_watcher(&app)
 }
@@ -881,13 +883,14 @@ pub fn run() {
 
             // Backfill content fingerprints for rows that predate the column,
             // in the background. Delayed a bit so it never competes with the
-            // startup burst of queries.
+            // startup burst of queries. Runs WITHOUT the global index-job lock:
+            // it polls index_jobs_active() between batches and stands down
+            // while scans/watcher refreshes run, so foreground indexing never
+            // queues behind hours-long fingerprint hashing.
             {
                 let handle = _app.handle().clone();
                 std::thread::spawn(move || {
                     std::thread::sleep(Duration::from_secs(6));
-                    let state = handle.state::<library_index::LibraryIndexState>();
-                    let _job = state.job.lock();
                     db::backfill_fingerprints(&handle);
                 });
             }

@@ -6060,6 +6060,7 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
+ "tokio",
  "trash",
  "walkdir",
  "wasapi",
