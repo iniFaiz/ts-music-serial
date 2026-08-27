@@ -313,6 +313,7 @@ onUnmounted(() => {
 
 <template>
   <Transition name="mini">
+    <!-- eslint-disable-next-line vuejs-accessibility/mouse-events-have-key-events, vuejs-accessibility/no-static-element-interactions -->
     <div
       v-if="store.miniPlayerOpen"
       class="fixed inset-0 z-[300] flex flex-col overflow-hidden text-white select-none bg-[#0a0a0a]"
@@ -357,6 +358,7 @@ onUnmounted(() => {
       </div>
 
       <!-- ============================ TOP CHROME ======================== -->
+      <!-- eslint-disable-next-line vuejs-accessibility/no-static-element-interactions -->
       <div
         ref="topChromeEl"
         @mousedown="beginWindowDrag"
@@ -371,9 +373,11 @@ onUnmounted(() => {
         <!-- Cover thumbnail (click → artwork view) — hidden in artwork view -->
         <button
           v-if="!isArtwork"
+          type="button"
           @click="openArtwork"
           class="h-12 w-12 rounded-md overflow-hidden shrink-0 shadow-lg bg-[#333] border border-white/10 relative group focus:outline-none"
           title="Show album art"
+          aria-label="Show album art"
         >
           <img
             v-if="coverUrl"
@@ -391,6 +395,7 @@ onUnmounted(() => {
               fill="none"
               stroke="currentColor"
               stroke-width="1.8"
+              aria-hidden="true"
             >
               <path d="M9 18V5l12-2v13"></path>
               <circle cx="6" cy="18" r="3"></circle>
@@ -410,6 +415,7 @@ onUnmounted(() => {
               stroke-width="2.5"
               stroke-linecap="round"
               stroke-linejoin="round"
+              aria-hidden="true"
             >
               <polyline points="15 3 21 3 21 9"></polyline>
               <polyline points="9 21 3 21 3 15"></polyline>
@@ -436,10 +442,12 @@ onUnmounted(() => {
         <!-- Romaji toggle (only in the lyrics view when romanization exists) -->
         <button
           v-if="view === 'lyrics' && hasRomaji"
+          type="button"
           @click="store.toggleRomaji()"
           class="flex items-center justify-center w-7 h-7 rounded-full text-white shrink-0 self-center transition-colors"
           :class="store.showRomaji ? 'bg-white/25' : 'bg-white/10 hover:bg-white/20'"
           :title="store.showRomaji ? 'Hide romaji' : 'Show romaji'"
+          :aria-label="store.showRomaji ? 'Hide romaji' : 'Show romaji'"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -451,6 +459,7 @@ onUnmounted(() => {
             stroke-width="2"
             stroke-linecap="round"
             stroke-linejoin="round"
+            aria-hidden="true"
           >
             <path d="m5 8 6 6" />
             <path d="m4 14 6-6 2-3" />
@@ -464,9 +473,11 @@ onUnmounted(() => {
         <!-- Window controls -->
         <div class="flex items-center gap-0.5 shrink-0">
           <button
+            type="button"
             @click="expandToFull"
             class="p-1.5 rounded-md text-white/70 hover:text-white hover:bg-white/15 transition"
             title="Expand to full player"
+            aria-label="Expand to full player"
           >
             <svg
               xmlns="http://www.w3.org/2000/svg"
@@ -478,6 +489,7 @@ onUnmounted(() => {
               stroke-width="2"
               stroke-linecap="round"
               stroke-linejoin="round"
+              aria-hidden="true"
             >
               <polyline points="15 3 21 3 21 9"></polyline>
               <polyline points="9 21 3 21 3 15"></polyline>
@@ -486,9 +498,11 @@ onUnmounted(() => {
             </svg>
           </button>
           <button
+            type="button"
             @click="closeWindow"
             class="p-1.5 rounded-md text-white/70 hover:text-white hover:bg-[#e81123] transition"
-            title="Close window"
+            :title="$t('common.close')"
+            :aria-label="$t('common.close')"
           >
             <svg
               xmlns="http://www.w3.org/2000/svg"
@@ -500,6 +514,7 @@ onUnmounted(() => {
               stroke-width="2"
               stroke-linecap="round"
               stroke-linejoin="round"
+              aria-hidden="true"
             >
               <line x1="18" y1="6" x2="6" y2="18"></line>
               <line x1="6" y1="6" x2="18" y2="18"></line>
@@ -530,7 +545,7 @@ onUnmounted(() => {
           @scroll.passive="onLyricsScroll"
         >
           <div v-if="lyricsLoading" class="text-lg font-semibold text-white/40">
-            Loading lyrics…
+            {{ $t('lyricsPanel.loading') }}
           </div>
 
           <template v-else-if="lines.length">
@@ -538,8 +553,12 @@ onUnmounted(() => {
               v-for="(line, i) in lines"
               :key="i"
               :data-line="i"
+              role="button"
+              tabindex="0"
               @click="seekToLine(line)"
-              class="text-xl font-semibold leading-snug tracking-tight mini-line"
+              @keydown.enter="seekToLine(line)"
+              @keydown.space.prevent="seekToLine(line)"
+              class="text-xl font-semibold leading-snug tracking-tight mini-line focus:outline-none focus-visible:underline"
               :class="[
                 synced ? 'cursor-pointer' : '',
                 i === activeIdx ? 'mini-line-active' : 'mini-line-dim',
@@ -588,12 +607,12 @@ onUnmounted(() => {
             v-else
             class="flex flex-col items-center justify-center h-full text-center text-white/50"
           >
-            <div class="mb-1 text-base font-semibold">Lyrics not found</div>
+            <div class="mb-1 text-base font-semibold">{{ $t('lyricsPanel.noLyrics') }}</div>
             <button
               @click="fetchLyrics(true)"
               class="mt-2 text-xs px-3 py-1.5 rounded-md bg-white/10 hover:bg-white/20 transition"
             >
-              Retry
+              {{ $t('common.retry') }}
             </button>
           </div>
         </div>
@@ -617,7 +636,7 @@ onUnmounted(() => {
           <button
             @click="closeArtwork"
             class="p-1.5 -ml-1 rounded-md text-white/80 hover:text-white hover:bg-white/15 transition shrink-0"
-            title="Back to player"
+            :title="$t('common.back')"
           >
             <svg
               xmlns="http://www.w3.org/2000/svg"
@@ -659,7 +678,7 @@ onUnmounted(() => {
                 ? 'text-[var(--accent-color)]'
                 : 'text-white/60 hover:text-white'
             "
-            title="Love"
+            :title="store.isFavorite(song.path) ? $t('player.removeFromFavorites') : $t('player.addToFavorites')"
           >
             <svg
               xmlns="http://www.w3.org/2000/svg"
@@ -688,6 +707,7 @@ onUnmounted(() => {
           @input="onSeekInput"
           @change="onSeekCommit"
           :disabled="!song"
+          :aria-label="$t('player.seekLabel')"
           class="mini-seek w-full appearance-none cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
           :style="miniSeekStyle"
         />
@@ -707,7 +727,7 @@ onUnmounted(() => {
                   moreOpen = false;
                 "
                 class="p-1.5 rounded-full text-white/70 hover:text-white hover:bg-white/10 transition"
-                :title="store.isMuted ? 'Unmute' : 'Volume'"
+                :title="store.isMuted ? $t('common.unmute') : $t('common.volume')"
               >
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
@@ -743,7 +763,7 @@ onUnmounted(() => {
                 <button
                   @click="store.toggleMute()"
                   class="text-white/80 hover:text-white shrink-0 flex items-center justify-center w-[15px] h-[15px]"
-                  :title="store.isMuted ? 'Unmute' : 'Mute'"
+                  :title="store.isMuted ? $t('common.unmute') : $t('common.mute')"
                 >
                   <svg
                     xmlns="http://www.w3.org/2000/svg"
@@ -770,6 +790,7 @@ onUnmounted(() => {
                   min="0"
                   max="1"
                   step="0.01"
+                  :aria-label="$t('player.volumeLabel')"
                   :value="store.isMuted ? 0 : store.volume"
                   @input="store.setVolume($event.target.value)"
                   class="mini-vol flex-1 appearance-none cursor-pointer"
@@ -812,7 +833,7 @@ onUnmounted(() => {
                     ? 'text-[var(--accent-color)]'
                     : 'text-white/70 hover:text-white hover:bg-white/10'
                 "
-                title="More"
+                :title="$t('common.more')"
               >
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
@@ -850,7 +871,7 @@ onUnmounted(() => {
                     >
                       <path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5" />
                     </svg>
-                    Shuffle
+                    {{ $t('common.shuffle') }}
                   </span>
                   <span v-if="store.shuffleMode" class="text-[9px] font-bold uppercase">On</span>
                 </button>
@@ -876,7 +897,7 @@ onUnmounted(() => {
                       <path d="M7 23l-4-4 4-4"></path>
                       <path d="M21 13v2a4 4 0 0 1-4 4H3"></path>
                     </svg>
-                    Repeat{{ store.loopMode === 2 ? ' One' : '' }}
+                    {{ $t('common.repeat') }}{{ store.loopMode === 2 ? ' (1)' : '' }}
                   </span>
                   <span v-if="store.loopMode > 0" class="text-[9px] font-bold uppercase">On</span>
                 </button>
@@ -903,7 +924,7 @@ onUnmounted(() => {
                       d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"
                     ></path>
                   </svg>
-                  {{ store.isFavorite(song.path) ? 'Loved' : 'Love' }}
+                  {{ store.isFavorite(song.path) ? $t('player.removeFromFavorites') : $t('player.addToFavorites') }}
                 </button>
               </div>
             </div>
@@ -915,7 +936,7 @@ onUnmounted(() => {
               @click="store.prevSong()"
               :disabled="!song"
               class="text-white/90 hover:text-white transition disabled:opacity-30"
-              title="Previous"
+              :title="$t('player.prevTrack')"
             >
               <svg
                 xmlns="http://www.w3.org/2000/svg"
@@ -932,7 +953,7 @@ onUnmounted(() => {
               @click="store.togglePlay()"
               :disabled="!song"
               class="text-white hover:scale-105 transition disabled:opacity-30"
-              title="Play/Pause"
+              :title="$t('player.togglePlay')"
             >
               <svg
                 v-if="store.isPlaying"
@@ -960,7 +981,7 @@ onUnmounted(() => {
               @click="store.nextSong(true)"
               :disabled="!song"
               class="text-white/90 hover:text-white transition disabled:opacity-30"
-              title="Next"
+              :title="$t('player.nextTrack')"
             >
               <svg
                 xmlns="http://www.w3.org/2000/svg"
@@ -986,7 +1007,7 @@ onUnmounted(() => {
                   ? 'text-white bg-white/20'
                   : 'text-white/70 hover:text-white hover:bg-white/10'
               "
-              :title="view === 'lyrics' ? 'Hide lyrics' : 'Show lyrics'"
+              :title="$t('player.lyrics')"
             >
               <svg
                 xmlns="http://www.w3.org/2000/svg"
@@ -1012,7 +1033,7 @@ onUnmounted(() => {
                   ? 'text-white bg-white/20'
                   : 'text-white/70 hover:text-white hover:bg-white/10'
               "
-              title="Queue"
+              :title="$t('player.queue')"
             >
               <svg
                 xmlns="http://www.w3.org/2000/svg"

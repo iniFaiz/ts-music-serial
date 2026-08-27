@@ -42,15 +42,15 @@ const goToArtist = (artistName) => {
   <Transition name="mini-queue" @after-leave="emit('after-leave')">
     <div v-if="open" class="absolute inset-0 z-10 flex flex-col mini-queue-panel">
       <div class="flex items-center justify-between px-4 py-2.5 shrink-0">
-        <h2 class="text-sm font-bold">Queue</h2>
+        <h2 class="text-sm font-bold">{{ $t('player.queue') }}</h2>
         <div class="flex items-center gap-3">
           <button
             v-if="store.queue.length > 1"
             @click="store.clearQueue()"
             class="text-xs text-[var(--text-secondary)] hover:text-white transition"
-            title="Clear queue"
+            :title="$t('queue.clear')"
           >
-            Clear
+            {{ $t('common.clear') }}
           </button>
           <button
             @click="store.toggleAutoplay()"
@@ -85,7 +85,7 @@ const goToArtist = (artistName) => {
         class="relative flex-1 px-2 pt-1 pb-36 overflow-auto mini-scroll"
       >
         <div v-if="store.queue.length === 0" class="p-8 text-sm text-center text-gray-600">
-          The queue is empty.
+          {{ $t('queue.empty') }}
         </div>
         <TransitionGroup
           v-else
@@ -99,8 +99,11 @@ const goToArtist = (artistName) => {
             v-for="(qsong, index) in store.queue"
             :key="keyFor(qsong)"
             :data-queue-idx="index"
+            role="row"
+            tabindex="0"
             @dblclick="store.playQueueIndex(index)"
-            class="queue-row group flex items-center gap-2 p-1.5 rounded-md hover:bg-white/10 transition-colors"
+            @keydown.enter="store.playQueueIndex(index)"
+            class="queue-row group flex items-center gap-2 p-1.5 rounded-md hover:bg-white/10 transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent-color)]"
             :class="{
               'bg-white/10': isCurrent(qsong),
               'opacity-30': index === dragIndex,
@@ -110,10 +113,12 @@ const goToArtist = (artistName) => {
                 overIndex === index && dragIndex !== index && dragIndex < index,
             }"
           >
-            <div
-              class="shrink-0 cursor-grab active:cursor-grabbing text-gray-500 hover:text-gray-200 transition-colors"
+            <button
+              type="button"
+              class="shrink-0 cursor-grab active:cursor-grabbing text-gray-500 hover:text-gray-200 transition-colors bg-transparent border-0 p-0"
               @mousedown="onGripMouseDown(index, $event)"
-              title="Drag to reorder"
+              :aria-label="$t('queue.dragToReorder')"
+              :title="$t('queue.dragToReorder')"
             >
               <svg
                 xmlns="http://www.w3.org/2000/svg"
@@ -122,6 +127,7 @@ const goToArtist = (artistName) => {
                 viewBox="0 0 24 24"
                 fill="currentColor"
                 stroke="none"
+                aria-hidden="true"
               >
                 <circle cx="9" cy="5" r="1.5"></circle>
                 <circle cx="15" cy="5" r="1.5"></circle>
@@ -130,26 +136,35 @@ const goToArtist = (artistName) => {
                 <circle cx="9" cy="19" r="1.5"></circle>
                 <circle cx="15" cy="19" r="1.5"></circle>
               </svg>
-            </div>
+            </button>
             <CoverImage :path="qsong.path" className="h-9 w-9 rounded shrink-0 bg-[#333]" />
-            <div class="flex-1 min-w-0" @click="store.playQueueIndex(index)">
-              <div
-                class="text-[12px] font-medium truncate leading-tight"
-                :class="isCurrent(qsong) ? 'text-[var(--accent-color)]' : 'text-white'"
+            <div class="flex-1 min-w-0">
+              <button
+                type="button"
+                @click="store.playQueueIndex(index)"
+                class="text-left w-full truncate bg-transparent border-0 p-0 block"
               >
-                {{ qsong.title }}
-              </div>
-              <div
+                <span
+                  class="text-[12px] font-medium truncate leading-tight block"
+                  :class="isCurrent(qsong) ? 'text-[var(--accent-color)]' : 'text-white'"
+                >
+                  {{ qsong.title }}
+                </span>
+              </button>
+              <button
+                type="button"
                 @click.stop="goToArtist(qsong.artist)"
-                class="text-[11px] text-[var(--text-secondary)] hover:text-[var(--accent-color)] hover:underline cursor-pointer truncate transition-colors"
+                class="text-left text-[11px] text-[var(--text-secondary)] hover:text-[var(--accent-color)] hover:underline cursor-pointer truncate transition-colors bg-transparent border-0 p-0 block max-w-full"
               >
                 {{ qsong.artist }}
-              </div>
+              </button>
             </div>
             <button
+              type="button"
               @click.stop="store.removeFromQueue(index)"
               class="text-gray-400 transition opacity-0 group-hover:opacity-100 hover:text-white shrink-0"
-              title="Remove from queue"
+              :aria-label="$t('queue.removeFromQueue')"
+              :title="$t('queue.removeFromQueue')"
             >
               <svg
                 xmlns="http://www.w3.org/2000/svg"
@@ -158,6 +173,7 @@ const goToArtist = (artistName) => {
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
+                aria-hidden="true"
                 stroke-width="2"
                 stroke-linecap="round"
                 stroke-linejoin="round"

@@ -91,9 +91,11 @@ onUnmounted(() => {
 <template>
   <div class="mt-12 pt-8 pb-4 flex flex-col items-center justify-center text-center select-none">
     <!-- App Logo (Interactive Fidget Spinner Easter Egg) -->
-    <div
-      class="mb-4 cursor-pointer active:scale-95 transition-transform duration-75 select-none rounded-full flex items-center justify-center"
+    <button
+      type="button"
+      class="mb-4 cursor-pointer active:scale-95 transition-transform duration-75 select-none rounded-full flex items-center justify-center bg-transparent border-0 p-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-color)]"
       @click="onLogoClick"
+      aria-label="ts-music logo spinner"
       title="ts-music"
     >
       <div
@@ -111,15 +113,15 @@ onUnmounted(() => {
       >
         <TsLogo :size="104" />
       </div>
-    </div>
+    </button>
 
     <!-- App Name -->
     <h2 class="text-2xl font-bold text-white tracking-tight">ts-music</h2>
 
     <!-- Version & Copyright -->
     <div class="mt-2.5 space-y-1 text-xs text-gray-400">
-      <div>Version: {{ version }}</div>
-      <div>© 2026 iniFaiz</div>
+      <div>{{ $t('settings.appCredit.version', { version }) }}</div>
+      <div>{{ $t('settings.appCredit.copyright') }}</div>
     </div>
   </div>
 </template>

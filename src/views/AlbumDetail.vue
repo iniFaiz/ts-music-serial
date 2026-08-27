@@ -136,14 +136,17 @@ const goToArtist = () => {
       <!-- Info -->
       <div class="flex flex-col gap-1 pb-2 overflow-hidden flex-1">
         <h4 class="text-sm font-bold text-[var(--accent-color)] uppercase tracking-wider mb-1">
-          Album
+          {{ $t('songList.album') }}
         </h4>
         <h1 class="text-4xl font-bold tracking-tight text-white truncate">{{ albumName }}</h1>
-        <h2
-          @click="goToArtist"
-          class="text-xl font-medium text-[var(--accent-color)] truncate cursor-pointer hover:underline"
-        >
-          {{ albumInfo.artist }}
+        <h2 class="text-xl font-medium text-[var(--accent-color)] truncate">
+          <button
+            type="button"
+            @click="goToArtist"
+            class="text-[var(--accent-color)] hover:underline cursor-pointer bg-transparent border-0 p-0 text-left"
+          >
+            {{ albumInfo.artist }}
+          </button>
         </h2>
 
         <p class="text-xs text-[var(--text-secondary)] font-medium uppercase mt-2 tracking-wide">
@@ -152,6 +155,7 @@ const goToArtist = () => {
 
         <div class="flex gap-3 mt-6 items-center">
           <button
+            type="button"
             @click="playAlbum"
             class="bg-[var(--accent-color)] text-white px-8 py-2 rounded-[4px] text-sm font-semibold hover:bg-red-500 transition flex items-center gap-2 shadow-lg"
           >
@@ -162,13 +166,15 @@ const goToArtist = () => {
               viewBox="0 0 24 24"
               fill="currentColor"
               stroke="none"
+              aria-hidden="true"
             >
               <polygon points="5 3 19 12 5 21 5 3"></polygon>
             </svg>
-            Play
+            {{ $t('common.play') }}
           </button>
 
           <button
+            type="button"
             @click="shuffleAlbum"
             class="bg-[#3a3a3a] text-[var(--accent-color)] px-8 py-2 rounded-[4px] text-sm font-semibold hover:bg-[#444] transition flex items-center gap-2 shadow-lg"
           >
@@ -182,10 +188,11 @@ const goToArtist = () => {
               stroke-width="2"
               stroke-linecap="round"
               stroke-linejoin="round"
+              aria-hidden="true"
             >
               <path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5" />
             </svg>
-            Shuffle
+            {{ $t('common.shuffle') }}
           </button>
         </div>
       </div>
@@ -193,9 +200,13 @@ const goToArtist = () => {
       <!-- Ellipsis Options Menu at the far right end -->
       <div class="relative pb-2 self-end playlist-menu-container">
         <button
+          type="button"
           @click.stop="menuOpen = !menuOpen"
           class="text-red-500 hover:text-red-400 p-2 rounded-full hover:bg-white/5 transition-colors flex items-center justify-center"
-          title="More options"
+          :title="$t('common.options')"
+          :aria-label="$t('common.options')"
+          aria-haspopup="menu"
+          :aria-expanded="menuOpen"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -204,6 +215,7 @@ const goToArtist = () => {
             viewBox="0 0 24 24"
             fill="currentColor"
             stroke="none"
+            aria-hidden="true"
           >
             <circle cx="5" cy="12" r="2"></circle>
             <circle cx="12" cy="12" r="2"></circle>
@@ -221,35 +233,35 @@ const goToArtist = () => {
             :disabled="albumSongs.length === 0"
             class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors disabled:opacity-40"
           >
-            Play "{{ albumName }}"
+            {{ $t('common.play') }} "{{ albumName }}"
           </button>
           <button
             @click="shuffleAlbum"
             :disabled="albumSongs.length === 0"
             class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors disabled:opacity-40"
           >
-            Shuffle "{{ albumName }}"
+            {{ $t('common.shuffle') }} "{{ albumName }}"
           </button>
           <button
             @click="playNextAlbum"
             :disabled="albumSongs.length === 0"
             class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors disabled:opacity-40"
           >
-            Play next
+            {{ $t('songList.menu.playNext') }}
           </button>
           <button
             @click="playLastAlbum"
             :disabled="albumSongs.length === 0"
             class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors disabled:opacity-40"
           >
-            Play last
+            {{ $t('views.albums.addToQueue') }}
           </button>
           <div class="border-t border-[#3a3a3a] my-1"></div>
           <button
             @click="deleteAlbumFromLibrary"
             class="w-full text-left px-4 py-2 text-red-500 hover:bg-[#3a3a3a] transition-colors"
           >
-            Delete from library
+            {{ $t('views.albumDetail.removeFromLibrary') }}
           </button>
         </div>
       </div>

@@ -18,6 +18,7 @@
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-dialog": "^2.7.2",
     "vue": "^3.5.13",
+    "vue-i18n": "^11.4.10",
     "vue-router": "^4.6.3"
   },
   "devDependencies": {
@@ -28,6 +29,7 @@
     "eslint": "^10.8.0",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-vue": "^10.10.0",
+    "eslint-plugin-vuejs-accessibility": "^2.6.0",
     "globals": "^17.8.0",
     "postcss": "^8.5.23",
     "prettier": "^3.9.6",

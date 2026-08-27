@@ -76,11 +76,11 @@ const playLastFavorites = () => {
 
       <div class="flex flex-col gap-1 pb-2 overflow-hidden flex-1">
         <h4 class="text-sm font-bold text-[var(--accent-color)] uppercase tracking-wider mb-1">
-          Playlist
+          {{ $t('nav.playlists') }}
         </h4>
-        <h1 class="text-5xl font-bold tracking-tight text-white">Liked Songs</h1>
+        <h1 class="text-5xl font-bold tracking-tight text-white">{{ $t('nav.favorites') }}</h1>
         <p class="text-xs text-[var(--text-secondary)] font-medium mt-2">
-          {{ loading ? 'Loading songs…' : `${songs.length} songs` }}
+          {{ loading ? $t('common.loading') : $t('views.favorites.trackCount', { count: songs.length }) }}
         </p>
 
         <div class="flex gap-3 mt-6 items-center">
@@ -99,7 +99,7 @@ const playLastFavorites = () => {
             >
               <polygon points="5 3 19 12 5 21 5 3"></polygon>
             </svg>
-            Play
+            {{ $t('common.play') }}
           </button>
 
           <button
@@ -120,7 +120,7 @@ const playLastFavorites = () => {
             >
               <path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5" />
             </svg>
-            Shuffle
+            {{ $t('common.shuffle') }}
           </button>
         </div>
       </div>
@@ -130,7 +130,7 @@ const playLastFavorites = () => {
         <button
           @click.stop="menuOpen = !menuOpen"
           class="text-red-500 hover:text-red-400 p-2 rounded-full hover:bg-white/5 transition-colors flex items-center justify-center"
-          title="More options"
+          :title="$t('common.options')"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -156,28 +156,28 @@ const playLastFavorites = () => {
             :disabled="loading || songs.length === 0"
             class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors disabled:opacity-40"
           >
-            Play "Liked Songs"
+            {{ $t('views.favorites.play') }}
           </button>
           <button
             @click="shuffleFavorites"
             :disabled="loading || songs.length === 0"
             class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors disabled:opacity-40"
           >
-            Shuffle "Liked Songs"
+            {{ $t('views.favorites.shuffle') }}
           </button>
           <button
             @click="playNextFavorites"
             :disabled="loading || songs.length === 0"
             class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors disabled:opacity-40"
           >
-            Play next
+            {{ $t('songList.menu.playNext') }}
           </button>
           <button
             @click="playLastFavorites"
             :disabled="loading || songs.length === 0"
             class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors disabled:opacity-40"
           >
-            Play last
+            {{ $t('views.albums.addToQueue') }}
           </button>
         </div>
       </div>

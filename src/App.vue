@@ -267,6 +267,7 @@ const navigatePlaylist = (pl, event) => {
 
     <div class="flex flex-1 overflow-hidden">
       <!-- Sidebar -->
+      <!-- eslint-disable-next-line vuejs-accessibility/click-events-have-key-events, vuejs-accessibility/no-static-element-interactions -->
       <nav
         class="bg-[var(--sidebar-bg)] border-r border-[var(--border-color)] flex flex-col shrink-0 pt-4 pb-4 gap-5 transition-[width] duration-200 ease-out"
         :class="compact ? 'w-16 px-2' : 'w-64 px-4'"
@@ -288,6 +289,7 @@ const navigatePlaylist = (pl, event) => {
               stroke-width="3"
               stroke-linecap="round"
               stroke-linejoin="round"
+              aria-hidden="true"
             >
               <circle cx="11" cy="11" r="8"></circle>
               <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
@@ -296,11 +298,12 @@ const navigatePlaylist = (pl, event) => {
           <input
             v-model="store.searchQuery"
             type="text"
-            placeholder="Search"
+            :aria-label="$t('common.search')"
+            :placeholder="$t('common.search')"
             class="w-full bg-[#282828] text-sm text-white rounded-lg py-1.5 pl-9 pr-3 focus:outline-none focus:ring-1 focus:ring-[var(--accent-color)] placeholder-gray-500"
           />
         </div>
-        <div v-else class="flex justify-center py-1 text-gray-500" title="Search">
+        <div v-else class="flex justify-center py-1 text-gray-500" :title="$t('common.search')">
           <svg
             xmlns="http://www.w3.org/2000/svg"
             width="18"
@@ -324,7 +327,7 @@ const navigatePlaylist = (pl, event) => {
             active-class="bg-[#282828] text-[var(--accent-color)] font-medium"
             class="flex items-center rounded-md text-sm text-[var(--text-secondary)] hover:text-white hover:bg-[#282828] transition-colors"
             :class="compact ? 'justify-center py-2.5' : 'gap-3 px-3 py-2'"
-            :title="compact ? 'Home' : null"
+            :title="compact ? $t('nav.home') : null"
           >
             <svg
               xmlns="http://www.w3.org/2000/svg"
@@ -341,7 +344,7 @@ const navigatePlaylist = (pl, event) => {
               <path d="M5 10v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V10"></path>
               <path d="M9 21v-6h6v6"></path>
             </svg>
-            <span v-if="!compact">Home</span>
+            <span v-if="!compact">{{ $t('nav.home') }}</span>
           </router-link>
         </div>
 
@@ -351,7 +354,7 @@ const navigatePlaylist = (pl, event) => {
             v-if="!compact"
             class="px-3 mb-2 text-xs font-semibold tracking-wider text-gray-500 uppercase"
           >
-            Library
+            {{ $t('nav.library') }}
           </div>
 
           <router-link
@@ -359,7 +362,7 @@ const navigatePlaylist = (pl, event) => {
             active-class="bg-[#282828] text-[var(--accent-color)] font-medium"
             class="flex items-center rounded-md text-sm text-[var(--text-secondary)] hover:text-white hover:bg-[#282828] transition-colors"
             :class="compact ? 'justify-center py-2.5' : 'gap-3 px-3 py-2'"
-            :title="compact ? 'Songs' : null"
+            :title="compact ? $t('nav.songs') : null"
           >
             <svg
               xmlns="http://www.w3.org/2000/svg"
@@ -376,7 +379,7 @@ const navigatePlaylist = (pl, event) => {
               <circle cx="6" cy="18" r="3"></circle>
               <circle cx="18" cy="16" r="3"></circle>
             </svg>
-            <span v-if="!compact">Songs</span>
+            <span v-if="!compact">{{ $t('nav.songs') }}</span>
           </router-link>
 
           <router-link
@@ -384,7 +387,7 @@ const navigatePlaylist = (pl, event) => {
             active-class="bg-[#282828] text-[var(--accent-color)] font-medium"
             class="flex items-center rounded-md text-sm text-[var(--text-secondary)] hover:text-white hover:bg-[#282828] transition-colors"
             :class="compact ? 'justify-center py-2.5' : 'gap-3 px-3 py-2'"
-            :title="compact ? 'Albums' : null"
+            :title="compact ? $t('nav.albums') : null"
           >
             <svg
               xmlns="http://www.w3.org/2000/svg"
@@ -401,7 +404,7 @@ const navigatePlaylist = (pl, event) => {
               <circle cx="12" cy="12" r="4"></circle>
               <line x1="12" y1="12" x2="12" y2="4"></line>
             </svg>
-            <span v-if="!compact">Albums</span>
+            <span v-if="!compact">{{ $t('nav.albums') }}</span>
           </router-link>
 
           <router-link
@@ -409,7 +412,7 @@ const navigatePlaylist = (pl, event) => {
             active-class="bg-[#282828] text-[var(--accent-color)] font-medium"
             class="flex items-center rounded-md text-sm text-[var(--text-secondary)] hover:text-white hover:bg-[#282828] transition-colors"
             :class="compact ? 'justify-center py-2.5' : 'gap-3 px-3 py-2'"
-            :title="compact ? 'Artists' : null"
+            :title="compact ? $t('nav.artists') : null"
           >
             <svg
               xmlns="http://www.w3.org/2000/svg"
@@ -426,7 +429,7 @@ const navigatePlaylist = (pl, event) => {
                 d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"
               ></path>
             </svg>
-            <span v-if="!compact">Artists</span>
+            <span v-if="!compact">{{ $t('nav.artists') }}</span>
           </router-link>
 
           <router-link
@@ -434,7 +437,7 @@ const navigatePlaylist = (pl, event) => {
             active-class="bg-[#282828] text-[var(--accent-color)] font-medium"
             class="flex items-center rounded-md text-sm text-[var(--text-secondary)] hover:text-white hover:bg-[#282828] transition-colors"
             :class="compact ? 'justify-center py-2.5' : 'gap-3 px-3 py-2'"
-            :title="compact ? 'Liked Songs' : null"
+            :title="compact ? $t('nav.favorites') : null"
           >
             <svg
               xmlns="http://www.w3.org/2000/svg"
@@ -448,7 +451,7 @@ const navigatePlaylist = (pl, event) => {
                 d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"
               ></path>
             </svg>
-            <span v-if="!compact">Liked Songs</span>
+            <span v-if="!compact">{{ $t('nav.favorites') }}</span>
           </router-link>
 
           <router-link
@@ -456,7 +459,7 @@ const navigatePlaylist = (pl, event) => {
             active-class="bg-[#282828] text-[var(--accent-color)] font-medium"
             class="flex items-center rounded-md text-sm text-[var(--text-secondary)] hover:text-white hover:bg-[#282828] transition-colors"
             :class="compact ? 'justify-center py-2.5' : 'gap-3 px-3 py-2'"
-            :title="compact ? 'Settings' : null"
+            :title="compact ? $t('nav.settings') : null"
           >
             <svg
               xmlns="http://www.w3.org/2000/svg"
@@ -479,7 +482,7 @@ const navigatePlaylist = (pl, event) => {
               <line x1="9" y1="8" x2="15" y2="8"></line>
               <line x1="17" y1="16" x2="23" y2="16"></line>
             </svg>
-            <span v-if="!compact">Settings</span>
+            <span v-if="!compact">{{ $t('nav.settings') }}</span>
           </router-link>
         </div>
 
@@ -492,12 +495,14 @@ const navigatePlaylist = (pl, event) => {
             <span
               v-if="!compact"
               class="text-xs font-semibold tracking-wider text-gray-500 uppercase"
-              >Playlists</span
+              >{{ $t('nav.playlists') }}</span
             >
             <button
+              type="button"
               @click="newPlaylist"
               class="text-gray-500 transition hover:text-white"
-              title="New playlist"
+              :title="$t('nav.newPlaylist')"
+              :aria-label="$t('nav.newPlaylist')"
             >
               <svg
                 xmlns="http://www.w3.org/2000/svg"
@@ -509,6 +514,7 @@ const navigatePlaylist = (pl, event) => {
                 stroke-width="2.5"
                 stroke-linecap="round"
                 stroke-linejoin="round"
+                aria-hidden="true"
               >
                 <line x1="12" y1="5" x2="12" y2="19"></line>
                 <line x1="5" y1="12" x2="19" y2="12"></line>
@@ -519,10 +525,10 @@ const navigatePlaylist = (pl, event) => {
             <!-- Link to All Playlists -->
             <router-link
               to="/playlists"
-              active-class="bg-[#282828] text-[var(--accent-color)] font-medium"
+              active-class="bg-[#282828] text-white"
               class="flex items-center rounded-md text-sm text-[var(--text-secondary)] hover:text-white hover:bg-[#282828] transition-colors mb-1"
               :class="compact ? 'justify-center py-1.5' : 'gap-3 px-2 py-1.5'"
-              :title="compact ? 'All Playlists' : null"
+              :title="compact ? $t('nav.allPlaylists') : null"
             >
               <div
                 class="h-7 w-7 rounded shrink-0 flex items-center justify-center bg-[#282828] text-gray-400 group-hover:text-white"
@@ -537,6 +543,7 @@ const navigatePlaylist = (pl, event) => {
                   stroke-width="2.5"
                   stroke-linecap="round"
                   stroke-linejoin="round"
+                  aria-hidden="true"
                 >
                   <line x1="8" y1="6" x2="21" y2="6"></line>
                   <line x1="8" y1="12" x2="21" y2="12"></line>
@@ -546,7 +553,7 @@ const navigatePlaylist = (pl, event) => {
                   <line x1="3" y1="18" x2="3.01" y2="18"></line>
                 </svg>
               </div>
-              <span v-if="!compact" class="truncate">All Playlists</span>
+              <span v-if="!compact" class="truncate">{{ $t('nav.allPlaylists') }}</span>
             </router-link>
 
             <TransitionGroup name="sidebar-pl" tag="div">
@@ -594,6 +601,7 @@ const navigatePlaylist = (pl, event) => {
                     fill="currentColor"
                     stroke="none"
                     class="text-[var(--accent-color)] shrink-0 opacity-80"
+                    aria-hidden="true"
                   >
                     <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
                   </svg>
@@ -604,18 +612,20 @@ const navigatePlaylist = (pl, event) => {
               v-if="store.playlists.length === 0 && !compact"
               class="px-3 py-1 text-[11px] text-gray-600"
             >
-              No playlists yet
+              {{ $t('nav.noPlaylists') }}
             </div>
           </div>
         </div>
 
         <div class="mt-auto" :class="compact ? '' : 'px-3 mb-4'">
           <button
+            type="button"
             @click="store.selectAndScan()"
             :disabled="store.loading"
+            :aria-label="$t('nav.addFolder')"
             class="w-full group flex items-center rounded-md text-sm font-medium text-[var(--accent-color)] hover:bg-[#282828] transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
             :class="compact ? 'justify-center py-2' : 'gap-3 px-3 py-2'"
-            :title="compact ? 'Add Folder' : null"
+            :title="compact ? $t('nav.addFolder') : null"
           >
             <div
               class="flex items-center justify-center w-5 h-5 rounded [background:color-mix(in_srgb,var(--accent-color)_10%,transparent)] group-hover:[background:color-mix(in_srgb,var(--accent-color)_20%,transparent)] transition-colors"
@@ -626,6 +636,7 @@ const navigatePlaylist = (pl, event) => {
                 xmlns="http://www.w3.org/2000/svg"
                 fill="none"
                 viewBox="0 0 24 24"
+                aria-hidden="true"
               >
                 <circle
                   class="opacity-25"
@@ -652,13 +663,14 @@ const navigatePlaylist = (pl, event) => {
                 stroke-width="3"
                 stroke-linecap="round"
                 stroke-linejoin="round"
+                aria-hidden="true"
               >
                 <line x1="12" y1="5" x2="12" y2="19"></line>
                 <line x1="5" y1="12" x2="19" y2="12"></line>
               </svg>
             </div>
 
-            <span v-if="!compact">{{ store.loading ? 'Scanning...' : 'Add Folder' }}</span>
+            <span v-if="!compact">{{ store.loading ? $t('common.loading') : $t('nav.addFolder') }}</span>
           </button>
 
           <div v-if="!compact" class="text-[10px] text-gray-600 mt-1 px-3 truncate opacity-70">
@@ -673,6 +685,7 @@ const navigatePlaylist = (pl, event) => {
         <PlayerControls />
 
         <main class="flex-1 relative overflow-hidden flex flex-col bg-[var(--app-bg)]">
+          <!-- eslint-disable-next-line vuejs-accessibility/click-events-have-key-events, vuejs-accessibility/no-static-element-interactions -->
           <div
             ref="scrollContainer"
             class="flex-1 overflow-auto scroll-smooth"

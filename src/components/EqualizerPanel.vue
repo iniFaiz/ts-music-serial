@@ -48,14 +48,14 @@ function onBand(i, e) {
     <ToggleInt
       :modelValue="store.eqEnabled"
       @update:modelValue="(v) => store.setEqEnabled(v)"
-      label="Enable equalizer"
+      :label="$t('equalizer.enable')"
     />
 
     <!-- Everything below is dimmed/inert while the EQ is off. -->
     <div :class="store.eqEnabled ? '' : 'opacity-40 pointer-events-none'">
       <!-- Preset dropdown -->
       <SelectInt
-        label="Preset"
+        :label="$t('equalizer.preset')"
         :modelValue="store.eqPreset"
         :options="presetOptions"
         @update:modelValue="onPreset"
@@ -75,6 +75,7 @@ function onBand(i, e) {
             <input
               type="range"
               class="eq-slider"
+              :aria-label="'Frequency band ' + label"
               :min="EQ_MIN_DB"
               :max="EQ_MAX_DB"
               step="1"
@@ -90,7 +91,7 @@ function onBand(i, e) {
       <!-- Pre-amp + reset -->
       <div class="mt-5 border-t border-white/5">
         <SliderInt
-          label="Pre-amp"
+          :label="$t('equalizer.preamp')"
           :modelValue="store.eqPreampDb"
           :min="EQ_MIN_DB"
           :max="EQ_MAX_DB"
@@ -105,7 +106,7 @@ function onBand(i, e) {
 
       <div class="flex justify-end mt-2">
         <button @click="store.resetEq()" class="text-xs font-medium text-gray-400 hover:text-white">
-          Reset to flat
+          {{ $t('equalizer.reset') }}
         </button>
       </div>
     </div>

@@ -209,7 +209,7 @@ onUnmounted(() => {
 <template>
   <div class="h-full overflow-auto px-8 pt-8 pb-12">
     <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
-      <h1 class="text-3xl font-bold tracking-tight text-white">Playlists</h1>
+      <h1 class="text-3xl font-bold tracking-tight text-white">{{ $t('nav.playlists') }}</h1>
       <div class="flex items-center gap-2.5 flex-wrap">
         <!-- Search Bar -->
         <div class="relative flex-1 sm:w-60 sm:flex-none">
@@ -232,12 +232,15 @@ onUnmounted(() => {
           <input
             v-model="searchQuery"
             type="text"
-            placeholder="Search playlists..."
+            :aria-label="$t('views.playlists.searchPlaceholder')"
+            :placeholder="$t('views.playlists.searchPlaceholder')"
             class="w-full h-[32px] bg-[#2a2a2a] text-xs text-white rounded-md pl-9 pr-8 focus:outline-none focus:ring-1 focus:ring-[var(--accent-color)] placeholder-gray-500"
           />
           <button
             v-if="searchQuery"
+            type="button"
             @click="searchQuery = ''"
+            :aria-label="$t('common.clear')"
             class="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white"
           >
             <svg
@@ -250,6 +253,7 @@ onUnmounted(() => {
               stroke-width="2.5"
               stroke-linecap="round"
               stroke-linejoin="round"
+              aria-hidden="true"
             >
               <line x1="18" y1="6" x2="6" y2="18"></line>
               <line x1="6" y1="6" x2="18" y2="18"></line>
@@ -258,6 +262,7 @@ onUnmounted(() => {
         </div>
 
         <button
+          type="button"
           @click="newSmartPlaylist"
           class="h-[32px] bg-[#2c2c2e] text-white px-4 rounded-md text-xs font-semibold hover:bg-[#3a3a3c] transition inline-flex items-center gap-1.5 shadow-lg shrink-0"
         >
@@ -269,12 +274,14 @@ onUnmounted(() => {
             fill="currentColor"
             stroke="none"
             class="text-[var(--accent-color)]"
+            aria-hidden="true"
           >
             <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
           </svg>
-          New Smart Playlist
+          {{ $t('nav.newSmartPlaylist') }}
         </button>
         <button
+          type="button"
           @click="newPlaylist"
           class="h-[32px] bg-[var(--accent-color)] text-white px-4 rounded-md text-xs font-semibold hover:bg-red-500 transition inline-flex items-center gap-1.5 shadow-lg shrink-0"
         >
@@ -288,11 +295,12 @@ onUnmounted(() => {
             stroke-width="2.5"
             stroke-linecap="round"
             stroke-linejoin="round"
+            aria-hidden="true"
           >
             <line x1="12" y1="5" x2="12" y2="19"></line>
             <line x1="5" y1="12" x2="19" y2="12"></line>
           </svg>
-          New Playlist
+          {{ $t('nav.newPlaylist') }}
         </button>
       </div>
     </div>
@@ -312,10 +320,15 @@ onUnmounted(() => {
         :key="pl.id"
         :data-cover-key="pl.id"
         :data-pl-grid-idx="plIdx"
+        role="button"
+        tabindex="0"
+        :aria-label="pl.name"
         @click="openPlaylist(pl, $event)"
+        @keydown.enter="openPlaylist(pl, $event)"
+        @keydown.space.prevent="openPlaylist(pl, $event)"
         @contextmenu="openContextMenu(pl, $event)"
         @mousedown="onCardMouseDown(plIdx, $event)"
-        class="cursor-pointer group transition-all duration-200"
+        class="cursor-pointer group transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-color)] rounded-md"
         :class="{
           'opacity-30 scale-95': plIdx === dragIndex,
           'plgrid-drop-target': overIndex === plIdx && dragIndex !== plIdx && dragIndex !== -1,
@@ -335,10 +348,12 @@ onUnmounted(() => {
           <div
             class="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity rounded-md flex items-end p-3 z-10"
           >
-            <div
+            <button
               v-if="cardCount(pl) > 0"
+              type="button"
               data-play-btn
               @click.stop="playCard(pl)"
+              aria-label="Play playlist"
               class="bg-[var(--accent-color)] text-white rounded-full p-3 shadow-lg translate-y-2 opacity-0 group-hover:translate-y-0 group-hover:opacity-100 transition-all duration-300 hover:scale-110 hover:bg-red-500"
             >
               <svg
@@ -348,10 +363,11 @@ onUnmounted(() => {
                 viewBox="0 0 24 24"
                 fill="currentColor"
                 stroke="none"
+                aria-hidden="true"
               >
                 <polygon points="5 3 19 12 5 21 5 3"></polygon>
               </svg>
-            </div>
+            </button>
           </div>
         </div>
 
@@ -372,7 +388,7 @@ onUnmounted(() => {
             <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
           </svg>
         </h3>
-        <p class="text-[13px] text-[var(--text-secondary)] truncate">{{ cardCount(pl) }} songs</p>
+        <p class="text-[13px] text-[var(--text-secondary)] truncate">{{ $t('views.playlists.songsCount', { count: cardCount(pl) }) }}</p>
       </div>
     </TransitionGroup>
 
@@ -381,13 +397,13 @@ onUnmounted(() => {
       class="p-20 text-center text-gray-600"
     >
       <div class="text-4xl mb-4 opacity-20">🔍</div>
-      <p>No playlists found matching "{{ searchQuery }}".</p>
+      <p>{{ $t('views.playlists.emptySearch', { query: searchQuery }) }}</p>
     </div>
 
     <div v-else class="p-20 text-center text-gray-600">
       <div class="text-4xl mb-4 opacity-20">♪</div>
-      <p>No playlists created yet.</p>
-      <p class="text-xs mt-2">Click "New Playlist" or "New Smart Playlist" above to get started.</p>
+      <p>{{ $t('views.playlists.empty') }}</p>
+      <p class="text-xs mt-2">{{ $t('views.playlists.emptySubtext') }}</p>
     </div>
 
     <!-- Right-click Context Menu -->
@@ -404,7 +420,7 @@ onUnmounted(() => {
         "
         class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors"
       >
-        Open
+        {{ $t('views.playlists.open') }}
       </button>
       <button
         @click="
@@ -413,7 +429,7 @@ onUnmounted(() => {
         "
         class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors"
       >
-        Play
+        {{ $t('views.playlists.play') }}
       </button>
       <button
         @click="
@@ -424,14 +440,14 @@ onUnmounted(() => {
         "
         class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors"
       >
-        Edit
+        {{ $t('views.playlists.edit') }}
       </button>
       <div class="border-t border-[#3a3a3a] my-1"></div>
       <button
         @click="deletePlaylistConfirm(menuState.playlist)"
         class="w-full text-left px-4 py-2 text-red-500 hover:bg-[#3a3a3a] transition-colors font-medium"
       >
-        Delete Playlist
+        {{ $t('views.playlists.delete') }}
       </button>
     </div>
   </div>

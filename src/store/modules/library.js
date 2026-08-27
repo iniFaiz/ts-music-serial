@@ -3,6 +3,7 @@ import { idbGet, idbDelete } from '../../libraryStore';
 import { retryMissingCovers } from '../../coverCache';
 import { EQ_BAND_COUNT } from '../../equalizer';
 import { requestDestructiveConsent } from '../../destructiveConsent';
+import { setLanguage as setI18nLanguage } from '../../i18n';
 
 function dirName(path) {
   const idx = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
@@ -101,6 +102,7 @@ export function createLibraryActions() {
             miniAlwaysOnTop: this.miniAlwaysOnTop,
             waveformEnabled: this.waveformEnabled,
             onlineMetadataEnabled: this.onlineMetadataEnabled,
+            language: this.language,
           },
         });
         await invoke('db_kv_set', {
@@ -251,6 +253,10 @@ export function createLibraryActions() {
         if (typeof s.waveformEnabled === 'boolean') this.waveformEnabled = s.waveformEnabled;
         if (typeof s.onlineMetadataEnabled === 'boolean')
           this.onlineMetadataEnabled = s.onlineMetadataEnabled;
+        if (typeof s.language === 'string') {
+          this.language = s.language;
+          setI18nLanguage(s.language);
+        }
 
         // Re-select the saved output device (the audio thread starts on default).
         if (this.outputDevice) {

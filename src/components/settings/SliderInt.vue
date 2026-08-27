@@ -11,6 +11,7 @@
       :step="step"
       :value="modelValue"
       :disabled="disabled"
+      :aria-label="label"
       @input="$emit('update:modelValue', Number($event.target.value))"
       class="w-full h-1 rounded-lg appearance-none cursor-pointer disabled:cursor-not-allowed"
       :style="{

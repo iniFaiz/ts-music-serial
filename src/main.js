@@ -39,24 +39,26 @@ const windowMode = new URLSearchParams(window.location.search).get('tsWindow');
 async function bootstrap() {
   if (windowMode === 'vinyl-scratch') {
     document.documentElement.classList.add('vinyl-native-window');
-    const [{ default: VinylScratchApp }, { store: scratchStore }] = await Promise.all([
+    const [{ default: VinylScratchApp }, { store: scratchStore }, { i18n }] = await Promise.all([
       import('./VinylScratchApp.vue'),
       import('./store'),
+      import('./i18n'),
     ]);
     const app = createApp(VinylScratchApp);
     installErrorHandler(app, scratchStore);
-    app.mount('#app');
+    app.use(i18n).mount('#app');
     return;
   }
 
-  const [{ default: App }, { default: router }, { store }] = await Promise.all([
+  const [{ default: App }, { default: router }, { store }, { i18n }] = await Promise.all([
     import('./App.vue'),
     import('./router'),
     import('./store'),
+    import('./i18n'),
   ]);
   const app = createApp(App);
   installErrorHandler(app, store);
-  app.use(router).mount('#app');
+  app.use(router).use(i18n).mount('#app');
 }
 
 bootstrap();

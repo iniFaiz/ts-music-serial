@@ -9,6 +9,7 @@ import { useVirtualWindow, resolveScrollParent } from '../useVirtualWindow';
 import { useTagEditor } from '../useTagEditor';
 import { useMultiSelect } from '../useMultiSelect';
 import { useRowContextMenu } from '../useRowContextMenu';
+import { useFocusTrap } from '../useFocusTrap';
 
 const props = defineProps({
   songs: { type: Array, required: true },
@@ -259,33 +260,6 @@ const isActiveArtist = (artistName) => {
   return artists.includes(activeArtist) || String(artistName).trim().toLowerCase() === activeArtist;
 };
 
-// ---- Hover Tooltips ----
-
-const tooltip = ref({ show: false, text: '', x: 0, y: 0 });
-
-const showTooltip = (event, text) => {
-  const target = event.currentTarget;
-  if (target.scrollWidth > target.clientWidth) {
-    tooltip.value = {
-      show: true,
-      text,
-      x: event.clientX + 10,
-      y: event.clientY + 15,
-    };
-  }
-};
-
-const moveTooltip = (event) => {
-  if (tooltip.value.show) {
-    tooltip.value.x = event.clientX + 10;
-    tooltip.value.y = event.clientY + 15;
-  }
-};
-
-const hideTooltip = () => {
-  tooltip.value.show = false;
-};
-
 // ---- Custom Warning Deletion Modal ----
 
 const deleteConfirmModalOpen = ref(false);
@@ -355,10 +329,23 @@ const {
   removeFromThisPlaylist,
   isHoveringMenu,
   closeMenuOnScroll,
+  handleMenuKeyDown,
 } = useRowContextMenu({
   playlistId: () => props.playlistId,
   findCoverBySongPath,
 });
+
+const onRowKeyDown = (song, event) => {
+  if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+    event.preventDefault();
+    const rect = event.currentTarget.getBoundingClientRect();
+    openMenu(song, {
+      preventDefault: () => {},
+      clientX: rect.left + 60,
+      clientY: rect.top + 20,
+    });
+  }
+};
 
 // ---- File Information Modal + tag editor (extracted to useTagEditor) ----
 // Declared after the context-menu section: opening the modal reads
@@ -383,6 +370,17 @@ const {
   saveEditInfo,
   copyToClipboard,
 } = useTagEditor({ menu, closeMenu });
+
+const infoModalRef = ref(null);
+const deleteModalRef = ref(null);
+
+useFocusTrap(infoModalRef, () => infoModalOpen.value, {
+  onEscape: closeInfoModal,
+});
+
+useFocusTrap(deleteModalRef, () => deleteConfirmModalOpen.value, {
+  onEscape: closeDeleteConfirm,
+});
 
 // ---- Multi-select Selection Mode (extracted to useMultiSelect) ----
 
@@ -421,7 +419,6 @@ onUnmounted(() => {
   window.removeEventListener('scroll', closeMenuOnScroll, true);
   window.removeEventListener('resize', closeMenu);
   detachWindowing();
-  hideTooltip();
 });
 </script>
 
@@ -429,6 +426,7 @@ onUnmounted(() => {
   <div ref="songListContainer" class="w-full text-left text-sm 2xl:text-sm px-6 pb-12">
     <!-- Header -->
     <div
+      role="row"
       class="grid gap-4 text-[var(--text-secondary)] text-xs font-medium uppercase tracking-wide border-b border-[var(--border-color)] py-2 mb-2 sticky top-0 bg-[var(--app-bg)] z-10 select-none grid-cols-[20px_3fr_2fr_2fr_120px] 2xl:grid-cols-[30px_4fr_3fr_3fr_120px]"
     >
       <div class="text-center flex justify-center items-center h-full">
@@ -437,34 +435,43 @@ onUnmounted(() => {
           type="checkbox"
           :checked="selectedSongs.length === sortedSongs.length && sortedSongs.length > 0"
           @change="toggleSelectAll"
+          :aria-label="$t('common.selectAll')"
           class="accent-[var(--accent-color)] h-3.5 w-3.5 rounded cursor-pointer"
         />
-        <span v-else>#</span>
+        <span v-else>{{ $t('songList.index') }}</span>
       </div>
-      <div
+      <button
+        type="button"
         @click="toggleSort('title')"
-        class="cursor-pointer hover:text-white flex items-center gap-1"
+        :aria-sort="sortKey === 'title' ? (sortOrder === 'asc' ? 'ascending' : 'descending') : 'none'"
+        class="cursor-pointer hover:text-white flex items-center gap-1 text-left font-medium uppercase text-xs tracking-wide bg-transparent border-0 p-0 text-[var(--text-secondary)] focus:outline-none focus-visible:underline"
       >
-        Title <span class="text-[8px]">{{ getSortIcon('title') }}</span>
-      </div>
-      <div
+        {{ $t('songList.title') }} <span class="text-[8px]" aria-hidden="true">{{ getSortIcon('title') }}</span>
+      </button>
+      <button
+        type="button"
         @click="toggleSort('artist')"
-        class="cursor-pointer hover:text-white flex items-center gap-1"
+        :aria-sort="sortKey === 'artist' ? (sortOrder === 'asc' ? 'ascending' : 'descending') : 'none'"
+        class="cursor-pointer hover:text-white flex items-center gap-1 text-left font-medium uppercase text-xs tracking-wide bg-transparent border-0 p-0 text-[var(--text-secondary)] focus:outline-none focus-visible:underline"
       >
-        Artist <span class="text-[8px]">{{ getSortIcon('artist') }}</span>
-      </div>
-      <div
+        {{ $t('songList.artist') }} <span class="text-[8px]" aria-hidden="true">{{ getSortIcon('artist') }}</span>
+      </button>
+      <button
+        type="button"
         @click="toggleSort('album')"
-        class="cursor-pointer hover:text-white flex items-center gap-1"
+        :aria-sort="sortKey === 'album' ? (sortOrder === 'asc' ? 'ascending' : 'descending') : 'none'"
+        class="cursor-pointer hover:text-white flex items-center gap-1 text-left font-medium uppercase text-xs tracking-wide bg-transparent border-0 p-0 text-[var(--text-secondary)] focus:outline-none focus-visible:underline"
       >
-        Album <span class="text-[8px]">{{ getSortIcon('album') }}</span>
-      </div>
-      <div
+        {{ $t('songList.album') }} <span class="text-[8px]" aria-hidden="true">{{ getSortIcon('album') }}</span>
+      </button>
+      <button
+        type="button"
         @click="toggleSort('duration_secs')"
-        class="cursor-pointer hover:text-white flex items-center justify-end gap-1 text-right"
+        :aria-sort="sortKey === 'duration_secs' ? (sortOrder === 'asc' ? 'ascending' : 'descending') : 'none'"
+        class="cursor-pointer hover:text-white flex items-center justify-end gap-1 text-right font-medium uppercase text-xs tracking-wide bg-transparent border-0 p-0 text-[var(--text-secondary)] focus:outline-none focus-visible:underline"
       >
-        Time <span class="text-[8px]">{{ getSortIcon('duration_secs') }}</span>
-      </div>
+        {{ $t('songList.duration') }} <span class="text-[8px]" aria-hidden="true">{{ getSortIcon('duration_secs') }}</span>
+      </button>
     </div>
 
     <!-- Rows. The reorder FLIP animation is only meaningful for drag-reorderable
@@ -486,10 +493,15 @@ onUnmounted(() => {
         :data-artist-key="song.artist"
         :data-album-key="song.album"
         :data-pl-drag-idx="canReorder ? index : undefined"
+        tabindex="0"
+        role="row"
         @click="plDragDidReorder ? null : selectMode ? toggleSelectSong(song) : playSong(song)"
+        @keydown.enter="plDragDidReorder ? null : selectMode ? toggleSelectSong(song) : playSong(song)"
+        @keydown.space.prevent="plDragDidReorder ? null : selectMode ? toggleSelectSong(song) : playSong(song)"
+        @keydown="onRowKeyDown(song, $event)"
         @contextmenu.prevent="openMenu(song, $event)"
         @mousedown="canReorder ? onPlRowMouseDown(index, $event) : null"
-        class="song-row grid gap-4 py-2 px-2 rounded-md hover:bg-[#2a2a2a] group items-center transition-colors cursor-pointer grid-cols-[20px_3fr_2fr_2fr_120px] 2xl:grid-cols-[30px_4fr_3fr_3fr_120px] 2xl:py-1.5"
+        class="song-row grid gap-4 py-2 px-2 rounded-md hover:bg-[#2a2a2a] group items-center transition-colors cursor-pointer grid-cols-[20px_3fr_2fr_2fr_120px] 2xl:grid-cols-[30px_4fr_3fr_3fr_120px] 2xl:py-1.5 focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent-color)]"
         :class="{
           'bg-[#2a2a2a]': isCurrentSong(song) || (selectMode && selectedSongs.includes(song.path)),
           'opacity-30': canReorder && index === plDragIndex,
@@ -507,6 +519,7 @@ onUnmounted(() => {
             type="checkbox"
             :checked="selectedSongs.includes(song.path)"
             @click.stop="toggleSelectSong(song)"
+            :aria-label="song.title"
             class="accent-[var(--accent-color)] h-3.5 w-3.5 rounded cursor-pointer"
           />
           <span
@@ -520,6 +533,7 @@ onUnmounted(() => {
               viewBox="0 0 24 24"
               fill="currentColor"
               stroke="none"
+              aria-hidden="true"
             >
               <polygon points="5 3 19 12 5 21 5 3"></polygon>
             </svg>
@@ -535,6 +549,7 @@ onUnmounted(() => {
               viewBox="0 0 24 24"
               fill="currentColor"
               stroke="none"
+              aria-hidden="true"
             >
               <rect x="6" y="4" width="4" height="16"></rect>
               <rect x="14" y="4" width="4" height="16"></rect>
@@ -553,49 +568,43 @@ onUnmounted(() => {
             <div
               class="text-[13px] font-medium text-white truncate leading-tight"
               :class="{ 'text-[var(--accent-color)]': isCurrentSong(song) }"
-              @mouseenter="showTooltip($event, song.title)"
-              @mousemove="moveTooltip"
-              @mouseleave="hideTooltip"
+              :title="song.title"
             >
               {{ song.title }}
             </div>
           </div>
         </div>
 
-        <div
-          class="text-[13px] 2xl:text-xs text-[var(--text-secondary)] truncate"
-          @mouseenter="showTooltip($event, song.artist)"
-          @mousemove="moveTooltip"
-          @mouseleave="hideTooltip"
-        >
-          <span
+        <div class="text-[13px] 2xl:text-xs text-[var(--text-secondary)] truncate">
+          <button
+            type="button"
             @click.stop="isActiveArtist(song.artist) ? null : navigateToArtist(song.artist, $event)"
+            :title="song.artist"
+            class="text-left truncate max-w-full bg-transparent border-0 p-0 text-[var(--text-secondary)]"
             :class="
               isActiveArtist(song.artist)
                 ? 'cursor-default'
-                : 'hover:text-[var(--accent-color)] hover:underline cursor-pointer transition-colors'
+                : 'hover:text-[var(--accent-color)] hover:underline cursor-pointer transition-colors focus:outline-none focus-visible:underline'
             "
           >
             {{ song.artist }}
-          </span>
+          </button>
         </div>
-        <div
-          class="text-[13px] 2xl:text-xs text-[var(--text-secondary)] truncate"
-          @mouseenter="showTooltip($event, song.album)"
-          @mousemove="moveTooltip"
-          @mouseleave="hideTooltip"
-        >
-          <span
+        <div class="text-[13px] 2xl:text-xs text-[var(--text-secondary)] truncate">
+          <button
+            type="button"
             @click.stop="navigateToAlbum(song.album, $event)"
-            class="hover:text-[var(--accent-color)] hover:underline cursor-pointer transition-colors"
+            :title="song.album"
+            class="text-left truncate max-w-full bg-transparent border-0 p-0 text-[var(--text-secondary)] hover:text-[var(--accent-color)] hover:underline cursor-pointer transition-colors focus:outline-none focus-visible:underline"
           >
             {{ song.album }}
-          </span>
+          </button>
         </div>
 
         <!-- Actions + time -->
         <div class="flex items-center justify-end gap-2">
           <button
+            type="button"
             @click.stop="store.runMutation(() => store.toggleFavorite(song.path))"
             class="transition hover:scale-110"
             :class="
@@ -603,7 +612,8 @@ onUnmounted(() => {
                 ? 'text-[var(--accent-color)] opacity-100'
                 : 'text-gray-400 opacity-0 group-hover:opacity-100 hover:text-white'
             "
-            :title="store.isFavorite(song.path) ? 'Remove from Liked Songs' : 'Add to Liked Songs'"
+            :aria-label="store.isFavorite(song.path) ? $t('player.removeFromFavorites') : $t('player.addToFavorites')"
+            :title="store.isFavorite(song.path) ? $t('player.removeFromFavorites') : $t('player.addToFavorites')"
           >
             <svg
               xmlns="http://www.w3.org/2000/svg"
@@ -615,6 +625,7 @@ onUnmounted(() => {
               stroke-width="2"
               stroke-linecap="round"
               stroke-linejoin="round"
+              aria-hidden="true"
             >
               <path
                 d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"
@@ -628,9 +639,13 @@ onUnmounted(() => {
           >
 
           <button
+            type="button"
             @click.stop="openMenu(song, $event)"
             class="text-gray-400 opacity-0 group-hover:opacity-100 hover:text-white transition"
-            title="More"
+            :title="$t('common.more')"
+            :aria-label="$t('common.more')"
+            aria-haspopup="menu"
+            :aria-expanded="menu.open && menu.song?.path === song.path"
           >
             <svg
               xmlns="http://www.w3.org/2000/svg"
@@ -639,6 +654,7 @@ onUnmounted(() => {
               viewBox="0 0 24 24"
               fill="currentColor"
               stroke="none"
+              aria-hidden="true"
             >
               <circle cx="5" cy="12" r="1.6"></circle>
               <circle cx="12" cy="12" r="1.6"></circle>
@@ -675,145 +691,176 @@ onUnmounted(() => {
 
     <div v-else-if="songs.length === 0" class="p-20 text-center text-gray-600">
       <div class="text-4xl mb-4 opacity-20">♫</div>
-      <p>No songs found.</p>
+      <p>{{ $t('songList.empty') }}</p>
     </div>
 
     <!-- Context menu -->
     <Teleport to="body">
       <div
         v-if="menu.open"
-        class="fixed z-[100] w-56 bg-[#282828] border border-[#3a3a3a] rounded-md shadow-2xl py-1 text-sm text-white select-none overflow-y-auto scrollbar-thin context-menu-container"
+        role="menu"
+        aria-orientation="vertical"
+        tabindex="-1"
+        @keydown="handleMenuKeyDown"
+        class="fixed z-[100] w-56 bg-[#282828] border border-[#3a3a3a] rounded-md shadow-2xl py-1 text-sm text-white select-none overflow-y-auto scrollbar-thin context-menu-container focus:outline-none"
         :style="{ left: menu.x + 'px', top: menu.y + 'px', maxHeight: menu.maxHeight + 'px' }"
         @click.stop
         @contextmenu.prevent
         @mouseenter="isHoveringMenu = true"
         @mouseleave="isHoveringMenu = false"
+        @focusin="isHoveringMenu = true"
+        @focusout="isHoveringMenu = false"
       >
         <button
+          type="button"
+          role="menuitem"
           @click="playNext"
-          class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors"
+          class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] focus:bg-[#3a3a3a] focus:outline-none transition-colors"
         >
-          Play next
+          {{ $t('songList.menu.playNext') }}
         </button>
         <button
+          type="button"
+          role="menuitem"
           @click="addToQueue"
-          class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors"
+          class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] focus:bg-[#3a3a3a] focus:outline-none transition-colors"
         >
-          Add to queue
+          {{ $t('songList.menu.addToQueue') }}
         </button>
         <button
+          type="button"
+          role="menuitem"
           @click="startSelectMode"
-          class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors"
+          class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] focus:bg-[#3a3a3a] focus:outline-none transition-colors"
         >
-          Select Songs
+          {{ $t('songList.menu.selectSongs') }}
         </button>
 
-        <div class="border-t border-[#3a3a3a] my-1"></div>
+        <div role="separator" class="border-t border-[#3a3a3a] my-1"></div>
 
         <button
+          type="button"
+          role="menuitem"
           @click="showArtist"
-          class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors"
+          class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] focus:bg-[#3a3a3a] focus:outline-none transition-colors"
         >
-          Show Artist
+          {{ $t('songList.menu.showArtist') }}
         </button>
         <button
+          type="button"
+          role="menuitem"
           @click="showAlbum"
-          class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors"
+          class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] focus:bg-[#3a3a3a] focus:outline-none transition-colors"
         >
-          Show Album
+          {{ $t('songList.menu.showAlbum') }}
         </button>
 
-        <div class="border-t border-[#3a3a3a] my-1"></div>
+        <div role="separator" class="border-t border-[#3a3a3a] my-1"></div>
 
         <button
+          type="button"
+          role="menuitem"
           @click="toggleLike"
-          class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors"
+          class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] focus:bg-[#3a3a3a] focus:outline-none transition-colors"
         >
           {{
             menu.song && store.isFavorite(menu.song.path)
-              ? 'Remove from Liked Songs'
-              : 'Add to Liked Songs'
+              ? $t('songList.menu.removeFromLiked')
+              : $t('songList.menu.addToLiked')
           }}
         </button>
-        <div class="border-t border-[#3a3a3a] my-1"></div>
+        <div role="separator" class="border-t border-[#3a3a3a] my-1"></div>
 
         <div class="px-4 py-1 text-[11px] uppercase tracking-wide text-gray-500">
-          Add to playlist
+          {{ $t('songList.menu.addToPlaylist') }}
         </div>
         <div class="max-h-40 overflow-auto scrollbar-thin">
           <button
+            type="button"
+            role="menuitem"
             v-for="pl in store.normalPlaylists"
             :key="pl.id"
             @click="addToPlaylist(pl.id)"
-            class="w-full text-left px-4 py-1.5 hover:bg-[#3a3a3a] transition-colors truncate"
+            class="w-full text-left px-4 py-1.5 hover:bg-[#3a3a3a] focus:bg-[#3a3a3a] focus:outline-none transition-colors truncate"
           >
             {{ pl.name }}
           </button>
         </div>
         <button
+          type="button"
+          role="menuitem"
           @click="newPlaylistWithSong"
-          class="w-full text-left px-4 py-2 text-[var(--accent-color)] hover:bg-[#3a3a3a] transition-colors"
+          class="w-full text-left px-4 py-2 text-[var(--accent-color)] hover:bg-[#3a3a3a] focus:bg-[#3a3a3a] focus:outline-none transition-colors"
         >
-          + New playlist
+          {{ $t('songList.menu.newPlaylist') }}
         </button>
 
         <template v-if="playlistId">
-          <div class="border-t border-[#3a3a3a] my-1"></div>
+          <div role="separator" class="border-t border-[#3a3a3a] my-1"></div>
           <button
+            type="button"
+            role="menuitem"
             @click="removeFromThisPlaylist"
-            class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors text-red-400"
+            class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] focus:bg-[#3a3a3a] focus:outline-none transition-colors text-red-400"
           >
-            Remove from playlist
+            {{ $t('songList.menu.removeFromThisPlaylist') }}
           </button>
         </template>
 
-        <div class="border-t border-[#3a3a3a] my-1"></div>
+        <div role="separator" class="border-t border-[#3a3a3a] my-1"></div>
         <button
+          type="button"
+          role="menuitem"
           @click="showFileInfo"
-          class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors"
+          class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] focus:bg-[#3a3a3a] focus:outline-none transition-colors"
         >
-          File Information
+          {{ $t('songList.menu.fileInfo') }}
         </button>
         <button
+          type="button"
+          role="menuitem"
           @click="showInFolder"
-          class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors"
+          class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] focus:bg-[#3a3a3a] focus:outline-none transition-colors"
         >
-          Show in File Manager
+          {{ $t('songList.menu.showInFolder') }}
         </button>
         <button
+          type="button"
+          role="menuitem"
           @click="triggerDelete"
-          class="w-full text-left px-4 py-2 text-red-500 hover:bg-[#3a3a3a] transition-colors"
+          class="w-full text-left px-4 py-2 text-red-500 hover:bg-[#3a3a3a] focus:bg-[#3a3a3a] focus:outline-none transition-colors"
         >
-          Delete / Remove
+          {{ $t('songList.menu.deleteOrRemove') }}
         </button>
       </div>
     </Teleport>
 
-    <!-- Custom tooltip -->
-    <Teleport to="body">
-      <div
-        v-if="tooltip.show"
-        class="fixed z-[9999] pointer-events-none bg-[#181818]/95 border border-[#333] px-2.5 py-1.5 rounded shadow-xl text-xs text-white max-w-xs break-all backdrop-blur-md transition-opacity duration-150"
-        :style="{ left: tooltip.x + 'px', top: tooltip.y + 'px' }"
-      >
-        {{ tooltip.text }}
-      </div>
-    </Teleport>
 
     <!-- File Information Modal -->
     <Teleport to="body">
       <div
         v-if="infoModalOpen"
-        class="fixed inset-0 z-[200] flex items-center justify-center bg-black/75 backdrop-blur-md transition-opacity duration-300"
-        @click="closeInfoModal"
+        class="fixed inset-0 z-[200] flex items-center justify-center"
       >
+        <button
+          type="button"
+          class="fixed inset-0 bg-black/75 backdrop-blur-md cursor-default border-0 w-full h-full"
+          tabindex="-1"
+          aria-label="Close dialog"
+          @click="closeInfoModal"
+        ></button>
         <div
-          class="relative w-[90%] max-w-2xl bg-[#1c1c1e] border border-[#2c2c2e] rounded-2xl shadow-2xl overflow-hidden p-6 md:p-8 flex flex-col md:flex-row gap-6 md:gap-8 animate-fade-in"
-          @click.stop
+          ref="infoModalRef"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="file-info-title"
+          class="relative z-10 w-[90%] max-w-2xl bg-[#1c1c1e] border border-[#2c2c2e] rounded-2xl shadow-2xl overflow-hidden p-6 md:p-8 flex flex-col md:flex-row gap-6 md:gap-8 animate-fade-in"
         >
           <!-- Close button -->
           <button
+            type="button"
             @click="closeInfoModal"
+            aria-label="Close dialog"
             class="absolute top-4 right-4 text-gray-400 hover:text-white transition-colors"
           >
             <svg
@@ -826,6 +873,7 @@ onUnmounted(() => {
               stroke-width="2"
               stroke-linecap="round"
               stroke-linejoin="round"
+              aria-hidden="true"
             >
               <line x1="18" y1="6" x2="6" y2="18"></line>
               <line x1="6" y1="6" x2="18" y2="18"></line>
@@ -859,17 +907,19 @@ onUnmounted(() => {
             </div>
             <div v-else class="flex items-center gap-2">
               <button
+                type="button"
                 @click="pickEditCover"
                 class="bg-[#2c2c2e] hover:bg-[#3a3a3c] text-white px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
               >
-                Change Cover
+                {{ $t('songList.infoModal.changeCover') }}
               </button>
               <button
+                type="button"
                 @click="removeEditCover"
                 :disabled="editRemoveCover"
                 class="bg-[#2c2c2e] hover:bg-[#3a3a3c] text-gray-300 px-3 py-1.5 rounded-md text-xs font-medium transition-colors disabled:opacity-40"
               >
-                Remove
+                {{ $t('songList.infoModal.removeCover') }}
               </button>
             </div>
           </div>
@@ -878,10 +928,11 @@ onUnmounted(() => {
           <div class="flex-1 flex flex-col justify-between overflow-hidden">
             <div>
               <div class="flex items-center justify-between mb-4 pr-6 gap-3">
-                <h2 class="text-xl font-bold text-white truncate">
-                  {{ infoEditing ? 'Edit Tags' : 'File Information' }}
+                <h2 id="file-info-title" class="text-xl font-bold text-white truncate">
+                  {{ infoEditing ? $t('songList.infoModal.editTags') : $t('songList.infoModal.title') }}
                 </h2>
                 <button
+                  type="button"
                   v-if="!infoEditing"
                   @click="startEditInfo"
                   class="shrink-0 flex items-center gap-1.5 bg-[#2c2c2e] hover:bg-[#3a3a3c] text-white px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
@@ -896,45 +947,46 @@ onUnmounted(() => {
                     stroke-width="2"
                     stroke-linecap="round"
                     stroke-linejoin="round"
+                    aria-hidden="true"
                   >
                     <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"></path>
                   </svg>
-                  Edit Tags
+                  {{ $t('songList.infoModal.editTags') }}
                 </button>
               </div>
 
               <div v-if="!infoEditing" class="space-y-3.5 text-sm">
                 <div class="grid grid-cols-[100px_1fr] gap-2 items-baseline">
-                  <span class="text-gray-500">Title:</span>
+                  <span class="text-gray-500">{{ $t('songList.infoModal.trackTitle') }}:</span>
                   <span class="text-white font-medium truncate">{{ infoSong?.title }}</span>
                 </div>
                 <div class="grid grid-cols-[100px_1fr] gap-2 items-baseline">
-                  <span class="text-gray-500">Artist:</span>
+                  <span class="text-gray-500">{{ $t('songList.infoModal.trackArtist') }}:</span>
                   <span class="text-white font-medium truncate">{{ infoSong?.artist }}</span>
                 </div>
                 <div class="grid grid-cols-[100px_1fr] gap-2 items-baseline">
-                  <span class="text-gray-500">Album:</span>
+                  <span class="text-gray-500">{{ $t('songList.infoModal.trackAlbum') }}:</span>
                   <span class="text-white font-medium truncate">{{ infoSong?.album }}</span>
                 </div>
                 <div
                   class="grid grid-cols-[100px_1fr] gap-2 items-baseline"
                   v-if="infoSong?.track_number"
                 >
-                  <span class="text-gray-500">Track:</span>
+                  <span class="text-gray-500">{{ $t('songList.infoModal.trackNumber') }}:</span>
                   <span class="text-white font-medium">{{ infoSong?.track_number }}</span>
                 </div>
                 <div class="grid grid-cols-[100px_1fr] gap-2 items-baseline" v-if="infoSong?.year">
-                  <span class="text-gray-500">Year:</span>
+                  <span class="text-gray-500">{{ $t('songList.infoModal.trackYear') }}:</span>
                   <span class="text-white font-medium">{{ infoSong?.year }}</span>
                 </div>
                 <div class="grid grid-cols-[100px_1fr] gap-2 items-baseline">
-                  <span class="text-gray-500">Duration:</span>
+                  <span class="text-gray-500">{{ $t('songList.duration') }}:</span>
                   <span class="text-white font-medium">{{
                     infoSong ? formatDuration(infoSong.duration_secs) : ''
                   }}</span>
                 </div>
                 <div class="grid grid-cols-[100px_1fr] gap-2 items-baseline" v-if="infoSong?.genre">
-                  <span class="text-gray-500">Genre:</span>
+                  <span class="text-gray-500">{{ $t('songList.infoModal.trackGenre') }}:</span>
                   <span class="text-white font-medium truncate">{{ infoSong?.genre }}</span>
                 </div>
                 <div class="grid grid-cols-[100px_1fr] gap-2 items-baseline">
@@ -959,36 +1011,40 @@ onUnmounted(() => {
 
               <!-- Edit form -->
               <div v-else class="space-y-3 text-sm">
-                <label class="grid grid-cols-[100px_1fr] gap-2 items-center">
-                  <span class="text-gray-500">Title</span>
+                <label for="edit-song-title" class="grid grid-cols-[100px_1fr] gap-2 items-center">
+                  <span class="text-gray-500">{{ $t('songList.infoModal.trackTitle') }}</span>
                   <input
+                    id="edit-song-title"
                     v-model="editForm.title"
                     type="text"
                     spellcheck="false"
                     class="tag-input"
                   />
                 </label>
-                <label class="grid grid-cols-[100px_1fr] gap-2 items-center">
-                  <span class="text-gray-500">Artist</span>
+                <label for="edit-song-artist" class="grid grid-cols-[100px_1fr] gap-2 items-center">
+                  <span class="text-gray-500">{{ $t('songList.infoModal.trackArtist') }}</span>
                   <input
+                    id="edit-song-artist"
                     v-model="editForm.artist"
                     type="text"
                     spellcheck="false"
                     class="tag-input"
                   />
                 </label>
-                <label class="grid grid-cols-[100px_1fr] gap-2 items-center">
-                  <span class="text-gray-500">Album</span>
+                <label for="edit-song-album" class="grid grid-cols-[100px_1fr] gap-2 items-center">
+                  <span class="text-gray-500">{{ $t('songList.infoModal.trackAlbum') }}</span>
                   <input
+                    id="edit-song-album"
                     v-model="editForm.album"
                     type="text"
                     spellcheck="false"
                     class="tag-input"
                   />
                 </label>
-                <label class="grid grid-cols-[100px_1fr] gap-2 items-center">
-                  <span class="text-gray-500">Genre</span>
+                <label for="edit-song-genre" class="grid grid-cols-[100px_1fr] gap-2 items-center">
+                  <span class="text-gray-500">{{ $t('songList.infoModal.trackGenre') }}</span>
                   <input
+                    id="edit-song-genre"
                     v-model="editForm.genre"
                     type="text"
                     spellcheck="false"
@@ -996,12 +1052,13 @@ onUnmounted(() => {
                   />
                 </label>
                 <div class="grid grid-cols-[100px_1fr] gap-2 items-center">
-                  <span class="text-gray-500">Year · Track</span>
+                  <span class="text-gray-500">{{ $t('songList.infoModal.trackYear') }} · {{ $t('songList.infoModal.trackNumber') }}</span>
                   <div class="flex gap-2">
                     <input
                       v-model="editForm.year"
                       type="text"
                       inputmode="numeric"
+                      aria-label="Year"
                       placeholder="Year"
                       class="tag-input w-24"
                     />
@@ -1009,6 +1066,7 @@ onUnmounted(() => {
                       v-model="editForm.track_number"
                       type="text"
                       inputmode="numeric"
+                      aria-label="Track number"
                       placeholder="No."
                       class="tag-input w-20"
                     />
@@ -1024,7 +1082,7 @@ onUnmounted(() => {
             <!-- Path/Copy (view) or Cancel/Save (edit) -->
             <div class="mt-6 pt-4 border-t border-[#2c2c2e]">
               <template v-if="!infoEditing">
-                <div class="text-[11px] text-gray-500 uppercase tracking-wider mb-2">File Path</div>
+                <div class="text-[11px] text-gray-500 uppercase tracking-wider mb-2">{{ $t('songList.infoModal.filePath') }}</div>
                 <div
                   class="bg-[#121214] border border-[#2c2c2e] p-2.5 rounded-lg flex items-center justify-between gap-3 text-xs"
                 >
@@ -1032,6 +1090,7 @@ onUnmounted(() => {
                     {{ infoSong?.path }}
                   </div>
                   <button
+                    type="button"
                     @click="copyToClipboard(infoSong?.path)"
                     class="shrink-0 bg-[#2c2c2e] hover:bg-[#3a3a3c] text-white px-3 py-1.5 rounded-md font-medium transition-colors"
                   >
@@ -1045,18 +1104,20 @@ onUnmounted(() => {
                 </p>
                 <div class="flex items-center justify-end gap-2">
                   <button
+                    type="button"
                     @click="cancelEditInfo"
                     :disabled="editSaving"
                     class="bg-[#2c2c2e] hover:bg-[#3a3a3c] text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
                   >
-                    Cancel
+                    {{ $t('common.cancel') }}
                   </button>
                   <button
+                    type="button"
                     @click="saveEditInfo"
                     :disabled="editSaving"
                     class="bg-[var(--accent-color)] text-black px-4 py-2 rounded-lg text-sm font-semibold transition-all hover:brightness-110 disabled:opacity-50"
                   >
-                    {{ editSaving ? 'Saving…' : 'Save to File' }}
+                    {{ editSaving ? $t('common.loading') : $t('common.save') }}
                   </button>
                 </div>
               </div>
@@ -1070,12 +1131,21 @@ onUnmounted(() => {
     <Teleport to="body">
       <div
         v-if="deleteConfirmModalOpen"
-        class="fixed inset-0 z-[210] flex items-center justify-center bg-black/80 backdrop-blur-md"
-        @click="closeDeleteConfirm"
+        class="fixed inset-0 z-[210] flex items-center justify-center"
       >
+        <button
+          type="button"
+          class="fixed inset-0 bg-black/80 backdrop-blur-md cursor-default border-0 w-full h-full"
+          tabindex="-1"
+          aria-label="Close dialog"
+          @click="closeDeleteConfirm"
+        ></button>
         <div
-          class="relative w-[95%] max-w-md bg-[#1c1c1e] border border-[#2c2c2e] rounded-2xl shadow-2xl p-6 text-center animate-fade-in"
-          @click.stop
+          ref="deleteModalRef"
+          role="alertdialog"
+          aria-modal="true"
+          aria-labelledby="delete-confirm-title"
+          class="relative z-10 w-[95%] max-w-md bg-[#1c1c1e] border border-[#2c2c2e] rounded-2xl shadow-2xl p-6 text-center animate-fade-in"
         >
           <!-- Warning Icon -->
           <div
@@ -1091,6 +1161,7 @@ onUnmounted(() => {
               stroke-width="2"
               stroke-linecap="round"
               stroke-linejoin="round"
+              aria-hidden="true"
             >
               <path
                 d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"
@@ -1100,42 +1171,46 @@ onUnmounted(() => {
             </svg>
           </div>
 
-          <h3 class="text-lg font-bold text-white mb-2">Delete or Remove Song</h3>
+          <h3 id="delete-confirm-title" class="text-lg font-bold text-white mb-2">
+            {{ $t('songList.deleteModal.title') }}
+          </h3>
 
           <p class="text-sm text-gray-400 mb-6 px-2">
             <span v-if="deleteActionType === 'single'">
-              You are about to modify <strong>"{{ deleteConfirmSong?.title }}"</strong>.
+              {{ $t('songList.deleteModal.singlePrompt', { title: deleteConfirmSong?.title }) }}
             </span>
             <span v-else>
-              You are about to modify <strong>{{ selectedSongs.length }}</strong> selected songs.
+              {{ $t('songList.deleteModal.bulkPrompt', { count: selectedSongs.length }) }}
             </span>
-            Choose whether to permanently delete the files from your disk, or just remove them from
-            this application library/playlists.
+            {{ $t('songList.deleteModal.description') }}
           </p>
 
           <div class="flex flex-col gap-2.5">
             <!-- Delete Files (Red) -->
             <button
+              type="button"
               @click="executeDelete(true)"
               class="w-full bg-red-600 hover:bg-red-700 text-white font-semibold py-2.5 rounded-lg transition-colors shadow-lg"
             >
-              Delete Files (Permanently)
+              {{ $t('songList.deleteModal.deletePermanent') }}
             </button>
 
             <!-- Remove from List (White) -->
             <button
+              type="button"
               @click="executeDelete(false)"
               class="w-full bg-white hover:bg-gray-100 text-black font-semibold py-2.5 rounded-lg transition-colors shadow-lg"
             >
-              Remove from List
+              {{ $t('songList.deleteModal.removeFromList') }}
             </button>
 
             <!-- Cancel -->
             <button
+              type="button"
               @click="closeDeleteConfirm"
               class="w-full bg-[#2c2c2e] hover:bg-[#3a3a3c] text-gray-400 hover:text-white font-medium py-2 rounded-lg transition-colors mt-1"
             >
-              Cancel
+              {{ $t('songList.deleteModal.cancel') }}
             </button>
           </div>
         </div>
@@ -1147,33 +1222,37 @@ onUnmounted(() => {
       <div
         v-if="selectMode && selectedSongs.length > 0"
         class="fixed bottom-6 left-1/2 -translate-x-1/2 z-[150] bg-[#1e1e1e]/95 border border-[#333] backdrop-blur-md px-6 py-3.5 rounded-full shadow-2xl flex items-center gap-4 text-white text-xs 2xl:text-sm animate-slide-up"
-        @click.stop
       >
-        <span class="font-semibold text-gray-300"> {{ selectedSongs.length }} selected </span>
+        <span class="font-semibold text-gray-300">
+          {{ $t('songList.selectedCount', { count: selectedSongs.length }) }}
+        </span>
 
         <div class="h-4 w-[1px] bg-gray-700"></div>
 
         <button
+          type="button"
           @click="playSelected"
           class="bg-[var(--accent-color)] hover:bg-red-500 text-white px-3.5 py-1.5 rounded-full font-medium transition"
         >
-          Play
+          {{ $t('songList.playSelected') }}
         </button>
 
         <button
+          type="button"
           @click="addSelectedToQueue"
           class="bg-[#2c2c2e] hover:bg-[#3a3a3c] text-white px-3.5 py-1.5 rounded-full font-medium transition"
         >
-          Add to Queue
+          {{ $t('songList.addSelectedToQueue') }}
         </button>
 
         <!-- Add to Playlist dropdown trigger -->
         <div class="relative">
           <button
+            type="button"
             @click="showPlDropdown = !showPlDropdown"
             class="bg-[#2c2c2e] hover:bg-[#3a3a3c] text-white px-3.5 py-1.5 rounded-full font-medium transition flex items-center gap-1"
           >
-            Add to Playlist
+            {{ $t('songList.addSelectedToPlaylist') }}
             <svg
               xmlns="http://www.w3.org/2000/svg"
               width="12"
@@ -1182,6 +1261,7 @@ onUnmounted(() => {
               fill="none"
               stroke="currentColor"
               stroke-width="2.5"
+              aria-hidden="true"
             >
               <path d="m6 9 6 6 6-6" />
             </svg>
@@ -1190,9 +1270,12 @@ onUnmounted(() => {
           <!-- Dropdown Menu -->
           <div
             v-if="showPlDropdown"
+            role="menu"
             class="absolute bottom-12 left-0 z-[160] w-48 bg-[#282828] border border-[#3a3a3a] rounded-md shadow-2xl py-1 text-left text-sm max-h-40 overflow-auto scrollbar-thin"
           >
             <button
+              type="button"
+              role="menuitem"
               v-for="pl in store.normalPlaylists"
               :key="pl.id"
               @click="addSelectedToPlaylist(pl.id)"
@@ -1201,40 +1284,46 @@ onUnmounted(() => {
               {{ pl.name }}
             </button>
             <div
+              role="separator"
               class="border-t border-[#3a3a3a] my-1"
               v-if="store.normalPlaylists.length > 0"
             ></div>
             <button
+              type="button"
+              role="menuitem"
               @click="newPlaylistWithSelected"
               class="w-full text-left px-4 py-2 text-[var(--accent-color)] hover:bg-[#3a3a3c] transition-colors"
             >
-              + New Playlist
+              {{ $t('songList.menu.newPlaylist') }}
             </button>
           </div>
         </div>
 
         <!-- Remove from playlist (only if playlistId is provided) -->
         <button
+          type="button"
           v-if="playlistId"
           @click="removeSelectedFromPlaylist"
           class="bg-red-950/40 hover:bg-red-950/80 text-red-400 px-3.5 py-1.5 rounded-full font-medium border border-red-900/50 transition"
         >
-          Remove
+          {{ $t('common.remove') }}
         </button>
 
         <!-- Bulk Delete/Remove trigger -->
         <button
+          type="button"
           @click="triggerBulkDelete"
           class="bg-red-600 hover:bg-red-700 text-white px-3.5 py-1.5 rounded-full font-medium transition"
         >
-          Delete
+          {{ $t('songList.deleteSelected') }}
         </button>
 
         <button
+          type="button"
           @click="cancelSelection"
           class="text-gray-400 hover:text-white font-medium transition-colors px-2 ml-1"
         >
-          Cancel
+          {{ $t('songList.cancelSelection') }}
         </button>
       </div>
     </Teleport>

@@ -102,15 +102,15 @@ const navigateToArtist = (artistName) => {
       <div
         class="flex items-center justify-between px-4 py-4 border-b border-[var(--border-color)]"
       >
-        <h2 class="text-base font-bold text-white">Queue</h2>
+        <h2 class="text-base font-bold text-white">{{ $t('player.queue') }}</h2>
         <div class="flex items-center gap-3">
           <button
             v-if="store.queue.length > 1"
             @click="store.clearQueue()"
             class="text-xs text-[var(--text-secondary)] hover:text-white transition"
-            title="Clear queue"
+            :title="$t('queue.clear')"
           >
-            Clear
+            {{ $t('common.clear') }}
           </button>
           <!-- Unlimited queue / autoplay toggle (∞) -->
           <button
@@ -143,7 +143,7 @@ const navigateToArtist = (artistName) => {
       <!-- List -->
       <div ref="listContainer" class="flex-1 overflow-auto p-2 relative">
         <div v-if="store.queue.length === 0" class="p-8 text-center text-gray-600 text-sm">
-          The queue is empty.
+          {{ $t('queue.empty') }}
         </div>
 
         <TransitionGroup
@@ -160,8 +160,11 @@ const navigateToArtist = (artistName) => {
             v-for="{ song, index } in renderQueue"
             :key="keyFor(song)"
             :data-queue-idx="index"
+            role="row"
+            tabindex="0"
             @dblclick="store.playQueueIndex(index)"
-            class="queue-row group flex items-center gap-2 p-2 rounded-md hover:bg-[#2a2a2a] transition-colors"
+            @keydown.enter="store.playQueueIndex(index)"
+            class="queue-row group flex items-center gap-2 p-2 rounded-md hover:bg-[#2a2a2a] transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent-color)]"
             :class="{
               'bg-[#2a2a2a]': isCurrent(song),
               'opacity-30': index === dragIndex,
@@ -170,11 +173,13 @@ const navigateToArtist = (artistName) => {
             }"
           >
             <!-- Drag grip handle -->
-            <div
+            <button
               v-if="!virtualizeQueue"
-              class="shrink-0 cursor-grab active:cursor-grabbing text-gray-600 hover:text-gray-300 transition-colors drag-grip"
+              type="button"
+              class="shrink-0 cursor-grab active:cursor-grabbing text-gray-600 hover:text-gray-300 transition-colors drag-grip bg-transparent border-0 p-0"
               @mousedown="onGripMouseDown(index, $event)"
-              title="Drag to reorder"
+              :aria-label="$t('queue.dragToReorder')"
+              :title="$t('queue.dragToReorder')"
             >
               <svg
                 xmlns="http://www.w3.org/2000/svg"
@@ -183,6 +188,7 @@ const navigateToArtist = (artistName) => {
                 viewBox="0 0 24 24"
                 fill="currentColor"
                 stroke="none"
+                aria-hidden="true"
               >
                 <circle cx="9" cy="5" r="1.5"></circle>
                 <circle cx="15" cy="5" r="1.5"></circle>
@@ -191,26 +197,35 @@ const navigateToArtist = (artistName) => {
                 <circle cx="9" cy="19" r="1.5"></circle>
                 <circle cx="15" cy="19" r="1.5"></circle>
               </svg>
-            </div>
+            </button>
             <CoverImage :path="song.path" className="h-10 w-10 rounded shrink-0 bg-[#333]" />
-            <div class="flex-1 min-w-0" @click="store.playQueueIndex(index)">
-              <div
-                class="text-[13px] font-medium truncate leading-tight"
-                :class="isCurrent(song) ? 'text-[var(--accent-color)]' : 'text-white'"
+            <div class="flex-1 min-w-0">
+              <button
+                type="button"
+                @click="store.playQueueIndex(index)"
+                class="text-left w-full truncate bg-transparent border-0 p-0 block"
               >
-                {{ song.title }}
-              </div>
-              <div
+                <span
+                  class="text-[13px] font-medium truncate leading-tight block"
+                  :class="isCurrent(song) ? 'text-[var(--accent-color)]' : 'text-white'"
+                >
+                  {{ song.title }}
+                </span>
+              </button>
+              <button
+                type="button"
                 @click.stop="navigateToArtist(song.artist)"
-                class="text-xs text-[var(--text-secondary)] hover:text-[var(--accent-color)] hover:underline cursor-pointer truncate transition-colors"
+                class="text-left text-xs text-[var(--text-secondary)] hover:text-[var(--accent-color)] hover:underline cursor-pointer truncate transition-colors bg-transparent border-0 p-0 block max-w-full"
               >
                 {{ song.artist }}
-              </div>
+              </button>
             </div>
             <button
+              type="button"
               @click.stop="store.removeFromQueue(index)"
               class="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-white transition shrink-0"
-              title="Remove from queue"
+              :aria-label="$t('queue.removeFromQueue')"
+              :title="$t('queue.removeFromQueue')"
             >
               <svg
                 xmlns="http://www.w3.org/2000/svg"
@@ -218,6 +233,7 @@ const navigateToArtist = (artistName) => {
                 height="16"
                 viewBox="0 0 24 24"
                 fill="none"
+                aria-hidden="true"
                 stroke="currentColor"
                 stroke-width="2"
                 stroke-linecap="round"

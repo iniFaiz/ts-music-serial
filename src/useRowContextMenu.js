@@ -1,4 +1,4 @@
-import { ref } from 'vue';
+import { ref, watch, nextTick } from 'vue';
 import { useRouter } from 'vue-router';
 import { invokeCommand as invoke } from './generated/ipc';
 import { store } from './store';
@@ -19,16 +19,19 @@ export function useRowContextMenu({ playlistId, findCoverBySongPath }) {
   const router = useRouter();
 
   const menu = ref({ open: false, x: 0, y: 0, maxHeight: 400, song: null });
+  let triggerElement = null;
 
   const openMenu = (song, event) => {
-    event.preventDefault();
+    if (event?.preventDefault) event.preventDefault();
+    triggerElement =
+      (event?.target && event.target.closest?.('button, [tabindex="0"]')) || document.activeElement;
     const winWidth = window.innerWidth;
     const winHeight = window.innerHeight;
     const menuWidth = 224;
     const menuHeight = playlistId?.() ? 450 : 400;
 
-    let x = event.clientX;
-    let y = event.clientY;
+    let x = event?.clientX ?? 100;
+    let y = event?.clientY ?? 100;
 
     if (x + menuWidth > winWidth) {
       x = winWidth - menuWidth - 10;
@@ -61,8 +64,60 @@ export function useRowContextMenu({ playlistId, findCoverBySongPath }) {
   };
 
   const closeMenu = () => {
+    if (!menu.value.open) return;
     menu.value.open = false;
+    if (triggerElement && typeof triggerElement.focus === 'function') {
+      try {
+        triggerElement.focus();
+      } catch {}
+      triggerElement = null;
+    }
   };
+
+  const handleMenuKeyDown = (event) => {
+    if (!menu.value.open) return;
+    const container = event.currentTarget;
+    if (!container) return;
+
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeMenu();
+      return;
+    }
+
+    const items = Array.from(container.querySelectorAll('button:not([disabled])'));
+    if (items.length === 0) return;
+
+    const currentIndex = items.indexOf(document.activeElement);
+
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      const nextIndex = currentIndex < items.length - 1 ? currentIndex + 1 : 0;
+      items[nextIndex]?.focus();
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      const prevIndex = currentIndex > 0 ? currentIndex - 1 : items.length - 1;
+      items[prevIndex]?.focus();
+    } else if (event.key === 'Home') {
+      event.preventDefault();
+      items[0]?.focus();
+    } else if (event.key === 'End') {
+      event.preventDefault();
+      items[items.length - 1]?.focus();
+    }
+  };
+
+  watch(
+    () => menu.value.open,
+    async (isOpen) => {
+      if (isOpen) {
+        await nextTick();
+        const menuEl = document.querySelector('.context-menu-container');
+        const firstBtn = menuEl?.querySelector('button:not([disabled])');
+        firstBtn?.focus();
+      }
+    }
+  );
 
   const playNext = () => {
     store.playNext(menu.value.song);
@@ -160,5 +215,6 @@ export function useRowContextMenu({ playlistId, findCoverBySongPath }) {
     removeFromThisPlaylist,
     isHoveringMenu,
     closeMenuOnScroll,
+    handleMenuKeyDown,
   };
 }

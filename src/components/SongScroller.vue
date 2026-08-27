@@ -46,8 +46,13 @@ const goToArtist = (artist, event) => {
       :data-song-path="song.path"
       :data-artist-key="song.artist"
       :data-album-key="song.album"
-      class="song-card shrink-0 w-40 group cursor-pointer"
+      role="button"
+      tabindex="0"
+      :aria-label="song.title + ' - ' + song.artist"
+      class="song-card shrink-0 w-40 group cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-color)] rounded-xl"
       @click="play(song)"
+      @keydown.enter="play(song)"
+      @keydown.space.prevent="play(song)"
     >
       <div
         class="relative w-40 h-40 mb-2.5 rounded-xl overflow-hidden shadow-lg group-hover:scale-[1.03] transition-transform duration-200 ease-out"
@@ -76,6 +81,7 @@ const goToArtist = (artist, event) => {
               viewBox="0 0 24 24"
               fill="currentColor"
               stroke="none"
+              aria-hidden="true"
             >
               <polygon points="5 3 19 12 5 21 5 3" />
             </svg>
@@ -89,12 +95,13 @@ const goToArtist = (artist, event) => {
         {{ song.title }}
       </div>
       <div class="text-[12px] text-[var(--text-secondary)] truncate">
-        <span
+        <button
+          type="button"
           @click.stop="goToArtist(song.artist, $event)"
-          class="hover:text-[var(--accent-color)] hover:underline cursor-pointer transition-colors"
+          class="text-left bg-transparent border-0 p-0 text-[var(--text-secondary)] hover:text-[var(--accent-color)] hover:underline cursor-pointer transition-colors max-w-full truncate block"
         >
           {{ song.artist }}
-        </span>
+        </button>
       </div>
     </div>
   </Shelf>

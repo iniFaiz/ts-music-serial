@@ -1,4 +1,4 @@
-﻿<script setup>
+<script setup>
 import { ref, watch, onMounted, onUnmounted, computed } from 'vue';
 import { store } from '../store';
 import { invokeCommand as invoke } from '../generated/ipc';
@@ -461,7 +461,9 @@ const flushState = () => {
             store.shuffleMode ? 'text-[var(--accent-color)]' : 'text-gray-400 hover:text-white'
           "
           :disabled="!store.currentSong"
-          title="Shuffle"
+          type="button"
+          :aria-label="$t('player.toggleShuffle')"
+          :title="$t('player.toggleShuffle')"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -473,6 +475,7 @@ const flushState = () => {
             stroke-width="2"
             stroke-linecap="round"
             stroke-linejoin="round"
+            aria-hidden="true"
           >
             <path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5" />
           </svg>
@@ -480,9 +483,12 @@ const flushState = () => {
 
         <!-- Prev -->
         <button
+          type="button"
           @click="store.prevSong()"
           class="text-gray-300 hover:text-white transition disabled:opacity-30 disabled:cursor-not-allowed disabled:pointer-events-none"
           :disabled="!store.currentSong"
+          :aria-label="$t('player.prevTrack')"
+          :title="$t('player.prevTrack')"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -491,6 +497,7 @@ const flushState = () => {
             viewBox="0 0 24 24"
             fill="currentColor"
             stroke="none"
+            aria-hidden="true"
           >
             <polygon points="19 20 9 12 19 4 19 20"></polygon>
             <line x1="5" y1="19" x2="5" y2="5" stroke="currentColor" stroke-width="2"></line>
@@ -499,9 +506,12 @@ const flushState = () => {
 
         <!-- Play/Pause -->
         <button
+          type="button"
           @click="store.togglePlay()"
           class="bg-white text-black rounded-full p-2 hover:scale-105 transition flex items-center justify-center disabled:opacity-30 disabled:cursor-not-allowed disabled:pointer-events-none"
           :disabled="!store.currentSong"
+          :aria-label="$t('player.togglePlay')"
+          :title="$t('player.togglePlay')"
         >
           <svg
             v-if="store.isBuffering"
@@ -511,6 +521,7 @@ const flushState = () => {
             height="24"
             viewBox="0 0 24 24"
             fill="none"
+            aria-hidden="true"
           >
             <circle
               class="opacity-25"
@@ -534,6 +545,7 @@ const flushState = () => {
             viewBox="0 0 24 24"
             fill="currentColor"
             stroke="none"
+            aria-hidden="true"
           >
             <rect x="6" y="4" width="4" height="16"></rect>
             <rect x="14" y="4" width="4" height="16"></rect>
@@ -546,6 +558,7 @@ const flushState = () => {
             viewBox="0 0 24 24"
             fill="currentColor"
             stroke="none"
+            aria-hidden="true"
           >
             <polygon points="5 3 19 12 5 21 5 3"></polygon>
           </svg>
@@ -553,9 +566,12 @@ const flushState = () => {
 
         <!-- Next -->
         <button
+          type="button"
           @click="store.nextSong(true)"
           class="text-gray-300 hover:text-white transition disabled:opacity-30 disabled:cursor-not-allowed disabled:pointer-events-none"
           :disabled="!store.currentSong"
+          :aria-label="$t('player.nextTrack')"
+          :title="$t('player.nextTrack')"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -564,6 +580,7 @@ const flushState = () => {
             viewBox="0 0 24 24"
             fill="currentColor"
             stroke="none"
+            aria-hidden="true"
           >
             <polygon points="5 4 15 12 5 20 5 4"></polygon>
             <line x1="19" y1="5" x2="19" y2="19" stroke="currentColor" stroke-width="2"></line>
@@ -572,13 +589,15 @@ const flushState = () => {
 
         <!-- Loop -->
         <button
+          type="button"
           @click="store.toggleLoop()"
           class="transition relative hidden sm:block disabled:opacity-30 disabled:cursor-not-allowed disabled:pointer-events-none"
           :class="
             store.loopMode > 0 ? 'text-[var(--accent-color)]' : 'text-gray-400 hover:text-white'
           "
           :disabled="!store.currentSong"
-          title="Loop"
+          :aria-label="$t('player.toggleRepeat')"
+          :title="$t('player.toggleRepeat')"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -590,6 +609,7 @@ const flushState = () => {
             stroke-width="2"
             stroke-linecap="round"
             stroke-linejoin="round"
+            aria-hidden="true"
           >
             <path d="M17 1l4 4-4 4"></path>
             <path d="M3 11V9a4 4 0 0 1 4-4h14"></path>
@@ -618,9 +638,11 @@ const flushState = () => {
             <div class="hidden sm:flex items-start shrink-0 gap-1.5 relative">
               <button
                 ref="playerCoverRef"
+                type="button"
                 @click="openFullScreen()"
                 class="shrink-0 rounded-md overflow-hidden relative group focus:outline-none transition-all duration-300 ease-out hover:scale-105 active:scale-95 hover:shadow-lg hover:shadow-black/60 hover:ring-1 hover:ring-white/30 cursor-pointer"
-                title="Open full screen (Ctrl+Shift+F)"
+                :title="$t('player.fullScreen')"
+                :aria-label="$t('player.fullScreen')"
               >
                 <CoverImage
                   :path="store.currentSong.path"
@@ -639,6 +661,7 @@ const flushState = () => {
                     stroke-width="2.5"
                     stroke-linecap="round"
                     stroke-linejoin="round"
+                    aria-hidden="true"
                     class="text-white transform scale-75 group-hover:scale-100 transition-all duration-300 ease-out drop-shadow"
                   >
                     <polyline points="15 3 21 3 21 9" />
@@ -661,11 +684,13 @@ const flushState = () => {
               :center="true"
               class="text-xs md:text-sm font-medium text-white max-w-[80px] sm:max-w-[180px] md:max-w-[260px] lg:max-w-[360px] xl:max-w-[450px] mx-auto"
             />
-            <span
+            <button
+              type="button"
               @click="navigateToArtist(store.currentSong.artist)"
-              class="text-[10px] md:text-xs text-gray-400 hover:text-[var(--accent-color)] hover:underline cursor-pointer truncate max-w-[80px] sm:max-w-[180px] md:max-w-[260px] lg:max-w-[360px] xl:max-w-[450px] transition-colors"
-              >{{ store.currentSong.artist }}</span
+              class="text-[10px] md:text-xs text-gray-400 hover:text-[var(--accent-color)] hover:underline cursor-pointer truncate max-w-[80px] sm:max-w-[180px] md:max-w-[260px] lg:max-w-[360px] xl:max-w-[450px] transition-colors mx-auto bg-transparent border-0 p-0 block"
             >
+              {{ store.currentSong.artist }}
+            </button>
           </div>
 
           <!-- Right spacer container: matches the width of the left container to center text perfectly -->
@@ -673,6 +698,7 @@ const flushState = () => {
             class="w-[30px] sm:w-[60px] md:w-[75px] lg:w-[80px] flex items-center justify-end shrink-0"
           >
             <button
+              type="button"
               @click="store.runMutation(() => store.toggleFavorite(store.currentSong.path))"
               class="transition hover:scale-110 shrink-0"
               :class="
@@ -682,8 +708,13 @@ const flushState = () => {
               "
               :title="
                 store.isFavorite(store.currentSong.path)
-                  ? 'Remove from Liked Songs'
-                  : 'Add to Liked Songs'
+                  ? $t('player.removeFromFavorites')
+                  : $t('player.addToFavorites')
+              "
+              :aria-label="
+                store.isFavorite(store.currentSong.path)
+                  ? $t('player.removeFromFavorites')
+                  : $t('player.addToFavorites')
               "
             >
               <svg
@@ -696,6 +727,7 @@ const flushState = () => {
                 stroke-width="2"
                 stroke-linecap="round"
                 stroke-linejoin="round"
+                aria-hidden="true"
               >
                 <path
                   d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"
@@ -725,6 +757,7 @@ const flushState = () => {
               v-model.number="seekValue"
               @input="onSeekInput"
               @change="onSeekCommit"
+              :aria-label="$t('player.seekLabel')"
               class="seeker-input absolute inset-x-0 top-1/2 -translate-y-1/2 w-full rounded-lg appearance-none cursor-pointer accent-[var(--accent-color)] transition-opacity duration-300 disabled:cursor-not-allowed"
               :class="store.waveformEnabled ? 'opacity-0 pointer-events-none' : 'opacity-100'"
               :style="mainSeekStyle"
@@ -768,13 +801,15 @@ const flushState = () => {
         <!-- Lyrics panel toggle -->
         <button
           v-if="store.currentSong"
+          type="button"
           @click="
             store.queuePanelOpen = false;
             store.lyricsPanelOpen = !store.lyricsPanelOpen;
           "
           class="transition hover:text-white"
           :class="store.lyricsPanelOpen ? 'text-[var(--accent-color)]' : 'text-gray-400'"
-          title="Lyrics"
+          :title="$t('player.lyrics')"
+          :aria-label="$t('player.lyrics')"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -786,6 +821,7 @@ const flushState = () => {
             stroke-width="2"
             stroke-linecap="round"
             stroke-linejoin="round"
+            aria-hidden="true"
           >
             <path
               d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"
@@ -795,15 +831,17 @@ const flushState = () => {
           </svg>
         </button>
 
-        <!-- Queue toggle (with an âˆž badge when unlimited autoplay is on) -->
+        <!-- Queue toggle (with an ∞ badge when unlimited autoplay is on) -->
         <button
+          type="button"
           @click="
             store.lyricsPanelOpen = false;
             store.queuePanelOpen = !store.queuePanelOpen;
           "
           class="transition hover:text-white relative"
           :class="store.queuePanelOpen ? 'text-[var(--accent-color)]' : 'text-gray-400'"
-          title="Queue"
+          :title="$t('player.queue')"
+          :aria-label="$t('player.queue')"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -815,6 +853,7 @@ const flushState = () => {
             stroke-width="2"
             stroke-linecap="round"
             stroke-linejoin="round"
+            aria-hidden="true"
           >
             <line x1="3" y1="6" x2="16" y2="6"></line>
             <line x1="3" y1="12" x2="13" y2="12"></line>
@@ -826,6 +865,7 @@ const flushState = () => {
             v-if="store.autoplayMode"
             class="absolute -top-2 -right-2 h-3.5 w-3.5 rounded-full bg-[var(--accent-color)] flex items-center justify-center ring-2 ring-[#181818] shadow"
             title="Autoplay on"
+            aria-hidden="true"
           >
             <svg
               xmlns="http://www.w3.org/2000/svg"
@@ -837,6 +877,7 @@ const flushState = () => {
               stroke-width="2.5"
               stroke-linecap="round"
               stroke-linejoin="round"
+              aria-hidden="true"
             >
               <path
                 d="M12 12c-2-2.67-4-4-6-4a4 4 0 1 0 0 8c2 0 4-1.33 6-4Zm0 0c2 2.67 4 4 6 4a4 4 0 0 0 0-8c-2 0-4 1.33-6 4Z"
@@ -848,9 +889,11 @@ const flushState = () => {
         <!-- Fullscreen toggle -->
         <button
           v-if="store.currentSong"
+          type="button"
           @click="openFullScreen()"
           class="transition text-gray-400 hover:text-white hover:scale-110 active:scale-95 shrink-0 cursor-pointer hidden xs:flex items-center justify-center"
-          title="Open full screen (Ctrl+Shift+F)"
+          :title="$t('player.fullScreen')"
+          :aria-label="$t('player.fullScreen')"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -862,6 +905,7 @@ const flushState = () => {
             stroke-width="2"
             stroke-linecap="round"
             stroke-linejoin="round"
+            aria-hidden="true"
           >
             <polyline points="15 3 21 3 21 9"></polyline>
             <polyline points="9 21 3 21 3 15"></polyline>
@@ -870,9 +914,11 @@ const flushState = () => {
           </svg>
         </button>
         <button
+          type="button"
           @click="store.toggleMute()"
           class="text-gray-400 hover:text-white transition cursor-pointer flex items-center justify-center shrink-0"
-          :title="store.isMuted ? 'Unmute' : 'Mute'"
+          :title="store.isMuted ? $t('common.unmute') : $t('common.mute')"
+          :aria-label="store.isMuted ? $t('common.unmute') : $t('common.mute')"
         >
           <!-- Mute Icon -->
           <svg
@@ -886,6 +932,7 @@ const flushState = () => {
             stroke-width="2"
             stroke-linecap="round"
             stroke-linejoin="round"
+            aria-hidden="true"
           >
             <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
             <line x1="23" y1="9" x2="17" y2="15"></line>
@@ -903,6 +950,7 @@ const flushState = () => {
             stroke-width="2"
             stroke-linecap="round"
             stroke-linejoin="round"
+            aria-hidden="true"
           >
             <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
             <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
@@ -919,6 +967,7 @@ const flushState = () => {
             stroke-width="2"
             stroke-linecap="round"
             stroke-linejoin="round"
+            aria-hidden="true"
           >
             <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
             <path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path>
@@ -930,6 +979,7 @@ const flushState = () => {
           min="0"
           max="1"
           step="0.01"
+          :aria-label="$t('player.volumeLabel')"
           :value="store.isMuted ? 0 : store.volume"
           @input="store.setVolume($event.target.value)"
           class="hidden sm:block w-16 md:w-24 h-1 rounded-lg appearance-none cursor-pointer accent-[var(--accent-color)] hover:accent-white transition-opacity duration-200"

@@ -235,7 +235,7 @@ const handleMenuDelete = async () => {
   <div class="h-full overflow-auto px-8 pt-8 pb-12">
     <!-- Header with controls -->
     <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
-      <h1 class="text-3xl font-bold tracking-tight text-white">Albums</h1>
+      <h1 class="text-3xl font-bold tracking-tight text-white">{{ $t('nav.albums') }}</h1>
 
       <div class="flex items-center gap-3 w-full sm:w-auto">
         <!-- Search Bar -->
@@ -259,12 +259,15 @@ const handleMenuDelete = async () => {
           <input
             v-model="searchQuery"
             type="text"
-            placeholder="Search albums..."
+            :aria-label="$t('views.albums.searchPlaceholder')"
+            :placeholder="$t('views.albums.searchPlaceholder')"
             class="w-full bg-[#2a2a2a] text-xs text-white rounded-md py-2 pl-9 pr-8 focus:outline-none focus:ring-1 focus:ring-[var(--accent-color)] placeholder-gray-500"
           />
           <button
             v-if="searchQuery"
+            type="button"
             @click="searchQuery = ''"
+            :aria-label="$t('common.clear')"
             class="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white"
           >
             <svg
@@ -277,6 +280,7 @@ const handleMenuDelete = async () => {
               stroke-width="2.5"
               stroke-linecap="round"
               stroke-linejoin="round"
+              aria-hidden="true"
             >
               <line x1="18" y1="6" x2="6" y2="18"></line>
               <line x1="6" y1="6" x2="18" y2="18"></line>
@@ -288,12 +292,13 @@ const handleMenuDelete = async () => {
         <div class="relative">
           <select
             v-model="sortBy"
+            aria-label="Sort albums by"
             class="appearance-none bg-[#2a2a2a] border-none text-xs text-white rounded-md py-2 pl-3 pr-8 focus:outline-none focus:ring-1 focus:ring-[var(--accent-color)] cursor-pointer"
           >
-            <option value="name">Title</option>
-            <option value="artist">Artist</option>
-            <option value="count">Tracks</option>
-            <option value="lastPlayed">Last Played</option>
+            <option value="name">{{ $t('songList.title') }}</option>
+            <option value="artist">{{ $t('songList.artist') }}</option>
+            <option value="count">{{ $t('views.albums.tracks') }}</option>
+            <option value="lastPlayed">{{ $t('views.albums.lastPlayed') }}</option>
           </select>
           <span
             class="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none"
@@ -308,6 +313,7 @@ const handleMenuDelete = async () => {
               stroke-width="3"
               stroke-linecap="round"
               stroke-linejoin="round"
+              aria-hidden="true"
             >
               <polyline points="6 9 12 15 18 9"></polyline>
             </svg>
@@ -316,9 +322,11 @@ const handleMenuDelete = async () => {
 
         <!-- Sort Order Button -->
         <button
+          type="button"
           @click="toggleSortOrder"
           class="bg-[#2a2a2a] hover:bg-[#3a3a3a] text-white p-2 rounded-md transition-colors flex items-center justify-center h-[32px] w-[32px]"
           :title="sortOrder === 'asc' ? 'Sort Ascending' : 'Sort Descending'"
+          :aria-label="sortOrder === 'asc' ? 'Sort Ascending' : 'Sort Descending'"
         >
           <svg
             v-if="sortOrder === 'asc'"
@@ -369,10 +377,15 @@ const handleMenuDelete = async () => {
         :key="album.name"
         :data-cover-key="album.name"
         :data-artist-key="album.artist"
+        role="button"
+        tabindex="0"
+        :aria-label="album.name + ' by ' + album.artist"
         @click="openAlbum(album.name, $event)"
+        @keydown.enter="openAlbum(album.name, $event)"
+        @keydown.space.prevent="openAlbum(album.name, $event)"
         @contextmenu.prevent.stop="openContextMenu(album, $event)"
         @mousedown.right.prevent.stop="openContextMenu(album, $event)"
-        class="cursor-pointer group"
+        class="cursor-pointer group focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-color)] rounded-md"
       >
         <!-- Album Art -->
         <div
@@ -386,8 +399,10 @@ const handleMenuDelete = async () => {
           <div
             class="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity rounded-md flex items-end p-3 z-10"
           >
-            <div
+            <button
+              type="button"
               @click.stop="playAlbum(album.name)"
+              aria-label="Play album"
               class="bg-[var(--accent-color)] text-white rounded-full p-3 shadow-lg translate-y-2 opacity-0 group-hover:translate-y-0 group-hover:opacity-100 transition-all duration-300 hover:scale-110 hover:bg-red-500"
             >
               <svg
@@ -397,21 +412,25 @@ const handleMenuDelete = async () => {
                 viewBox="0 0 24 24"
                 fill="currentColor"
                 stroke="none"
+                aria-hidden="true"
               >
                 <polygon points="5 3 19 12 5 21 5 3"></polygon>
               </svg>
-            </div>
+            </button>
           </div>
         </div>
 
         <h3 class="text-[13px] font-medium text-white truncate pr-2 leading-snug">
           {{ album.name }}
         </h3>
-        <p
-          @click.stop="goToArtist(album.artist, $event)"
-          class="text-[13px] text-[var(--text-secondary)] truncate hover:text-[var(--accent-color)] hover:underline cursor-pointer inline-block max-w-full transition-colors"
-        >
-          {{ album.artist }}
+        <p class="text-[13px] text-[var(--text-secondary)] truncate">
+          <button
+            type="button"
+            @click.stop="goToArtist(album.artist, $event)"
+            class="hover:text-[var(--accent-color)] hover:underline cursor-pointer inline-block max-w-full transition-colors bg-transparent border-0 p-0 text-left text-[var(--text-secondary)]"
+          >
+            {{ album.artist }}
+          </button>
         </p>
       </div>
     </TransitionGroup>
@@ -433,8 +452,8 @@ const handleMenuDelete = async () => {
         <path d="M12 2a10 10 0 0 1 10 10" stroke-dasharray="1 3" />
         <path d="M12 6a6 6 0 0 1 6 6" />
       </svg>
-      <p class="text-sm font-medium text-white/80">No albums found</p>
-      <p class="text-xs text-gray-500 mt-1">Try searching for something else</p>
+      <p class="text-sm font-medium text-white/80">{{ $t('views.albums.empty') }}</p>
+      <p class="text-xs text-gray-500 mt-1">{{ $t('views.albums.emptySearch') }}</p>
     </div>
 
     <!-- Right-click Context Menu -->
@@ -450,31 +469,31 @@ const handleMenuDelete = async () => {
           @click="handleMenuPlayAll"
           class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors"
         >
-          Play all
+          {{ $t('views.albums.playAll') }}
         </button>
         <button
           @click="handleMenuShuffle"
           class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors"
         >
-          Shuffle
+          {{ $t('views.albums.shuffle') }}
         </button>
         <button
           @click="handleMenuPlayNext"
           class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors"
         >
-          Play next
+          {{ $t('views.albums.playNext') }}
         </button>
         <button
           @click="handleMenuAddToQueue"
           class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors"
         >
-          Add to queue
+          {{ $t('views.albums.addToQueue') }}
         </button>
 
         <div class="border-t border-[#3a3a3a] my-1"></div>
 
         <div class="px-4 py-1 text-[11px] uppercase tracking-wide text-gray-500 font-medium">
-          Add to playlist
+          {{ $t('songList.menu.addToPlaylist') }}
         </div>
         <div class="max-h-40 overflow-auto scrollbar-thin">
           <button
@@ -490,7 +509,7 @@ const handleMenuDelete = async () => {
           @click="handleMenuNewPlaylist"
           class="w-full text-left px-4 py-2 text-[var(--accent-color)] hover:bg-[#3a3a3a] transition-colors font-medium"
         >
-          + New playlist
+          {{ $t('songList.menu.newPlaylist') }}
         </button>
 
         <div class="border-t border-[#3a3a3a] my-1"></div>
@@ -499,7 +518,7 @@ const handleMenuDelete = async () => {
           @click="handleMenuDelete"
           class="w-full text-left px-4 py-2 text-red-500 hover:bg-[#3a3a3a] transition-colors font-medium"
         >
-          Delete Album
+          {{ $t('views.albums.playAll') ? $t('common.delete') : 'Delete' }}
         </button>
       </div>
     </Teleport>

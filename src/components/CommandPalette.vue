@@ -1,10 +1,14 @@
 <script setup>
 import { ref, computed, watch, nextTick, onUnmounted } from 'vue';
+import { useI18n } from 'vue-i18n';
 import { invokeCommand as invoke } from '../generated/ipc';
 import { useRouter } from 'vue-router';
 import { store } from '../store';
 import CoverImage from './CoverImage.vue';
 import SmartCover from './SmartCover.vue';
+import { useFocusTrap } from '../useFocusTrap';
+
+const { t } = useI18n();
 
 // Ctrl+K command palette. Uses the SQLite FTS5 index for instant song search and
 // the GROUP BY album/artist commands, plus the in-memory playlist cache, to jump
@@ -20,8 +24,14 @@ const genres = ref([]);
 const activeIndex = ref(0);
 const inputEl = ref(null);
 const listEl = ref(null);
+const paletteRef = ref(null);
 let debounce = null;
 let searchSequence = 0;
+
+useFocusTrap(paletteRef, () => store.commandPaletteOpen, {
+  onEscape: () => store.closeCommandPalette(),
+  initialFocus: () => inputEl.value,
+});
 
 const playlists = computed(() => {
   const q = query.value.trim().toLowerCase();
@@ -160,13 +170,13 @@ function onKeydown(e) {
   }
 }
 
-const groupLabel = {
-  song: 'Songs',
-  album: 'Albums',
-  artist: 'Artists',
-  playlist: 'Playlists',
-  genre: 'Genre Stations',
-};
+const groupLabel = computed(() => ({
+  song: t('nav.songs'),
+  album: t('nav.albums'),
+  artist: t('nav.artists'),
+  playlist: t('nav.playlists'),
+  genre: t('views.home.station'),
+}));
 // Whether a flat-list row is the first of its group (to render a header above it).
 function isGroupStart(i) {
   return i === 0 || items.value[i].type !== items.value[i - 1].type;
@@ -178,11 +188,21 @@ function isGroupStart(i) {
     <Transition name="cmdk">
       <div
         v-if="store.commandPaletteOpen"
-        class="fixed inset-0 z-[400] flex items-start justify-center pt-[12vh] bg-black/60 backdrop-blur-sm"
-        @click.self="store.closeCommandPalette()"
+        class="fixed inset-0 z-[400] flex items-start justify-center pt-[12vh]"
       >
+        <button
+          type="button"
+          class="fixed inset-0 bg-black/60 backdrop-blur-sm cursor-default border-0 w-full h-full"
+          tabindex="-1"
+          :aria-label="$t('common.close')"
+          @click="store.closeCommandPalette()"
+        ></button>
         <div
-          class="cmdk-panel w-[600px] max-w-[92vw] bg-[#1c1c1e] rounded-2xl shadow-2xl border border-[#2c2c2e] overflow-hidden"
+          ref="paletteRef"
+          role="dialog"
+          aria-modal="true"
+          :aria-label="$t('nav.commandPalette')"
+          class="cmdk-panel relative z-10 w-[600px] max-w-[92vw] bg-[#1c1c1e] rounded-2xl shadow-2xl border border-[#2c2c2e] overflow-hidden"
         >
           <!-- Search input -->
           <div class="flex items-center gap-3 px-4 py-3 border-b border-[#2c2c2e]">
@@ -195,6 +215,7 @@ function isGroupStart(i) {
               stroke="currentColor"
               stroke-width="2"
               stroke-linecap="round"
+              aria-hidden="true"
               class="text-gray-500 shrink-0"
             >
               <circle cx="11" cy="11" r="8" />
@@ -204,7 +225,8 @@ function isGroupStart(i) {
               ref="inputEl"
               v-model="query"
               type="text"
-              placeholder="Search songs, albums, artists, playlists, genres…"
+              :aria-label="$t('commandPalette.placeholder')"
+              :placeholder="$t('commandPalette.placeholder')"
               class="flex-1 bg-transparent text-white text-[15px] focus:outline-none placeholder-gray-600"
             />
             <kbd class="text-[10px] text-gray-500 border border-[#3a3a3a] rounded px-1.5 py-0.5"
@@ -293,12 +315,12 @@ function isGroupStart(i) {
                           : item.type === 'album'
                             ? item.data.artist
                             : item.type === 'artist'
-                              ? item.data.track_count + ' songs'
+                              ? $t('views.playlists.songsCount', { count: item.data.track_count })
                               : item.type === 'genre'
-                                ? 'Genre Station • ' + item.data.track_count + ' songs'
+                                ? $t('views.home.station') + ' • ' + $t('views.playlists.songsCount', { count: item.data.track_count })
                                 : item.data.is_smart
-                                  ? 'Smart playlist'
-                                  : 'Playlist'
+                                  ? $t('views.smartPlaylistDetail.smartPlaylist')
+                                  : $t('nav.playlists')
                       }}
                     </div>
                   </div>
@@ -306,22 +328,22 @@ function isGroupStart(i) {
                     v-if="i === activeIndex"
                     class="shrink-0 flex items-center gap-1.5 text-[11px] font-medium text-[var(--accent-color)]"
                   >
-                    {{ item.type === 'song' || item.type === 'genre' ? 'Play' : 'Open' }}
+                    {{ item.type === 'song' || item.type === 'genre' ? $t('common.play') : $t('common.open') }}
                     <kbd class="cmdk-kbd">↵</kbd>
                   </span>
                   <span
                     v-else-if="item.type === 'song' || item.type === 'genre'"
                     class="text-[11px] text-gray-600 shrink-0"
-                    >Play</span
+                    >{{ $t('common.play') }}</span
                   >
                 </button>
               </template>
             </template>
             <div v-else-if="query.trim()" class="px-4 py-10 text-center text-sm text-gray-500">
-              No results for "{{ query }}"
+              {{ $t('views.playlists.emptySearch', { query }) }}
             </div>
             <div v-else class="px-4 py-10 text-center text-sm text-gray-600">
-              Type to search your library
+              {{ $t('commandPalette.hint') }}
             </div>
           </div>
         </div>

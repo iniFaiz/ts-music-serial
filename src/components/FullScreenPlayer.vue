@@ -179,17 +179,18 @@ const goToAlbum = (albumName) => {
         <div
           class="absolute inset-0 bg-gradient-to-t from-[#0a0a0a] via-[#0a0a0a]/20 to-[#0a0a0a]/10"
         ></div>
-      </div>
-
-      <!-- Draggable top strip + close button -->
+      </div>      <!-- Draggable top strip + close button -->
+      <!-- eslint-disable-next-line vuejs-accessibility/no-static-element-interactions -->
       <div
         @mousedown="beginWindowDrag"
         class="absolute top-0 left-0 right-0 z-10 flex items-center px-4 h-14 select-none cursor-default"
       >
         <button
+          type="button"
           @click="close"
           class="text-white/70 hover:text-white transition rounded-full p-1.5 hover:bg-white/10"
-          title="Close (Esc)"
+          :title="$t('common.close')"
+          :aria-label="$t('common.close')"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -201,6 +202,7 @@ const goToAlbum = (albumName) => {
             stroke-width="2"
             stroke-linecap="round"
             stroke-linejoin="round"
+            aria-hidden="true"
           >
             <line x1="18" y1="6" x2="6" y2="18"></line>
             <line x1="6" y1="6" x2="18" y2="18"></line>
@@ -210,10 +212,12 @@ const goToAlbum = (albumName) => {
         <!-- Romaji show/hide toggle (top-right), only when romanization exists -->
         <button
           v-if="hasRomaji && showLyricsColumn"
+          type="button"
           @click="store.toggleRomaji()"
           class="flex items-center justify-center ml-auto text-white transition-all rounded-full w-9 h-9 active:scale-95"
           :class="store.showRomaji ? 'bg-white/25' : 'bg-white/10 hover:bg-white/20'"
           :title="store.showRomaji ? 'Hide romaji' : 'Show romaji'"
+          :aria-label="store.showRomaji ? 'Hide romaji' : 'Show romaji'"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -225,6 +229,7 @@ const goToAlbum = (albumName) => {
             stroke-width="2"
             stroke-linecap="round"
             stroke-linejoin="round"
+            aria-hidden="true"
           >
             <path d="m5 8 6 6" />
             <path d="m4 14 6-6 2-3" />
@@ -265,6 +270,7 @@ const goToAlbum = (albumName) => {
                 fill="none"
                 stroke="currentColor"
                 stroke-width="1.5"
+                aria-hidden="true"
               >
                 <path d="M9 18V5l12-2v13"></path>
                 <circle cx="6" cy="18" r="3"></circle>
@@ -278,24 +284,27 @@ const goToAlbum = (albumName) => {
             <div class="min-w-0 flex-1">
               <MarqueeText :text="song.title" :gap="80" class="text-xl font-bold" />
               <div class="text-sm truncate text-white/60">
-                <span
+                <button
+                  type="button"
                   @click="goToArtist(song.artist)"
-                  class="hover:text-[var(--accent-color)] hover:underline cursor-pointer transition-colors"
+                  class="hover:text-[var(--accent-color)] hover:underline cursor-pointer transition-colors bg-transparent border-0 p-0 text-white/60 text-sm"
                 >
                   {{ song.artist }}
-                </span>
+                </button>
                 <span v-if="song.album">
-                  â€”
-                  <span
+                  —
+                  <button
+                    type="button"
                     @click="goToAlbum(song.album)"
-                    class="hover:text-[var(--accent-color)] hover:underline cursor-pointer transition-colors"
+                    class="hover:text-[var(--accent-color)] hover:underline cursor-pointer transition-colors bg-transparent border-0 p-0 text-white/60 text-sm"
                   >
                     {{ song.album }}
-                  </span>
+                  </button>
                 </span>
               </div>
             </div>
             <button
+              type="button"
               @click="store.runMutation(() => store.toggleFavorite(song.path))"
               class="transition shrink-0 hover:scale-110"
               :class="
@@ -303,7 +312,16 @@ const goToAlbum = (albumName) => {
                   ? 'text-[var(--accent-color)]'
                   : 'text-white/60 hover:text-white'
               "
-              title="Like"
+              :title="
+                store.isFavorite(song.path)
+                  ? $t('player.removeFromFavorites')
+                  : $t('player.addToFavorites')
+              "
+              :aria-label="
+                store.isFavorite(song.path)
+                  ? $t('player.removeFromFavorites')
+                  : $t('player.addToFavorites')
+              "
             >
               <svg
                 xmlns="http://www.w3.org/2000/svg"
@@ -315,6 +333,7 @@ const goToAlbum = (albumName) => {
                 stroke-width="2"
                 stroke-linecap="round"
                 stroke-linejoin="round"
+                aria-hidden="true"
               >
                 <path
                   d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"
@@ -332,6 +351,7 @@ const goToAlbum = (albumName) => {
               :value="store.currentTime"
               @input="onSeekInput"
               @change="onSeekCommit"
+              :aria-label="$t('player.seekLabel')"
               class="w-full h-1 rounded-lg appearance-none cursor-pointer accent-[var(--accent-color)]"
               :style="fullscreenSeekStyle"
             />
@@ -349,11 +369,13 @@ const goToAlbum = (albumName) => {
           <!-- Controls -->
           <div class="flex items-center justify-center gap-6 mt-6">
             <button
+              type="button"
               @click="store.toggleShuffle()"
               :class="
                 store.shuffleMode ? 'text-[var(--accent-color)]' : 'text-white/60 hover:text-white'
               "
-              title="Shuffle"
+              :title="$t('player.toggleShuffle')"
+              :aria-label="$t('player.toggleShuffle')"
             >
               <svg
                 xmlns="http://www.w3.org/2000/svg"
@@ -365,14 +387,17 @@ const goToAlbum = (albumName) => {
                 stroke-width="2"
                 stroke-linecap="round"
                 stroke-linejoin="round"
+                aria-hidden="true"
               >
                 <path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5" />
               </svg>
             </button>
             <button
+              type="button"
               @click="store.prevSong()"
               class="text-white/90 hover:text-white"
-              title="Previous"
+              :title="$t('player.prevTrack')"
+              :aria-label="$t('player.prevTrack')"
             >
               <svg
                 xmlns="http://www.w3.org/2000/svg"
@@ -380,14 +405,18 @@ const goToAlbum = (albumName) => {
                 height="30"
                 viewBox="0 0 24 24"
                 fill="currentColor"
+                aria-hidden="true"
               >
                 <polygon points="19 20 9 12 19 4 19 20"></polygon>
                 <rect x="4" y="4" width="2.5" height="16"></rect>
               </svg>
             </button>
             <button
+              type="button"
               @click="store.togglePlay()"
               class="flex items-center justify-center w-16 h-16 text-black transition bg-white rounded-full hover:scale-105"
+              :title="$t('player.togglePlay')"
+              :aria-label="$t('player.togglePlay')"
             >
               <svg
                 v-if="store.isPlaying"
@@ -396,6 +425,7 @@ const goToAlbum = (albumName) => {
                 height="30"
                 viewBox="0 0 24 24"
                 fill="currentColor"
+                aria-hidden="true"
               >
                 <rect x="6" y="4" width="4" height="16"></rect>
                 <rect x="14" y="4" width="4" height="16"></rect>
@@ -407,14 +437,17 @@ const goToAlbum = (albumName) => {
                 height="30"
                 viewBox="0 0 24 24"
                 fill="currentColor"
+                aria-hidden="true"
               >
                 <polygon points="6 3 20 12 6 21 6 3"></polygon>
               </svg>
             </button>
             <button
+              type="button"
               @click="store.nextSong(true)"
               class="text-white/90 hover:text-white"
-              title="Next"
+              :title="$t('player.nextTrack')"
+              :aria-label="$t('player.nextTrack')"
             >
               <svg
                 xmlns="http://www.w3.org/2000/svg"
@@ -422,18 +455,21 @@ const goToAlbum = (albumName) => {
                 height="30"
                 viewBox="0 0 24 24"
                 fill="currentColor"
+                aria-hidden="true"
               >
                 <polygon points="5 4 15 12 5 20 5 4"></polygon>
                 <rect x="17.5" y="4" width="2.5" height="16"></rect>
               </svg>
             </button>
             <button
+              type="button"
               @click="store.toggleLoop()"
               class="relative"
               :class="
                 store.loopMode > 0 ? 'text-[var(--accent-color)]' : 'text-white/60 hover:text-white'
               "
-              title="Loop"
+              :title="$t('player.toggleRepeat')"
+              :aria-label="$t('player.toggleRepeat')"
             >
               <svg
                 xmlns="http://www.w3.org/2000/svg"
@@ -445,6 +481,7 @@ const goToAlbum = (albumName) => {
                 stroke-width="2"
                 stroke-linecap="round"
                 stroke-linejoin="round"
+                aria-hidden="true"
               >
                 <path d="M17 1l4 4-4 4"></path>
                 <path d="M3 11V9a4 4 0 0 1 4-4h14"></path>
@@ -462,9 +499,11 @@ const goToAlbum = (albumName) => {
           <!-- Volume -->
           <div class="flex items-center gap-2 mt-4 text-white/60">
             <button
+              type="button"
               @click="store.toggleMute()"
               class="hover:text-white"
-              :title="store.isMuted ? 'Unmute' : 'Mute'"
+              :title="store.isMuted ? $t('common.unmute') : $t('common.mute')"
+              :aria-label="store.isMuted ? $t('common.unmute') : $t('common.mute')"
             >
               <svg
                 xmlns="http://www.w3.org/2000/svg"
@@ -476,6 +515,7 @@ const goToAlbum = (albumName) => {
                 stroke-width="2"
                 stroke-linecap="round"
                 stroke-linejoin="round"
+                aria-hidden="true"
               >
                 <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
                 <path v-if="!store.isMuted" d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
@@ -490,6 +530,7 @@ const goToAlbum = (albumName) => {
               min="0"
               max="1"
               step="0.01"
+              :aria-label="$t('player.volumeLabel')"
               :value="store.isMuted ? 0 : store.volume"
               @input="store.setVolume($event.target.value)"
               class="flex-1 h-1 rounded-lg appearance-none cursor-pointer accent-[var(--accent-color)]"
@@ -515,7 +556,7 @@ const goToAlbum = (albumName) => {
             @scroll.passive="onUserScroll"
           >
             <!-- Loading -->
-            <div v-if="lyricsLoading" class="text-2xl font-bold text-white/40">Loading lyricsâ€¦</div>
+            <div v-if="lyricsLoading" class="text-2xl font-bold text-white/40">{{ $t('lyricsPanel.loading') }}</div>
 
             <!-- Found -->
             <template v-else-if="lines.length">
@@ -523,8 +564,12 @@ const goToAlbum = (albumName) => {
                 v-for="(line, i) in lines"
                 :key="i"
                 :data-line="i"
+                role="button"
+                tabindex="0"
                 @click="seekToLine(line)"
-                class="text-2xl font-semibold leading-relaxed tracking-tight np-line sm:text-3xl"
+                @keydown.enter="seekToLine(line)"
+                @keydown.space.prevent="seekToLine(line)"
+                class="text-2xl font-semibold leading-relaxed tracking-tight np-line sm:text-3xl focus:outline-none focus-visible:underline"
                 :class="[
                   synced ? 'cursor-pointer' : '',
                   i === activeIdx ? 'np-line-active' : 'np-line-dim',

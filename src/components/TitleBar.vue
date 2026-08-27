@@ -59,6 +59,7 @@ const { beginWindowDrag } = useWindowDrag({ onDoubleClick: toggleMaximize });
 <template>
   <!-- Custom title bar: draggable, with the brand on the left and the OS window
        controls on the right (the native frame is disabled in tauri.conf.json). -->
+  <!-- eslint-disable-next-line vuejs-accessibility/no-static-element-interactions -->
   <div
     @mousedown="beginWindowDrag"
     class="h-10 shrink-0 flex items-center justify-between bg-[var(--sidebar-bg)] border-b border-[var(--border-color)] select-none cursor-default"
@@ -67,6 +68,7 @@ const { beginWindowDrag } = useWindowDrag({ onDoubleClick: toggleMaximize });
     <!-- Brand + back -->
     <div class="flex items-center gap-1 pl-2 pr-4">
       <button
+        type="button"
         @click="goBack"
         :disabled="!canGoBack"
         class="p-1.5 rounded-md transition-colors"
@@ -75,7 +77,8 @@ const { beginWindowDrag } = useWindowDrag({ onDoubleClick: toggleMaximize });
             ? 'text-gray-300 hover:text-white hover:bg-white/10'
             : 'text-gray-600 cursor-default'
         "
-        title="Back"
+        :title="$t('common.back')"
+        :aria-label="$t('common.back')"
       >
         <svg
           xmlns="http://www.w3.org/2000/svg"
@@ -87,6 +90,7 @@ const { beginWindowDrag } = useWindowDrag({ onDoubleClick: toggleMaximize });
           stroke-width="2.2"
           stroke-linecap="round"
           stroke-linejoin="round"
+          aria-hidden="true"
         >
           <line x1="19" y1="12" x2="5" y2="12"></line>
           <polyline points="12 19 5 12 12 5"></polyline>
@@ -101,9 +105,11 @@ const { beginWindowDrag } = useWindowDrag({ onDoubleClick: toggleMaximize });
     <!-- Window controls -->
     <div class="flex items-center h-full">
       <button
+        type="button"
         @click="minimize"
         class="h-full w-11 flex items-center justify-center text-gray-300 hover:bg-white/10 hover:text-white transition-colors"
-        title="Minimize"
+        :title="$t('common.minimize')"
+        :aria-label="$t('common.minimize')"
       >
         <svg
           xmlns="http://www.w3.org/2000/svg"
@@ -113,14 +119,17 @@ const { beginWindowDrag } = useWindowDrag({ onDoubleClick: toggleMaximize });
           fill="none"
           stroke="currentColor"
           stroke-width="2"
+          aria-hidden="true"
         >
           <line x1="5" y1="12" x2="19" y2="12"></line>
         </svg>
       </button>
       <button
+        type="button"
         @click="toggleMaximize"
         class="h-full w-11 flex items-center justify-center text-gray-300 hover:bg-white/10 hover:text-white transition-colors"
-        :title="isMaximized ? 'Restore' : 'Maximize'"
+        :title="isMaximized ? $t('common.restore') : $t('common.maximize')"
+        :aria-label="isMaximized ? $t('common.restore') : $t('common.maximize')"
       >
         <svg
           v-if="isMaximized"
@@ -131,6 +140,7 @@ const { beginWindowDrag } = useWindowDrag({ onDoubleClick: toggleMaximize });
           fill="none"
           stroke="currentColor"
           stroke-width="2"
+          aria-hidden="true"
         >
           <rect x="8" y="3" width="13" height="13" rx="1"></rect>
           <path d="M16 16v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h3"></path>
@@ -144,14 +154,17 @@ const { beginWindowDrag } = useWindowDrag({ onDoubleClick: toggleMaximize });
           fill="none"
           stroke="currentColor"
           stroke-width="2"
+          aria-hidden="true"
         >
           <rect x="4" y="4" width="16" height="16" rx="1"></rect>
         </svg>
       </button>
       <button
+        type="button"
         @click="close"
         class="h-full w-11 flex items-center justify-center text-gray-300 hover:bg-[#e81123] hover:text-white transition-colors"
-        title="Close"
+        :title="$t('common.close')"
+        :aria-label="$t('common.close')"
       >
         <svg
           xmlns="http://www.w3.org/2000/svg"
@@ -162,6 +175,7 @@ const { beginWindowDrag } = useWindowDrag({ onDoubleClick: toggleMaximize });
           stroke="currentColor"
           stroke-width="2"
           stroke-linecap="round"
+          aria-hidden="true"
         >
           <line x1="18" y1="6" x2="6" y2="18"></line>
           <line x1="6" y1="6" x2="18" y2="18"></line>

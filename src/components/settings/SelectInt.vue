@@ -7,6 +7,7 @@
     <select
       :value="modelValue"
       :disabled="disabled"
+      :aria-label="label"
       @change="$emit('update:modelValue', $event.target.value)"
       class="bg-[#2a2a2a] text-sm text-white rounded-md px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-[var(--accent-color)] max-w-[65%] truncate disabled:cursor-not-allowed"
     >

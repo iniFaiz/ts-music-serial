@@ -60,12 +60,12 @@ const shuffleAll = async () => {
 
       <div class="flex flex-col gap-1 pb-2 overflow-hidden flex-1">
         <h4 class="text-sm font-bold text-[var(--accent-color)] uppercase tracking-wider mb-1">
-          Insight Mix
+          {{ $t('views.collectionDetail.insightMix') }}
         </h4>
         <h1 class="text-4xl font-bold tracking-tight text-white">{{ collection.title }}</h1>
         <p class="text-sm text-[var(--text-secondary)] mt-2">{{ collection.subtitle }}</p>
         <p class="text-xs text-[var(--text-secondary)] font-medium mt-2">
-          {{ loading ? 'Loading songs…' : `${songs.length} songs` }}
+          {{ loading ? $t('common.loading') : $t('views.playlists.songsCount', { count: songs.length }) }}
         </p>
 
         <div class="flex flex-wrap gap-3 mt-6 items-center">
@@ -84,7 +84,7 @@ const shuffleAll = async () => {
             >
               <polygon points="5 3 19 12 5 21 5 3" />
             </svg>
-            Play
+            {{ $t('common.play') }}
           </button>
           <button
             @click="shuffleAll"
@@ -104,7 +104,7 @@ const shuffleAll = async () => {
             >
               <path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5" />
             </svg>
-            Shuffle
+            {{ $t('common.shuffle') }}
           </button>
         </div>
       </div>
@@ -114,15 +114,12 @@ const shuffleAll = async () => {
       <SongList v-if="loading || songs.length > 0" :songs="songs" :loading="loading" />
       <div v-else class="py-16 px-6 text-center text-gray-500">
         <div class="text-4xl mb-3 opacity-20">♫</div>
-        <p class="text-sm font-medium text-white/80">Nothing here yet.</p>
-        <p class="text-xs text-gray-500 mt-1 max-w-sm mx-auto">
-          Keep listening — this mix fills in automatically as you play music.
-        </p>
+        <p class="text-sm font-medium text-white/80">{{ $t('views.playlists.empty') }}</p>
       </div>
     </div>
   </div>
 
   <div v-else class="p-20 text-center text-gray-600">
-    <p>Collection not found.</p>
+    <p>{{ $t('views.collectionDetail.notFound') }}</p>
   </div>
 </template>

@@ -221,7 +221,7 @@ const addAndRemoveFromSuggestions = async (songPath) => {
           {{ playlist.description }}
         </p>
         <p class="text-xs text-[var(--text-secondary)] font-medium mt-2">
-          {{ loading ? 'Loading songs…' : `${songs.length} songs` }}
+          {{ loading ? $t('common.loading') : $t('views.playlists.songsCount', { count: songs.length }) }}
         </p>
 
         <div class="flex gap-3 mt-6 items-center">
@@ -240,7 +240,7 @@ const addAndRemoveFromSuggestions = async (songPath) => {
             >
               <polygon points="5 3 19 12 5 21 5 3"></polygon>
             </svg>
-            Play
+            {{ $t('common.play') }}
           </button>
           <button
             @click="shufflePlaylist"
@@ -260,7 +260,7 @@ const addAndRemoveFromSuggestions = async (songPath) => {
             >
               <path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5" />
             </svg>
-            Shuffle
+            {{ $t('common.shuffle') }}
           </button>
         </div>
       </div>
@@ -270,7 +270,7 @@ const addAndRemoveFromSuggestions = async (songPath) => {
         <button
           @click.stop="menuOpen = !menuOpen"
           class="text-red-500 hover:text-red-400 p-2 rounded-full hover:bg-white/5 transition-colors flex items-center justify-center"
-          title="More options"
+          :title="$t('common.options')"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -295,35 +295,35 @@ const addAndRemoveFromSuggestions = async (songPath) => {
             @click="store.openPlaylistModal(null, 'edit', playlist.id)"
             class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors"
           >
-            Edit
+            {{ $t('common.edit') }}
           </button>
           <button
             @click="playAll"
             :disabled="loading || songs.length === 0"
             class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors disabled:opacity-40"
           >
-            Play "{{ playlist.name }}"
+            {{ $t('common.play') }} "{{ playlist.name }}"
           </button>
           <button
             @click="shufflePlaylist"
             :disabled="loading || songs.length === 0"
             class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors disabled:opacity-40"
           >
-            Shuffle "{{ playlist.name }}"
+            {{ $t('common.shuffle') }} "{{ playlist.name }}"
           </button>
           <button
             @click="playNextPlaylist"
             :disabled="loading || songs.length === 0"
             class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors disabled:opacity-40"
           >
-            Play next
+            {{ $t('songList.menu.playNext') }}
           </button>
           <button
             @click="playLastPlaylist"
             :disabled="loading || songs.length === 0"
             class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors disabled:opacity-40"
           >
-            Play last
+            {{ $t('views.albums.addToQueue') }}
           </button>
           <div class="border-t border-[#3a3a3a] my-1"></div>
           <button
@@ -331,7 +331,7 @@ const addAndRemoveFromSuggestions = async (songPath) => {
             :disabled="loading || songs.length === 0"
             class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors disabled:opacity-40"
           >
-            Export as M3U…
+            {{ $t('views.playlistDetail.exportM3u') }}
           </button>
           <button
             @click="exportM3u(true)"
@@ -339,14 +339,14 @@ const addAndRemoveFromSuggestions = async (songPath) => {
             class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors disabled:opacity-40"
             title="Relative paths — keep this file next to your music folder to share it"
           >
-            Export portable M3U…
+            {{ $t('views.playlistDetail.exportPortableM3u') }}
           </button>
           <div class="border-t border-[#3a3a3a] my-1"></div>
           <button
             @click="removePlaylist"
             class="w-full text-left px-4 py-2 text-red-500 hover:bg-[#3a3a3a] transition-colors"
           >
-            Delete from library
+            {{ $t('views.playlistDetail.delete') }}
           </button>
         </div>
       </div>
@@ -362,9 +362,9 @@ const addAndRemoveFromSuggestions = async (songPath) => {
       />
       <div v-else class="py-12 px-6 text-center text-gray-500">
         <div class="text-4xl mb-3 opacity-20">♫</div>
-        <p class="text-sm font-medium text-white/80">This playlist is empty.</p>
+        <p class="text-sm font-medium text-white/80">{{ $t('views.playlistDetail.empty') }}</p>
         <p class="text-xs text-gray-500 mt-1 max-w-sm mx-auto">
-          Right-click a song anywhere and choose "Add to playlist".
+          {{ $t('views.playlistDetail.addSongs') }}
         </p>
       </div>
 
@@ -377,16 +377,15 @@ const addAndRemoveFromSuggestions = async (songPath) => {
           <div class="flex items-center justify-between mb-4 border-b border-[#2d2d2f] pb-3">
             <div>
               <h3 class="text-xs font-semibold text-white uppercase tracking-wider">
-                Recommended Songs
+                {{ $t('views.playlistDetail.recommendedSongs') }}
               </h3>
-              <p class="text-[11px] text-gray-500 mt-0.5">Quick add to your playlist</p>
             </div>
             <div class="flex items-center gap-2">
               <button
                 @click="getSuggestions"
                 :disabled="isRefreshingSuggestions"
                 class="text-gray-400 hover:text-white transition flex items-center gap-1.5 text-[11px] font-medium bg-[#282828] hover:bg-[#333] px-2.5 py-1 rounded-md border border-[#3a3a3a] disabled:opacity-50"
-                title="Refresh suggestions"
+                :title="$t('views.playlistDetail.refreshSuggestions')"
               >
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
@@ -403,12 +402,12 @@ const addAndRemoveFromSuggestions = async (songPath) => {
                 >
                   <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67" />
                 </svg>
-                Refresh
+                {{ $t('common.refresh') }}
               </button>
               <button
                 @click="suggestionsClosed = true"
                 class="text-gray-400 hover:text-white transition flex items-center justify-center bg-[#282828] hover:bg-[#333] h-[25px] w-[25px] rounded-md border border-[#3a3a3a]"
-                title="Close recommendations"
+                :title="$t('common.close')"
               >
                 <svg
                   xmlns="http://www.w3.org/2000/svg"

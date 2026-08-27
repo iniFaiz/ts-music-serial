@@ -15,7 +15,7 @@ export default defineConfig(async () => ({
         // cache/parse it independently of route chunks. (Function form is
         // required — Vite 8 bundles Rolldown, which rejects the object form.)
         manualChunks(id) {
-          if (/[\\/]node_modules[\\/](vue|vue-router|@vue)[\\/]/.test(id)) {
+          if (/[\\/]node_modules[\\/](vue|vue-router|vue-i18n|@vue)[\\/]/.test(id)) {
             return "vue";
           }
           return undefined;

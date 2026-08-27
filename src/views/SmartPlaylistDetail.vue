@@ -104,7 +104,7 @@ onUnmounted(() => window.removeEventListener('click', closeMenu));
           >
             <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
           </svg>
-          Smart Playlist
+          {{ $t('views.smartPlaylistDetail.smartPlaylist') }}
         </h4>
         <h1 class="text-4xl font-bold tracking-tight text-white truncate">{{ sp.name }}</h1>
         <p
@@ -114,7 +114,7 @@ onUnmounted(() => window.removeEventListener('click', closeMenu));
           {{ sp.description }}
         </p>
         <p class="text-xs text-[var(--text-secondary)] font-medium mt-2">
-          {{ loading ? 'Loading songs…' : `${songs.length} songs` }}
+          {{ loading ? $t('common.loading') : $t('views.playlists.songsCount', { count: songs.length }) }}
         </p>
 
         <div class="flex gap-3 mt-6 items-center">
@@ -133,7 +133,7 @@ onUnmounted(() => window.removeEventListener('click', closeMenu));
             >
               <polygon points="5 3 19 12 5 21 5 3" />
             </svg>
-            Play
+            {{ $t('common.play') }}
           </button>
           <button
             @click="shuffleAll"
@@ -153,7 +153,7 @@ onUnmounted(() => window.removeEventListener('click', closeMenu));
             >
               <path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5" />
             </svg>
-            Shuffle
+            {{ $t('common.shuffle') }}
           </button>
         </div>
       </div>
@@ -163,7 +163,7 @@ onUnmounted(() => window.removeEventListener('click', closeMenu));
         <button
           @click.stop="menuOpen = !menuOpen"
           class="text-red-500 hover:text-red-400 p-2 rounded-full hover:bg-white/5 transition-colors flex items-center justify-center"
-          title="More options"
+          :title="$t('common.options')"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -186,28 +186,28 @@ onUnmounted(() => window.removeEventListener('click', closeMenu));
             @click="edit"
             class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors"
           >
-            Edit
+            {{ $t('common.edit') }}
           </button>
           <button
             @click="playNext"
             :disabled="loading || songs.length === 0"
             class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors disabled:opacity-40"
           >
-            Play next
+            {{ $t('songList.menu.playNext') }}
           </button>
           <button
             @click="playLast"
             :disabled="loading || songs.length === 0"
             class="w-full text-left px-4 py-2 hover:bg-[#3a3a3a] transition-colors disabled:opacity-40"
           >
-            Play last
+            {{ $t('views.albums.addToQueue') }}
           </button>
           <div class="border-t border-[#3a3a3a] my-1"></div>
           <button
             @click="removeSmart"
             class="w-full text-left px-4 py-2 text-red-500 hover:bg-[#3a3a3a] transition-colors"
           >
-            Delete smart playlist
+            {{ $t('views.smartPlaylistDetail.delete') }}
           </button>
         </div>
       </div>
@@ -217,15 +217,12 @@ onUnmounted(() => window.removeEventListener('click', closeMenu));
       <SongList v-if="loading || songs.length > 0" :songs="songs" :loading="loading" />
       <div v-else class="py-16 px-6 text-center text-gray-500">
         <div class="text-4xl mb-3 opacity-20">⚡</div>
-        <p class="text-sm font-medium text-white/80">No songs match these rules yet.</p>
-        <p class="text-xs text-gray-500 mt-1 max-w-sm mx-auto">
-          Loosen the rules or keep listening — the playlist fills in automatically.
-        </p>
+        <p class="text-sm font-medium text-white/80">{{ $t('views.smartPlaylistDetail.empty') }}</p>
         <button
           @click="edit"
           class="mt-4 bg-[#282828] hover:bg-[#333] text-white text-xs font-semibold px-4 py-2 rounded-lg border border-[#3a3a3a] transition"
         >
-          Edit Rules
+          {{ $t('views.smartPlaylistDetail.editRules') }}
         </button>
       </div>
     </div>

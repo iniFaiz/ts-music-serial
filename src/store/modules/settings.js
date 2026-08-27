@@ -1,7 +1,9 @@
 import { invokeCommand as invoke } from '../../generated/ipc';
 import { EQ_PRESETS, EQ_MIN_DB, EQ_MAX_DB, matchPreset } from '../../equalizer';
+import { getInitialLocale, setLanguage as setI18nLanguage } from '../../i18n';
 
 export const createSettingsState = () => ({
+  language: getInitialLocale(),
   outputDevice: null,
   normalizationEnabled: false,
   normalizationPreampDb: 0,
@@ -197,6 +199,13 @@ export function createSettingsActions() {
       let v = Math.round((Number(ms) || 0) / 50) * 50;
       v = Math.max(-3000, Math.min(3000, v));
       this.lyricsOffsetMs = v;
+      this.persistState();
+    },
+
+    setLanguage(lang) {
+      if (!['en', 'id'].includes(lang)) return;
+      this.language = lang;
+      setI18nLanguage(lang);
       this.persistState();
     },
   };

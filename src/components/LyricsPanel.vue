@@ -148,8 +148,12 @@ function seekToLine(line) {
             v-for="(line, i) in panelLines"
             :key="i"
             :data-line="i"
+            role="button"
+            tabindex="0"
             @click="seekToLine(line)"
-            class="lp-line cursor-pointer"
+            @keydown.enter="seekToLine(line)"
+            @keydown.space.prevent="seekToLine(line)"
+            class="lp-line cursor-pointer focus:outline-none focus-visible:underline"
             :class="[
               i === activeIdx ? 'lp-active' : 'lp-dim',
               line.isGap ? 'lp-line-gap' : '',
@@ -224,12 +228,12 @@ function seekToLine(line) {
               d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"
             />
           </svg>
-          <p class="text-xs text-gray-600">Lyrics not found</p>
+          <p class="text-xs text-gray-600">{{ $t('lyricsPanel.noLyrics') }}</p>
           <button
             @click="fetchLyrics(true)"
             class="text-[11px] text-gray-500 hover:text-white transition-colors"
           >
-            Try again
+            {{ $t('common.retry') }}
           </button>
         </div>
       </div>

@@ -1,24 +1,40 @@
 <template>
   <div class="p-6 max-w-2xl mx-auto pb-16">
-    <h1 class="text-2xl font-bold text-white mb-6">Settings</h1>
+    <h1 class="text-2xl font-bold text-white mb-6">{{ $t('settings.title') }}</h1>
+
+    <!-- Language -->
+    <Section
+      :title="$t('settings.language.title')"
+      :description="$t('settings.language.description')"
+    >
+      <SelectInt
+        :modelValue="store.language"
+        @update:modelValue="(v) => store.setLanguage(v)"
+        :label="$t('settings.language.label')"
+        :options="[
+          { value: 'en', label: $t('settings.language.en') },
+          { value: 'id', label: $t('settings.language.id') },
+        ]"
+      />
+    </Section>
 
     <!-- Music Folders -->
     <Section
-      title="Music Folders"
-      description="Folders scanned for music. The library auto-updates when files change on disk."
+      :title="$t('settings.musicFolders.title')"
+      :description="$t('settings.musicFolders.description')"
     >
       <button
         @click="store.selectAndScan()"
         :disabled="store.loading"
         class="text-sm font-semibold text-[var(--accent-color)] hover:underline disabled:opacity-50"
       >
-        + Add new folder
+        {{ $t('settings.musicFolders.addFolder') }}
       </button>
 
       <div class="mt-4">
-        <div class="text-xs uppercase tracking-wider text-gray-500 mb-2">Added folders</div>
+        <div class="text-xs uppercase tracking-wider text-gray-500 mb-2">{{ $t('settings.musicFolders.addedFolders') }}</div>
         <div v-if="store.roots.length === 0" class="text-sm text-gray-500 py-2">
-          No folders added yet.
+          {{ $t('settings.musicFolders.noFolders') }}
         </div>
         <ul v-else class="space-y-1">
           <li
@@ -47,7 +63,7 @@
               @click="confirmRemoveRoot(root)"
               class="text-sm font-medium text-gray-500 hover:text-[var(--accent-color)] shrink-0"
             >
-              Remove
+              {{ $t('settings.musicFolders.remove') }}
             </button>
           </li>
         </ul>
@@ -59,14 +75,14 @@
           :disabled="store.loading || store.roots.length === 0"
           class="text-sm font-medium text-gray-300 hover:text-white disabled:opacity-40"
         >
-          Refresh
+          {{ $t('settings.musicFolders.refresh') }}
         </button>
         <button
           @click="store.reindexLibrary()"
           :disabled="store.loading || store.roots.length === 0"
           class="text-sm font-medium text-gray-300 hover:text-white disabled:opacity-40"
         >
-          Reindex
+          {{ $t('settings.musicFolders.reindex') }}
         </button>
         <span class="text-xs text-gray-500 truncate">{{ store.statusMessage }}</span>
       </div>
@@ -74,24 +90,22 @@
 
     <!-- Online metadata (strictly opt-in) -->
     <Section
-      title="Online Metadata"
-      description="Fill missing tags and album artwork from MusicBrainz and the Cover Art Archive. Existing values are never replaced."
+      :title="$t('settings.onlineMetadata.title')"
+      :description="$t('settings.onlineMetadata.description')"
     >
       <ToggleInt
         :modelValue="store.onlineMetadataEnabled"
         @update:modelValue="(v) => store.setOnlineMetadataEnabled(v)"
-        label="Import missing metadata online"
+        :label="$t('settings.onlineMetadata.label')"
       />
       <p class="text-xs text-gray-500 leading-relaxed">
-        Turning this on immediately checks your library. Tracks with metadata but no cover receive
-        only artwork; tracks with artwork but incomplete tags receive only the missing tags.
+        {{ $t('settings.onlineMetadata.hint') }}
       </p>
 
       <div class="mt-4 pt-4 border-t border-white/5">
         <div class="flex items-center justify-between gap-3">
           <p class="text-xs text-gray-500 leading-relaxed">
-            Acoustic fingerprint matching is built in. MusicBrainz completes matched metadata and
-            artwork.
+            {{ $t('settings.onlineMetadata.fingerprintHint') }}
           </p>
           <button
             v-if="store.onlineMetadataEnabled"
@@ -99,7 +113,7 @@
             :disabled="store.onlineMetadataRunning || store.scanCount === 0"
             class="px-3 py-2 bg-[#3a3a3a] hover:bg-[#444] disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium rounded-md transition-colors shrink-0"
           >
-            {{ store.onlineMetadataRunning ? 'Searching...' : 'Scan now' }}
+            {{ store.onlineMetadataRunning ? $t('settings.onlineMetadata.searching') : $t('settings.onlineMetadata.scanNow') }}
           </button>
         </div>
       </div>
@@ -129,9 +143,9 @@
     </Section>
 
     <!-- Audio Output -->
-    <Section title="Audio Output" description="Choose which device audio is played through.">
+    <Section :title="$t('settings.audioOutput.title')" :description="$t('settings.audioOutput.description')">
       <SelectInt
-        label="Output device"
+        :label="$t('settings.audioOutput.label')"
         :modelValue="store.wasapiExclusive ? '' : store.outputDevice || ''"
         :options="deviceOptions"
         :disabled="store.wasapiExclusive"
@@ -142,32 +156,28 @@
         :disabled="store.wasapiExclusive"
         class="text-xs font-medium text-gray-400 hover:text-white mt-1 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-gray-400"
       >
-        Refresh devices
+        {{ $t('settings.audioOutput.refresh') }}
       </button>
       <p v-if="store.wasapiExclusive" class="text-xs text-amber-500/80 mt-1">
-        Disabled while WASAPI Exclusive Mode is on.
+        {{ $t('settings.audioOutput.wasapiDisabledHint') }}
       </p>
 
       <div class="border-t border-white/5 pt-1 mt-3">
         <ToggleInt
           :modelValue="store.wasapiExclusive"
           @update:modelValue="(v) => store.setWasapiExclusive(v)"
-          label="WASAPI Exclusive Mode"
+          :label="$t('settings.audioOutput.wasapiExclusiveLabel')"
         />
         <p class="text-xs text-gray-500">
-          Sends audio straight to the device, bypassing the Windows mixer (no system resampling or
-          mixing) and matching the track's lossless bit depth. Other apps can't play sound while
-          it's active, and it falls back to shared mode if your device refuses exclusive access.
-          Output device selection and crossfade/gapless are disabled in this mode — it always uses
-          the system default device.
+          {{ $t('settings.audioOutput.wasapiExclusiveHint') }}
         </p>
       </div>
     </Section>
 
     <!-- Playback -->
-    <Section title="Playback">
+    <Section :title="$t('settings.playback.title')">
       <SelectInt
-        label="Track transition"
+        :label="$t('settings.playback.transitionLabel')"
         :modelValue="store.wasapiExclusive ? 'off' : store.transitionMode"
         :options="transitionOptions"
         :disabled="store.wasapiExclusive"
@@ -175,7 +185,7 @@
       />
       <SliderInt
         v-if="store.transitionMode === 'crossfade'"
-        label="Crossfade duration"
+        :label="$t('settings.playback.crossfadeDuration')"
         :modelValue="store.crossfadeSecs"
         :min="1"
         :max="12"
@@ -186,11 +196,10 @@
       />
       <p class="text-xs text-gray-500 -mt-1 mb-2">
         <span v-if="store.wasapiExclusive" class="text-amber-500/80">
-          Disabled while WASAPI Exclusive Mode is on.
+          {{ $t('settings.audioOutput.wasapiDisabledHint') }}
         </span>
         <span v-else>
-          Gapless pre-decodes the next track for seamless transitions. Crossfade overlaps the end of
-          one track with the start of the next.
+          {{ $t('settings.playback.crossfadeHint') }}
         </span>
       </p>
 
@@ -198,11 +207,11 @@
         <ToggleInt
           :modelValue="store.normalizationEnabled"
           @update:modelValue="(v) => store.setNormalizationEnabled(v)"
-          label="Volume normalization (Sound Check)"
+          :label="$t('settings.playback.normalizationLabel')"
         />
         <SliderInt
           v-if="store.normalizationEnabled"
-          label="Pre-amp"
+          :label="$t('settings.playback.preampLabel')"
           :modelValue="store.normalizationPreampDb"
           :min="-12"
           :max="12"
@@ -211,8 +220,7 @@
           @update:modelValue="(v) => store.setNormalizationPreamp(v)"
         />
         <p class="text-xs text-gray-500">
-          Levels loudness across tracks using ReplayGain tags, falling back to an automatic loudness
-          analysis (computed once per track in the background).
+          {{ $t('settings.playback.normalizationHint') }}
         </p>
       </div>
 
@@ -220,10 +228,10 @@
         <ToggleInt
           :modelValue="store.visualizerEnabled"
           @update:modelValue="(v) => store.setVisualizerEnabled(v)"
-          label="Audio visualizer"
+          :label="$t('settings.playback.visualizerLabel')"
         />
         <p class="text-xs text-gray-500">
-          Real-time spectrum next to the player controls. Disable if you notice high CPU usage.
+          {{ $t('settings.playback.visualizerHint') }}
         </p>
       </div>
 
@@ -231,72 +239,73 @@
         <ToggleInt
           :modelValue="store.waveformEnabled"
           @update:modelValue="(v) => store.setWaveformEnabled(v)"
-          label="Waveform seek bar"
+          :label="$t('settings.playback.waveformLabel')"
         />
         <p class="text-xs text-gray-500">
-          Replace the seek slider with the track's amplitude waveform. Each track is decoded once to
-          build it (cached afterwards), so the first play may take a moment.
+          {{ $t('settings.playback.waveformHint') }}
         </p>
       </div>
     </Section>
 
     <!-- Mini Player -->
     <Section
-      title="Mini Player"
-      description="A compact Apple-Music-style player with synced lyrics. Toggle it any time with Ctrl+Shift+M."
+      :title="$t('settings.miniPlayer.title')"
+      :description="$t('settings.miniPlayer.description')"
     >
       <ToggleInt
         :modelValue="store.miniAlwaysOnTop"
         @update:modelValue="(v) => store.setMiniAlwaysOnTop(v)"
-        label="Always on top"
+        :label="$t('settings.miniPlayer.alwaysOnTop')"
       />
       <p class="text-xs text-gray-500 -mt-1 mb-3">
-        Keeps the mini player floating above other windows while it's open.
+        {{ $t('settings.miniPlayer.alwaysOnTopHint') }}
       </p>
       <button
         @click="store.enterMiniPlayer()"
         :disabled="store.miniPlayerOpen"
         class="text-sm font-semibold text-[var(--accent-color)] hover:underline disabled:opacity-50"
       >
-        Open mini player (Ctrl+Shift+M)
+        {{ $t('settings.miniPlayer.openButton') }}
       </button>
     </Section>
 
     <!-- Equalizer -->
     <Section
-      title="Equalizer"
-      description="10-band graphic equalizer applied in real time. Boost or cut frequency bands, or pick a preset. Changes take effect instantly, even mid-track."
+      :title="$t('settings.equalizer.title')"
+      :description="$t('settings.equalizer.description')"
     >
       <EqualizerPanel />
     </Section>
 
     <!-- Lyrics -->
     <Section
-      title="Lyrics"
-      description="Choose your preferred lyrics provider. You can search from LRCLIB, local tags/files, NetEase, Musixmatch, or disable lyrics search entirely."
+      :title="$t('settings.lyrics.title')"
+      :description="$t('settings.lyrics.description')"
     >
       <SelectInt
-        label="Lyrics source"
+        :label="$t('settings.lyrics.sourceLabel')"
         :modelValue="store.lyricsSource"
         :options="lyricsOptions"
         @update:modelValue="(v) => store.setLyricsSource(v)"
       />
       <div v-if="store.lyricsSource === 'musixmatch'" class="mt-3">
-        <label class="text-sm text-gray-300 font-medium block mb-2">
-          Musixmatch user token (optional)
+        <label for="musixmatch-user-token" class="text-sm text-gray-300 font-medium block mb-2">
+          {{ $t('settings.lyrics.musixmatchToken') }}
           <span v-if="store.musixmatchConfigured" class="text-[var(--accent-color)] text-xs ml-1"
-            >✓ configured</span
+            >{{ $t('settings.lyrics.configured') }}</span
           >
         </label>
         <div class="flex gap-2">
           <input
+            id="musixmatch-user-token"
+            :aria-label="$t('settings.lyrics.musixmatchToken')"
             v-model="tokenInput"
             @keyup.enter="saveToken"
             type="password"
             :placeholder="
               store.musixmatchConfigured
-                ? '•••••••• (stored securely)'
-                : 'Paste your Musixmatch community token'
+                ? $t('settings.lyrics.tokenPlaceholderConfigured')
+                : $t('settings.lyrics.tokenPlaceholderEmpty')
             "
             class="flex-1 bg-[#2a2a2a] text-sm text-white rounded-md px-3 py-2 focus:outline-none focus:ring-1 focus:ring-[var(--accent-color)] placeholder-gray-600"
           />
@@ -304,7 +313,7 @@
             @click="saveToken"
             class="px-3 py-2 bg-[#3a3a3a] hover:bg-[#444] text-white text-sm rounded-md transition-colors shrink-0"
           >
-            Save
+            {{ $t('common.save') }}
           </button>
           <button
             v-if="store.musixmatchConfigured"
@@ -312,17 +321,17 @@
             class="px-3 py-2 text-gray-400 hover:text-white text-sm rounded-md transition-colors shrink-0"
             title="Remove token"
           >
-            Clear
+            {{ $t('common.clear') }}
           </button>
         </div>
         <p class="text-xs text-gray-500 mt-1">
-          Stored securely in your OS credential manager — never saved in the app database.
+          {{ $t('settings.lyrics.tokenSecurityHint') }}
         </p>
       </div>
 
       <div v-if="store.lyricsSource !== 'none'" class="border-t border-white/5 mt-3 pt-3">
         <SliderInt
-          label="Lyric timing offset"
+          :label="$t('settings.lyrics.offsetLabel')"
           :modelValue="store.lyricsOffsetMs"
           :min="-3000"
           :max="3000"
@@ -331,54 +340,49 @@
           @update:modelValue="(v) => store.setLyricsOffset(v)"
         />
         <p class="text-xs text-gray-500 mt-1">
-          Nudge every lyric earlier (positive) or later (negative) if the timing is consistently
-          off. 0 = no change.
+          {{ $t('settings.lyrics.offsetHint') }}
         </p>
       </div>
     </Section>
 
     <!-- Discord Rich Presence -->
     <Section
-      title="Discord Rich Presence"
-      description="Show the track you're playing as your Discord status."
+      :title="$t('settings.discord.title')"
+      :description="$t('settings.discord.description')"
     >
       <ToggleInt
         :modelValue="store.discordEnabled"
         @update:modelValue="(v) => store.setDiscordEnabled(v)"
-        label="Enable Discord Rich Presence"
+        :label="$t('settings.discord.label')"
       />
       <p class="text-xs text-gray-500 mt-2 leading-relaxed">
-        Shows the artist and track you're listening to on your Discord profile, with the album cover
-        as artwork. Pausing hides the status. Requires the Discord desktop app to be running.
+        {{ $t('settings.discord.hint') }}
       </p>
     </Section>
 
     <!-- System Tray -->
-    <Section title="System Tray" description="Keep music playing when the window is closed.">
+    <Section :title="$t('settings.systemTray.title')" :description="$t('settings.systemTray.description')">
       <ToggleInt
         :modelValue="store.closeToTray"
         @update:modelValue="(v) => store.setCloseToTray(v)"
-        label="Close to tray"
+        :label="$t('settings.systemTray.label')"
       />
       <p class="text-xs text-gray-500 mt-2 leading-relaxed">
-        While enabled, a tray icon appears and closing the window hides ts-music to the system tray
-        instead of quitting — playback keeps running. Click the tray icon to bring the window back,
-        or use its menu to control playback and quit.
+        {{ $t('settings.systemTray.hint') }}
       </p>
     </Section>
 
     <!-- Signed application updater -->
     <Section
-      title="Software Update"
+      :title="$t('settings.updater.title')"
       :description="
         updaterStatus
-          ? `Installed version ${updaterStatus.currentVersion}`
-          : 'Check for signed TS Music releases.'
+          ? $t('settings.updater.installedVersion', { version: updaterStatus.currentVersion })
+          : $t('settings.updater.checkReleases')
       "
     >
       <p v-if="updaterStatus && !updaterStatus.configured" class="text-xs text-gray-500">
-        Updates are disabled in this development build. Official release builds embed the
-        verification key and only accept signed packages.
+        {{ $t('settings.updater.devBuildHint') }}
       </p>
 
       <template v-else>
@@ -386,14 +390,14 @@
           <div class="min-w-0">
             <h3 class="text-white font-medium text-sm">
               {{
-                updateInfo ? `Version ${updateInfo.version} is available` : 'Signed release channel'
+                updateInfo ? $t('settings.updater.versionAvailable', { version: updateInfo.version }) : $t('settings.updater.signedChannel')
               }}
             </h3>
             <p class="text-xs text-gray-500 mt-1">
               {{
                 updateInfo
-                  ? `Available to ${updateInfo.rolloutPercentage}% of installations.`
-                  : updateMessage || 'Updates are verified by Rust before installation.'
+                  ? $t('settings.updater.rolloutHint', { percent: updateInfo.rolloutPercentage })
+                  : updateMessage || $t('settings.updater.verifiedHint')
               }}
             </p>
           </div>
@@ -403,7 +407,7 @@
             :disabled="checkingUpdate || installingUpdate || !updaterStatus"
             class="px-4 py-2 bg-[#3a3a3a] hover:bg-[#444] disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-md transition-colors text-sm font-medium shrink-0"
           >
-            {{ checkingUpdate ? 'Checking...' : 'Check for Updates' }}
+            {{ checkingUpdate ? $t('settings.updater.checking') : $t('settings.updater.checkButton') }}
           </button>
           <button
             v-else
@@ -411,7 +415,7 @@
             :disabled="installingUpdate"
             class="px-4 py-2 bg-[var(--accent-color)] hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-md transition-colors text-sm font-medium shrink-0"
           >
-            {{ installingUpdate ? 'Installing...' : 'Install and Restart' }}
+            {{ installingUpdate ? $t('settings.updater.installing') : $t('settings.updater.installButton') }}
           </button>
         </div>
 
@@ -435,10 +439,10 @@
           <p class="text-xs text-gray-500 mt-2">
             {{
               updateProgress.finished
-                ? 'Signature verified. Starting installer...'
+                ? $t('settings.updater.verifiedStarting')
                 : updateProgress.total
                   ? `${formatBytes(updateProgress.downloaded)} / ${formatBytes(updateProgress.total)}`
-                  : 'Downloading signed update...'
+                  : $t('settings.updater.downloading')
             }}
           </p>
         </div>
@@ -454,7 +458,7 @@
     </Section>
 
     <!-- Keyboard Shortcuts -->
-    <Section title="Keyboard Shortcuts" description="Control playback from anywhere in the app.">
+    <Section :title="$t('settings.shortcuts.title')" :description="$t('settings.shortcuts.description')">
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-1.5">
         <div
           v-for="(s, i) in shortcuts"
@@ -480,22 +484,21 @@
     </Section>
 
     <!-- Performance -->
-    <Section title="Performance">
+    <Section :title="$t('settings.performance.title')">
       <ToggleInt
         :modelValue="store.useParallelism"
         @update:modelValue="(v) => store.setParallelism(v)"
-        label="Use parallel processing (faster scans)"
+        :label="$t('settings.performance.parallelismLabel')"
       />
       <p class="text-xs text-gray-500">
-        Uses multiple CPU threads to scan and parse music files. Disable if you experience
-        instability during scans.
+        {{ $t('settings.performance.parallelismHint') }}
       </p>
     </Section>
 
     <!-- Sleep timer -->
     <Section
-      title="Sleep Timer"
-      description="Automatically pause playback after a set time, at the end of the current track, or at the end of the queue."
+      :title="$t('settings.sleepTimer.title')"
+      :description="$t('settings.sleepTimer.description')"
     >
       <div class="flex flex-wrap gap-2">
         <button
@@ -519,14 +522,15 @@
           type="number"
           min="1"
           max="1440"
-          placeholder="Custom minutes"
+          :aria-label="$t('settings.sleepTimer.customPlaceholder')"
+          :placeholder="$t('settings.sleepTimer.customPlaceholder')"
           class="w-40 bg-[#2a2a2a] text-sm text-white rounded-md px-3 py-2 focus:outline-none focus:ring-1 focus:ring-[var(--accent-color)] placeholder-gray-600"
         />
         <button
           @click="setCustom"
           class="px-3 py-2 bg-[#3a3a3a] hover:bg-[#444] text-white text-sm rounded-md transition-colors shrink-0"
         >
-          Set
+          {{ $t('settings.sleepTimer.setButton') }}
         </button>
       </div>
       <p v-if="sleepStatus" class="text-xs text-[var(--accent-color)] mt-3 flex items-center gap-2">
@@ -535,37 +539,37 @@
           @click="store.setSleepTimer('off')"
           class="text-gray-400 hover:text-white underline underline-offset-2"
         >
-          Cancel
+          {{ $t('settings.sleepTimer.cancel') }}
         </button>
       </p>
     </Section>
 
     <!-- Library -->
     <Section
-      title="Library"
-      description="Manage your music library database, playlists, backups, and settings."
+      :title="$t('settings.library.title')"
+      :description="$t('settings.library.description')"
     >
       <!-- Import playlist -->
       <div class="flex items-center justify-between gap-4 mb-5">
         <div>
-          <h3 class="text-white font-medium text-sm">Import playlist</h3>
-          <p class="text-xs text-gray-500">Load an .m3u / .m3u8 file into a new playlist.</p>
+          <h3 class="text-white font-medium text-sm">{{ $t('settings.library.importPlaylist') }}</h3>
+          <p class="text-xs text-gray-500">{{ $t('settings.library.importPlaylistDesc') }}</p>
         </div>
         <button
           @click="importM3u"
           :disabled="store.loading"
           class="px-4 py-2 bg-[#3a3a3a] hover:bg-[#444] disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-md transition-colors text-sm font-medium shrink-0"
         >
-          Import M3U
+          {{ $t('settings.library.importM3u') }}
         </button>
       </div>
 
       <!-- Export Backup -->
       <div class="flex items-center justify-between gap-4 mb-5 border-t border-white/5 pt-5">
         <div>
-          <h3 class="text-white font-medium text-sm">Export Full Backup</h3>
+          <h3 class="text-white font-medium text-sm">{{ $t('settings.library.exportBackup') }}</h3>
           <p class="text-xs text-gray-500">
-            Export a full copy of your library database and settings for moving to another PC.
+            {{ $t('settings.library.exportBackupDesc') }}
           </p>
         </div>
         <button
@@ -573,16 +577,16 @@
           :disabled="store.loading"
           class="px-4 py-2 bg-[#3a3a3a] hover:bg-[#444] disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-md transition-colors text-sm font-medium shrink-0"
         >
-          Export Backup
+          {{ $t('settings.library.exportBackupButton') }}
         </button>
       </div>
 
       <!-- Import Backup -->
       <div class="flex items-center justify-between gap-4 mb-5 border-t border-white/5 pt-5">
         <div>
-          <h3 class="text-white font-medium text-sm">Import Backup</h3>
+          <h3 class="text-white font-medium text-sm">{{ $t('settings.library.importBackup') }}</h3>
           <p class="text-xs text-gray-500">
-            Restore library database and settings from a previously exported backup file.
+            {{ $t('settings.library.importBackupDesc') }}
           </p>
         </div>
         <button
@@ -590,17 +594,16 @@
           :disabled="store.loading"
           class="px-4 py-2 bg-[#3a3a3a] hover:bg-[#444] disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-md transition-colors text-sm font-medium shrink-0"
         >
-          Import Backup
+          {{ $t('settings.library.importBackupButton') }}
         </button>
       </div>
 
       <!-- Native generated caches -->
       <div class="flex items-center justify-between gap-4 mb-5 border-t border-white/5 pt-5">
         <div>
-          <h3 class="text-white font-medium text-sm">Generated cache</h3>
+          <h3 class="text-white font-medium text-sm">{{ $t('settings.library.generatedCache') }}</h3>
           <p class="text-xs text-gray-500">
-            Clear cached covers, waveforms, lyrics and loudness analysis. They are rebuilt on
-            demand.
+            {{ $t('settings.library.generatedCacheDesc') }}
           </p>
         </div>
         <button
@@ -608,22 +611,22 @@
           :disabled="store.loading"
           class="px-4 py-2 bg-[#3a3a3a] hover:bg-[#444] disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-md transition-colors text-sm font-medium shrink-0"
         >
-          Clear Cache
+          {{ $t('settings.library.clearCache') }}
         </button>
       </div>
 
       <!-- Reset library -->
       <div class="flex items-center justify-between gap-4 border-t border-white/5 pt-5">
         <div>
-          <h3 class="text-white font-medium text-sm">Reset library</h3>
-          <p class="text-xs text-gray-500">Clear all songs, albums, playlists and likes.</p>
+          <h3 class="text-white font-medium text-sm">{{ $t('settings.library.resetLibrary') }}</h3>
+          <p class="text-xs text-gray-500">{{ $t('settings.library.resetLibraryDesc') }}</p>
         </div>
         <button
           @click="confirmReset"
           :disabled="store.loading"
           class="px-4 py-2 rounded-md bg-red-600 hover:bg-red-500 disabled:opacity-40 disabled:cursor-not-allowed text-white transition-colors text-sm font-medium shrink-0"
         >
-          Reset Library
+          {{ $t('settings.library.resetLibraryButton') }}
         </button>
       </div>
 
@@ -643,16 +646,25 @@
     <Transition name="modal">
       <div
         v-if="store.showBackupReportModal"
-        class="fixed inset-0 z-[300] flex items-center justify-center bg-black/70 backdrop-blur-md"
-        @click.self="store.showBackupReportModal = false"
+        class="fixed inset-0 z-[300] flex items-center justify-center"
       >
+        <button
+          type="button"
+          class="fixed inset-0 bg-black/70 backdrop-blur-md cursor-default border-0 w-full h-full"
+          tabindex="-1"
+          aria-label="Close dialog"
+          @click="store.showBackupReportModal = false"
+        ></button>
         <div
-          class="modal-panel w-[500px] max-w-[92vw] bg-[#1c1c1e] rounded-2xl shadow-2xl border border-[#2c2c2e] p-6 flex flex-col max-h-[80vh]"
+          ref="backupReportModalRef"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="backup-report-title"
+          class="modal-panel relative z-10 w-[500px] max-w-[92vw] bg-[#1c1c1e] rounded-2xl shadow-2xl border border-[#2c2c2e] p-6 flex flex-col max-h-[80vh]"
         >
-          <h2 class="text-lg font-bold text-white mb-3">Backup Import Report</h2>
+          <h2 id="backup-report-title" class="text-lg font-bold text-white mb-3">{{ $t('settings.backupReport.title') }}</h2>
           <p class="text-sm text-gray-400 mb-4 leading-relaxed">
-            The database was imported, but the following songs could not be found on your disk. They
-            have been removed from your active library pages to keep your library clean:
+            {{ $t('settings.backupReport.description') }}
           </p>
 
           <!-- Scrollable list of missing tracks -->
@@ -685,7 +697,7 @@
               @click="store.showBackupReportModal = false"
               class="px-5 py-2 bg-[var(--accent-color)] hover:bg-red-500 text-white rounded-lg text-sm font-semibold transition shadow-lg"
             >
-              OK
+              {{ $t('settings.backupReport.ok') }}
             </button>
           </div>
         </div>
@@ -696,6 +708,7 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
+import { useI18n } from 'vue-i18n';
 import { listen } from '@tauri-apps/api/event';
 import { store } from '../store';
 import { invokeCommand as invoke } from '../generated/ipc';
@@ -706,6 +719,16 @@ import SliderInt from '../components/settings/SliderInt.vue';
 import EqualizerPanel from '../components/EqualizerPanel.vue';
 import CoverImage from '../components/CoverImage.vue';
 import AppCredit from '../components/settings/AppCredit.vue';
+import { useFocusTrap } from '../useFocusTrap';
+
+const { t } = useI18n();
+
+const backupReportModalRef = ref(null);
+useFocusTrap(backupReportModalRef, () => store.showBackupReportModal, {
+  onEscape: () => {
+    store.showBackupReportModal = false;
+  },
+});
 
 const devices = ref([]);
 const updaterStatus = ref(null);
@@ -761,52 +784,52 @@ async function installUpdate() {
 }
 
 const deviceOptions = computed(() => [
-  { value: '', label: 'System Default' },
+  { value: '', label: t('settings.audioOutput.defaultDevice') },
   ...devices.value.map((d) => ({
     value: d.name,
-    label: d.is_default ? `${d.name} (default)` : d.name,
+    label: d.is_default ? `${d.name} (${t('settings.audioOutput.defaultDevice')})` : d.name,
   })),
 ]);
 
-const transitionOptions = [
-  { value: 'off', label: 'Off' },
-  { value: 'gapless', label: 'Gapless' },
-  { value: 'crossfade', label: 'Crossfade' },
-];
+const transitionOptions = computed(() => [
+  { value: 'off', label: t('settings.playback.transitionOff') },
+  { value: 'gapless', label: t('settings.playback.transitionGapless') },
+  { value: 'crossfade', label: t('settings.playback.transitionCrossfade') },
+]);
 
 // Human-readable shortcut reference for the handler in src/useGlobalShortcuts.js
 // (handleKeydown). Kept in sync manually — update both when changing shortcuts.
-const shortcuts = [
-  { keys: ['Space', 'K'], label: 'Play / pause' },
-  { keys: ['Ctrl', '←'], label: 'Previous track' },
-  { keys: ['Ctrl', '→'], label: 'Next track' },
-  { keys: ['←'], label: 'Seek back 5s' },
-  { keys: ['→'], label: 'Seek forward 5s' },
-  { keys: ['Shift', '←'], label: 'Seek back 10s' },
-  { keys: ['Shift', '→'], label: 'Seek forward 10s' },
-  { keys: ['↑'], label: 'Volume up' },
-  { keys: ['↓'], label: 'Volume down' },
-  { keys: ['Shift', '↑'], label: 'Volume up (large step)' },
-  { keys: ['Shift', '↓'], label: 'Volume down (large step)' },
-  { keys: ['0 – 9'], label: 'Jump to 0–90%' },
-  { keys: ['Home'], label: 'Restart track' },
-  { keys: ['M'], label: 'Mute / unmute' },
-  { keys: ['S'], label: 'Shuffle on / off' },
-  { keys: ['R'], label: 'Repeat mode' },
-  { keys: ['L'], label: 'Like current track' },
-  { keys: ['Ctrl', 'K'], label: 'Command palette' },
-  { keys: ['Esc'], label: 'Close palette / mini / fullscreen' },
-  { keys: ['Ctrl', 'Shift', 'F'], label: 'Fullscreen player' },
-  { keys: ['Ctrl', 'Shift', 'M'], label: 'Mini player' },
-];
+const shortcuts = computed(() => [
+  { keys: ['Space', 'K'], label: t('settings.shortcuts.labels.playPause') },
+  { keys: ['Ctrl', '←'], label: t('settings.shortcuts.labels.prevTrack') },
+  { keys: ['Ctrl', '→'], label: t('settings.shortcuts.labels.nextTrack') },
+  { keys: ['←'], label: t('settings.shortcuts.labels.seekBackward') },
+  { keys: ['→'], label: t('settings.shortcuts.labels.seekForward') },
+  { keys: ['Shift', '←'], label: `${t('settings.shortcuts.labels.seekBackward')} (10s)` },
+  { keys: ['Shift', '→'], label: `${t('settings.shortcuts.labels.seekForward')} (10s)` },
+  { keys: ['↑'], label: t('settings.shortcuts.labels.volumeUp') },
+  { keys: ['↓'], label: t('settings.shortcuts.labels.volumeDown') },
+  { keys: ['Shift', '↑'], label: `${t('settings.shortcuts.labels.volumeUp')} (x2)` },
+  { keys: ['Shift', '↓'], label: `${t('settings.shortcuts.labels.volumeDown')} (x2)` },
+  { keys: ['0 – 9'], label: 'Jump 0–90%' },
+  { keys: ['Home'], label: 'Restart' },
+  { keys: ['M'], label: t('settings.shortcuts.labels.toggleMute') },
+  { keys: ['S'], label: t('common.shuffle') },
+  { keys: ['R'], label: t('common.repeat') },
+  { keys: ['L'], label: t('player.addToFavorites') },
+  { keys: ['Ctrl', 'K'], label: t('settings.shortcuts.labels.commandPalette') },
+  { keys: ['Esc'], label: t('common.close') },
+  { keys: ['Ctrl', 'Shift', 'F'], label: t('player.fullScreen') },
+  { keys: ['Ctrl', 'Shift', 'M'], label: t('settings.shortcuts.labels.miniPlayer') },
+]);
 
-const lyricsOptions = [
-  { value: 'netease', label: 'NetEase (Default)' },
-  { value: 'lrclib', label: 'LRCLIB' },
-  { value: 'local', label: 'Local (Embedded tag / .lrc file)' },
-  { value: 'musixmatch', label: 'Musixmatch' },
-  { value: 'none', label: 'Off / Disabled' },
-];
+const lyricsOptions = computed(() => [
+  { value: 'netease', label: t('settings.lyrics.sources.netease') },
+  { value: 'lrclib', label: t('settings.lyrics.sources.all') },
+  { value: 'local', label: t('settings.lyrics.sources.local') },
+  { value: 'musixmatch', label: t('settings.lyrics.sources.musixmatch') },
+  { value: 'none', label: t('settings.lyrics.sources.none') },
+]);
 
 // Musixmatch token is write-only from the UI (kept in the OS credential store).
 const tokenInput = ref('');
@@ -815,15 +838,15 @@ const saveToken = () => {
   tokenInput.value = '';
 };
 
-const sleepQuick = [
-  { value: 'off', label: 'Off' },
-  { value: 'end', label: 'End of track' },
-  { value: 'end-queue', label: 'End of queue' },
-  { value: 15, label: '15m' },
-  { value: 30, label: '30m' },
-  { value: 45, label: '45m' },
-  { value: 60, label: '1h' },
-];
+const sleepQuick = computed(() => [
+  { value: 'off', label: t('settings.sleepTimer.off') },
+  { value: 'end', label: t('settings.sleepTimer.endOfTrack') },
+  { value: 'end-queue', label: t('settings.sleepTimer.endOfQueue') },
+  { value: 15, label: t('settings.sleepTimer.min15') },
+  { value: 30, label: t('settings.sleepTimer.min30') },
+  { value: 45, label: t('settings.sleepTimer.min45') },
+  { value: 60, label: t('settings.sleepTimer.min60') },
+]);
 const customMin = ref(null);
 const setCustom = () => {
   const v = Number(customMin.value);
@@ -864,10 +887,10 @@ function onDeviceChange(value) {
 
 function confirmRemoveRoot(root) {
   store.showConfirm({
-    title: 'Remove Folder',
-    message: `Remove "${root}" and its tracks from the library?`,
-    confirmText: 'Remove',
-    cancelText: 'Cancel',
+    title: t('settings.library.confirmRemoveTitle'),
+    message: t('settings.library.confirmRemoveMessage', { root }),
+    confirmText: t('common.remove'),
+    cancelText: t('common.cancel'),
     onConfirm: () => {
       store.removeRoot(root);
     },
@@ -876,10 +899,10 @@ function confirmRemoveRoot(root) {
 
 const confirmReset = () => {
   store.showConfirm({
-    title: 'Reset Library',
-    message: 'Are you sure you want to delete all library data? This cannot be undone.',
-    confirmText: 'Reset Library',
-    cancelText: 'Cancel',
+    title: t('settings.library.confirmResetTitle'),
+    message: t('settings.library.confirmResetMessage'),
+    confirmText: t('settings.library.resetLibraryButton'),
+    cancelText: t('common.cancel'),
     onConfirm: () => {
       store.resetLibrary();
     },

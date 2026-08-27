@@ -76,7 +76,7 @@ const shuffleArtist = async () => {
               >
                 <polygon points="5 3 19 12 5 21 5 3"></polygon>
               </svg>
-              Play
+              {{ $t('common.play') }}
             </button>
 
             <button
@@ -96,7 +96,7 @@ const shuffleArtist = async () => {
               >
                 <path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5" />
               </svg>
-              Shuffle
+              {{ $t('common.shuffle') }}
             </button>
           </div>
         </div>
@@ -104,7 +104,7 @@ const shuffleArtist = async () => {
     </div>
 
     <div class="px-2 py-6">
-      <h2 class="px-6 text-xl font-bold text-white mb-4">Popular Songs</h2>
+      <h2 class="px-6 text-xl font-bold text-white mb-4">{{ $t('views.artistDetail.topTracks') }}</h2>
       <SongList :songs="artistSongs" :loading="loading" :active-artist="artistName" />
     </div>
   </div>

@@ -326,15 +326,16 @@ watch(recentItems, (newItems, oldItems) => {
           <circle cx="18" cy="16" r="3" />
         </svg>
       </div>
-      <h2 class="text-xl font-bold text-white mb-1">Your library is empty</h2>
+      <h2 class="text-xl font-bold text-white mb-1">{{ $t('views.home.emptyTitle') }}</h2>
       <p class="text-sm text-gray-500 mb-6 max-w-sm mx-auto">
-        Add a music folder to start building smart playlists and listening insights.
+        {{ $t('views.home.emptySubtitle') }}
       </p>
       <button
+        type="button"
         @click="store.selectAndScan()"
         class="bg-[var(--accent-color)] hover:bg-red-500 text-white font-semibold px-6 py-2.5 rounded-lg shadow-lg transition"
       >
-        Add Music Folder
+        {{ $t('views.home.addMusicFolder') }}
       </button>
     </div>
 
@@ -343,7 +344,7 @@ watch(recentItems, (newItems, oldItems) => {
       <Shelf
         v-if="recentItems.length"
         ref="recentShelfRef"
-        title="Recently Played"
+        :title="$t('views.home.recentlyPlayed')"
         to="/collection/recently-played"
       >
         <TransitionGroup name="recent-card" tag="div" class="flex gap-5 relative py-1">
@@ -352,10 +353,15 @@ watch(recentItems, (newItems, oldItems) => {
             :key="
               item.kind + '-' + (item.id || item.key || item.name || (item.song && item.song.path))
             "
-            class="rec-card shrink-0 w-40 group cursor-pointer relative"
+            role="button"
+            tabindex="0"
+            :aria-label="item.title + (item.sub ? ' - ' + item.sub : '')"
+            class="rec-card shrink-0 w-40 group cursor-pointer relative focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-color)] rounded-xl"
             :data-cover-key="item.kind === 'album' ? item.name : item.id || item.key || undefined"
             :data-artist-key="item.kind === 'song' ? item.sub : undefined"
             @click="onRecentClick(item, $event)"
+            @keydown.enter="onRecentClick(item, $event)"
+            @keydown.space.prevent="onRecentClick(item, $event)"
           >
             <div
               class="relative w-40 h-40 mb-2.5 shadow-lg group-hover:scale-[1.03] transition-transform duration-200 ease-out"
@@ -430,8 +436,10 @@ watch(recentItems, (newItems, oldItems) => {
                 class="absolute inset-0 bg-black/25 opacity-0 group-hover:opacity-100 transition-opacity flex items-end justify-end p-2.5 z-10"
                 :class="item.kind === 'station' ? 'rounded-full' : 'rounded-xl'"
               >
-                <div
+                <button
+                  type="button"
                   @click.stop="onRecentPlay(item)"
+                  aria-label="Play"
                   class="bg-[var(--accent-color)] text-white rounded-full p-2.5 shadow-xl translate-y-2 opacity-0 group-hover:translate-y-0 group-hover:opacity-100 transition-all duration-300 hover:scale-110 hover:bg-red-500"
                 >
                   <svg
@@ -441,10 +449,11 @@ watch(recentItems, (newItems, oldItems) => {
                     viewBox="0 0 24 24"
                     fill="currentColor"
                     stroke="none"
+                    aria-hidden="true"
                   >
                     <polygon points="5 3 19 12 5 21 5 3" />
                   </svg>
-                </div>
+                </button>
               </div>
             </div>
             <div
@@ -460,13 +469,14 @@ watch(recentItems, (newItems, oldItems) => {
               class="text-[12px] text-[var(--text-secondary)] truncate"
               :class="item.kind === 'station' ? 'text-center' : ''"
             >
-              <span
+              <button
                 v-if="item.kind === 'song'"
+                type="button"
                 @click.stop="goToArtist(item.sub, $event)"
-                class="hover:text-[var(--accent-color)] hover:underline cursor-pointer transition-colors"
+                class="hover:text-[var(--accent-color)] hover:underline cursor-pointer transition-colors bg-transparent border-0 p-0 text-left text-[12px] text-[var(--text-secondary)] truncate max-w-full block"
               >
                 {{ item.sub }}
-              </span>
+              </button>
               <span v-else>{{ item.sub }}</span>
             </div>
           </div>
@@ -474,27 +484,34 @@ watch(recentItems, (newItems, oldItems) => {
       </Shelf>
 
       <!-- Top Picks (big gradient cards) -->
-      <Shelf v-if="topPicks.length" title="Top Picks for You">
-        <button
+      <Shelf v-if="topPicks.length" :title="$t('views.home.topPicks')">
+        <div
           v-for="c in topPicks"
           :key="c.key"
           :data-cover-key="c.key"
+          role="button"
+          tabindex="0"
+          :aria-label="c.title"
           @click="openWithMorph('/collection/' + c.key, $event)"
-          class="shrink-0 w-64 text-left group"
+          @keydown.enter="openWithMorph('/collection/' + c.key, $event)"
+          @keydown.space.prevent="openWithMorph('/collection/' + c.key, $event)"
+          class="shrink-0 w-64 text-left group cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-color)] rounded-2xl"
         >
           <div
             class="w-64 aspect-[4/5] rounded-2xl overflow-hidden shadow-xl group-hover:scale-[1.02] transition-transform duration-200 ease-out relative"
           >
             <SmartCover
               :title="c.title"
-              top-label="Made for You"
+              :top-label="$t('views.home.madeForYou')"
               :subtitle="c.subtitle"
               :color="c.color"
               :icon="c.icon"
               className="w-full h-full cover-image"
             />
-            <div
+            <button
+              type="button"
               @click.stop="playCollection(c.key)"
+              aria-label="Play collection"
               class="absolute bottom-3 right-3 bg-white text-black rounded-full p-3 shadow-xl opacity-0 translate-y-2 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-300 hover:scale-110 z-10"
             >
               <svg
@@ -504,33 +521,39 @@ watch(recentItems, (newItems, oldItems) => {
                 viewBox="0 0 24 24"
                 fill="currentColor"
                 stroke="none"
+                aria-hidden="true"
               >
                 <polygon points="5 3 19 12 5 21 5 3" />
               </svg>
-            </div>
+            </button>
           </div>
-        </button>
+        </div>
       </Shelf>
 
       <!-- On Repeat -->
-      <SongScroller title="On Repeat" :songs="onRepeat" to="/collection/on-repeat" />
+      <SongScroller :title="$t('views.home.onRepeat')" :songs="onRepeat" to="/collection/on-repeat" />
 
       <!-- Most Played (ranked) -->
       <SongScroller
-        title="Most Played"
+        :title="$t('views.home.mostPlayed')"
         :songs="mostPlayed"
         to="/collection/most-played"
         show-rank
       />
 
       <!-- Smart Playlists -->
-      <Shelf title="Your Smart Playlists">
-        <button
+      <Shelf :title="$t('views.home.smartPlaylists')">
+        <div
           v-for="sp in smartPlaylists"
           :key="sp.id"
           :data-cover-key="sp.id"
+          role="button"
+          tabindex="0"
+          :aria-label="sp.name"
           @click="openWithMorph('/smart/' + sp.id, $event)"
-          class="shrink-0 w-48 text-left group"
+          @keydown.enter="openWithMorph('/smart/' + sp.id, $event)"
+          @keydown.space.prevent="openWithMorph('/smart/' + sp.id, $event)"
+          class="shrink-0 w-48 text-left group cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-color)] rounded-2xl"
         >
           <div
             class="w-48 h-48 rounded-2xl overflow-hidden shadow-xl group-hover:scale-[1.03] transition-transform duration-200 ease-out relative mb-2.5"
@@ -541,8 +564,10 @@ watch(recentItems, (newItems, oldItems) => {
               :size="192"
               className="w-full h-full cover-image"
             />
-            <div
+            <button
+              type="button"
               @click.stop="store.playSmartPlaylist(sp.id)"
+              aria-label="Play smart playlist"
               class="absolute bottom-2.5 right-2.5 bg-white text-black rounded-full p-2.5 shadow-xl opacity-0 translate-y-2 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-300 hover:scale-110 z-10"
             >
               <svg
@@ -552,10 +577,11 @@ watch(recentItems, (newItems, oldItems) => {
                 viewBox="0 0 24 24"
                 fill="currentColor"
                 stroke="none"
+                aria-hidden="true"
               >
                 <polygon points="5 3 19 12 5 21 5 3" />
               </svg>
-            </div>
+            </button>
           </div>
           <div class="text-[13px] font-semibold text-white truncate flex items-center gap-1.5">
             <span class="truncate">{{ sp.name }}</span>
@@ -567,18 +593,20 @@ watch(recentItems, (newItems, oldItems) => {
               fill="currentColor"
               stroke="none"
               class="text-[var(--accent-color)] shrink-0"
+              aria-hidden="true"
             >
               <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
             </svg>
           </div>
-          <div class="text-[12px] text-[var(--text-secondary)]">{{ smartCount(sp) }} songs</div>
-        </button>
+          <div class="text-[12px] text-[var(--text-secondary)]">{{ $t('views.playlists.songsCount', { count: smartCount(sp) }) }}</div>
+        </div>
 
         <!-- Quick-create templates (only when the user has none yet) -->
         <template v-if="smartPlaylists.length === 0">
           <button
             v-for="t in SMART_TEMPLATES"
             :key="t.name"
+            type="button"
             @click="createFromTemplate(t)"
             class="shrink-0 w-48 text-left group"
           >
@@ -602,6 +630,7 @@ watch(recentItems, (newItems, oldItems) => {
                     stroke-width="3"
                     stroke-linecap="round"
                     stroke-linejoin="round"
+                    aria-hidden="true"
                   >
                     <line x1="12" y1="5" x2="12" y2="19" />
                     <line x1="5" y1="12" x2="19" y2="12" />
@@ -610,14 +639,19 @@ watch(recentItems, (newItems, oldItems) => {
               </div>
             </div>
             <div class="text-[13px] font-semibold text-white truncate">{{ t.name }}</div>
-            <div class="text-[12px] text-[var(--text-secondary)]">Tap to create</div>
+            <div class="text-[12px] text-[var(--text-secondary)]">{{ $t('views.home.tapToCreate') }}</div>
           </button>
         </template>
 
         <!-- New smart playlist card. self-start so its square top-aligns with the
              other cards' covers instead of centering against their taller
              (cover + label) height. -->
-        <button @click="store.openSmartModal('create')" class="shrink-0 w-48 group self-start">
+        <button
+          type="button"
+          @click="store.openSmartModal('create')"
+          :aria-label="$t('views.home.newSmartPlaylist')"
+          class="shrink-0 w-48 group self-start"
+        >
           <div
             class="w-48 h-48 rounded-2xl border-2 border-dashed border-white/15 group-hover:border-[var(--accent-color)] flex flex-col items-center justify-center gap-2 text-gray-500 group-hover:text-[var(--accent-color)] transition-colors mb-2.5"
           >
@@ -631,23 +665,24 @@ watch(recentItems, (newItems, oldItems) => {
               stroke-width="2"
               stroke-linecap="round"
               stroke-linejoin="round"
+              aria-hidden="true"
             >
               <line x1="12" y1="5" x2="12" y2="19" />
               <line x1="5" y1="12" x2="19" y2="12" />
             </svg>
-            <span class="text-xs font-semibold">New Smart Playlist</span>
+            <span class="text-xs font-semibold">{{ $t('views.home.newSmartPlaylist') }}</span>
           </div>
         </button>
       </Shelf>
 
       <!-- Recently Added -->
-      <SongScroller title="Recently Added" :songs="recentlyAdded" to="/collection/recently-added" />
+      <SongScroller :title="$t('views.home.recentlyAdded')" :songs="recentlyAdded" to="/collection/recently-added" />
 
       <!-- Stations for You -->
       <Shelf
         v-if="hasStations"
-        title="Stations for You"
-        subtitle="Endless mixes built from your library"
+        :title="$t('views.home.stationsForYou')"
+        :subtitle="$t('views.home.stationsSubtitle')"
       >
         <!-- Artist stations (circular) -->
         <button
@@ -680,7 +715,7 @@ watch(recentItems, (newItems, oldItems) => {
             </div>
           </div>
           <div class="text-[13px] font-semibold text-white truncate">{{ a.name }}</div>
-          <div class="text-[12px] text-[var(--text-secondary)]">Station</div>
+          <div class="text-[12px] text-[var(--text-secondary)]">{{ $t('views.home.station') }}</div>
         </button>
 
         <!-- Genre stations (gradient) -->
@@ -720,7 +755,7 @@ watch(recentItems, (newItems, oldItems) => {
             </div>
           </div>
           <div class="text-[13px] font-semibold text-white truncate">{{ g.name }}</div>
-          <div class="text-[12px] text-[var(--text-secondary)]">Genre Station</div>
+          <div class="text-[12px] text-[var(--text-secondary)]">{{ $t('views.home.station') }}</div>
         </button>
       </Shelf>
     </template>
