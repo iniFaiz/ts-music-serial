@@ -793,14 +793,14 @@ pub async fn import_online_metadata(
                     .flatten();
                 }
                 Ok(None) => {}
-                Err(error) => eprintln!("AcoustID lookup failed for {}: {error}", path.display()),
+                Err(error) => tracing::warn!("AcoustID lookup failed for {}: {error}", path.display()),
             }
         }
         if matched.is_none() {
             matched = match musicbrainz_search(client, &mut limiter, &info).await {
                 Ok(value) => value,
                 Err(error) => {
-                    eprintln!("MusicBrainz lookup failed for {}: {error}", path.display());
+                    tracing::warn!("MusicBrainz lookup failed for {}: {error}", path.display());
                     summary.failed += 1;
                     progress.failed = summary.failed;
                     progress.processed += 1;
@@ -845,11 +845,11 @@ pub async fn import_online_metadata(
                 }
                 Ok(Ok(None)) => {}
                 Ok(Err(error)) => {
-                    eprintln!("Online tag write failed for {}: {error}", path.display());
+                    tracing::warn!("Online tag write failed for {}: {error}", path.display());
                     summary.failed += 1;
                 }
                 Err(error) => {
-                    eprintln!("Online tag task failed for {}: {error}", path.display());
+                    tracing::warn!("Online tag task failed for {}: {error}", path.display());
                     summary.failed += 1;
                 }
             }

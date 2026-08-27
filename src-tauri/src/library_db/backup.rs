@@ -425,7 +425,7 @@ pub(crate) fn start_scheduled_maintenance(app: AppHandle) {
     std::thread::spawn(move || loop {
         if let Some(database) = app.try_state::<Db>() {
             if let Err(error) = run_scheduled_maintenance(&app, database.inner()) {
-                eprintln!("Scheduled database maintenance failed: {error}");
+                tracing::error!("Scheduled database maintenance failed: {error}");
             }
         }
         std::thread::sleep(MAINTENANCE_INTERVAL);

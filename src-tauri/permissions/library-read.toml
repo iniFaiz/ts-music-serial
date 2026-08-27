@@ -14,7 +14,6 @@ commands.allow = [
   "db_count",
   "db_roots",
   "db_tracks_page",
-  "db_search",
   "db_global_search",
   "db_tracks_by_paths",
   "db_track",

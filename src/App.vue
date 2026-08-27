@@ -1,10 +1,10 @@
 <script setup>
-import { defineAsyncComponent, reactive, ref, onMounted, onUnmounted, nextTick, watch } from 'vue';
+import { defineAsyncComponent, reactive, ref, onMounted, onUnmounted, watch } from 'vue';
 import { useRouter } from 'vue-router';
-import { getCurrentWebview } from '@tauri-apps/api/webview';
-import { listen } from '@tauri-apps/api/event';
 import { store } from './store';
 import { createGlobalShortcuts } from './useGlobalShortcuts';
+import { useGlobalListeners } from './useGlobalListeners';
+import { useScrollRestoration } from './useScrollRestoration';
 import PlayerControls from './components/PlayerControls.vue';
 import PlaylistCover from './components/PlaylistCover.vue';
 import TitleBar from './components/TitleBar.vue';
@@ -26,6 +26,7 @@ import { getCollection } from './collections';
 
 const router = useRouter();
 const globalShortcuts = createGlobalShortcuts(store);
+useGlobalListeners();
 const QueuePanel = defineAsyncComponent(() => import('./components/QueuePanel.vue'));
 const LyricsPanel = defineAsyncComponent(() => import('./components/LyricsPanel.vue'));
 const PlaylistCreateModal = defineAsyncComponent(
@@ -78,31 +79,11 @@ watch(
   }
 );
 
-// ---- Drag & drop folders/files onto the window ----
-let unlistenDrop = null;
-let unlistenDropGrant = null;
-// ---- Filesystem watcher → debounced library refresh ----
-let unlistenLibraryChanged = null;
-let unlistenExclusiveErr = null;
-let unlistenOpenFiles = null;
-let unlistenOnlineMetadata = null;
-let unlistenAudioDevices = null;
-let unlistenVinylPlayback = null;
-
 const scrollContainer = ref(null);
-// Per-route scroll restoration. Visits are unbounded within a session, so cap
-// both maps and evict the oldest route when full.
-const SCROLL_CACHE_LIMIT = 120;
-const scrollPositions = new Map();
-const horizontalScrollPositions = new Map();
 
-function rememberScrollPosition(map, key, value) {
-  map.set(key, value);
-  if (map.size > SCROLL_CACHE_LIMIT) {
-    map.delete(map.keys().next().value);
-  }
-}
-let restoreScrollOnBackTo = null;
+// Per-route vertical + horizontal shelf scroll restoration (extracted to
+// useScrollRestoration). Registers its own router guards.
+useScrollRestoration({ getContainer: () => scrollContainer.value });
 
 function firstTracksPage() {
   const params = {
@@ -136,37 +117,6 @@ watch(
   },
   { immediate: true }
 );
-
-router.beforeEach((to, from) => {
-  // On a history back navigation Vue Router has already moved the browser
-  // history entry, whose `forward` route is the page we are leaving. Keep this
-  // intent so detail pages can restore their previous reading position instead
-  // of being treated like a newly opened detail page.
-  const historyState = window.history.state;
-  const isHistoryBack =
-    historyState?.current === to.fullPath && historyState?.forward === from.fullPath;
-  restoreScrollOnBackTo = isHistoryBack ? to.fullPath : null;
-
-  if (scrollContainer.value) {
-    const container =
-      scrollContainer.value.querySelector('.overflow-auto') || scrollContainer.value;
-    rememberScrollPosition(scrollPositions, from.fullPath, container.scrollTop);
-
-    // Save horizontal scroll positions
-    const horizontalShelves = scrollContainer.value.querySelectorAll('.shelf-row');
-    const horizPos = [];
-    horizontalShelves.forEach((el) => {
-      const section = el.closest('section');
-      const titleEl = section ? section.querySelector('h2') : null;
-      const title = titleEl ? titleEl.textContent.trim() : '';
-      horizPos.push({
-        title,
-        scrollLeft: el.scrollLeft,
-      });
-    });
-    rememberScrollPosition(horizontalScrollPositions, from.fullPath, horizPos);
-  }
-});
 
 // A route can still be clicked before the background warm-up finishes. Wait for
 // that route's small local query before swapping the page, so users see the
@@ -221,55 +171,6 @@ router.beforeResolve(async (to) => {
   if (request) await request.catch(() => {});
 });
 
-router.afterEach((to) => {
-  const shouldRestoreScroll = restoreScrollOnBackTo === to.fullPath;
-  restoreScrollOnBackTo = null;
-
-  nextTick(() => {
-    if (scrollContainer.value) {
-      const container =
-        scrollContainer.value.querySelector('.overflow-auto') || scrollContainer.value;
-
-      // Detail pages should always start scrolled to the top
-      const isDetailPage = [
-        'AlbumDetail',
-        'ArtistDetail',
-        'PlaylistDetail',
-        'SmartPlaylistDetail',
-        'CollectionDetail',
-      ].includes(to.name);
-      const pos = isDetailPage && !shouldRestoreScroll ? 0 : scrollPositions.get(to.fullPath) || 0;
-
-      const originalBehavior = container.style.scrollBehavior;
-      container.style.scrollBehavior = 'auto';
-      container.scrollTop = pos;
-      container.style.scrollBehavior = originalBehavior;
-
-      // Restore horizontal scroll positions if not a detail page
-      if (!isDetailPage) {
-        const horizPos = horizontalScrollPositions.get(to.fullPath);
-        if (horizPos && horizPos.length > 0) {
-          nextTick(() => {
-            const horizontalShelves = scrollContainer.value.querySelectorAll('.shelf-row');
-            horizontalShelves.forEach((el, index) => {
-              const section = el.closest('section');
-              const titleEl = section ? section.querySelector('h2') : null;
-              const title = titleEl ? titleEl.textContent.trim() : '';
-              const match = horizPos.find((p) => p.title === title) || horizPos[index];
-              if (match) {
-                const orig = el.style.scrollBehavior;
-                el.style.scrollBehavior = 'auto';
-                el.scrollLeft = match.scrollLeft;
-                el.style.scrollBehavior = orig;
-              }
-            });
-          });
-        }
-      }
-    }
-  });
-});
-
 // Collapse the sidebar to an icon-only rail when the window gets too narrow.
 // Below this width the side rail collapses so player controls keep room on
 // medium windows.
@@ -314,102 +215,6 @@ onMounted(async () => {
   window.addEventListener('mouseup', handleMouseUp);
   window.addEventListener('mousedown', handleMouseDown);
   window.addEventListener('auxclick', handleAuxClick);
-
-  // Only the native window event can mint an indexing grant. The webview event
-  // is presentation-only and never forwards filesystem paths into IPC.
-  try {
-    unlistenDropGrant = await listen('library-drop-grant', (event) => {
-      const grantId = event.payload && event.payload.grantId;
-      if (grantId) store.addPaths(grantId);
-    });
-  } catch {
-    // drag-drop indexing is best-effort
-  }
-
-  // Drag & drop: highlight while hovering; Rust handles the actual drop.
-  try {
-    unlistenDrop = await getCurrentWebview().onDragDropEvent((event) => {
-      const t = event.payload.type;
-      if (t === 'enter' || t === 'over') {
-        store.dragActive = true;
-      } else if (t === 'leave') {
-        store.dragActive = false;
-      } else if (t === 'drop') {
-        store.dragActive = false;
-      }
-    });
-  } catch {
-    // drag-drop best-effort
-  }
-
-  // Rust has already indexed the exact changed paths before this event arrives.
-  try {
-    unlistenLibraryChanged = await listen('library-changed', (event) => {
-      store.handleLibraryChanged(event.payload);
-    });
-  } catch {
-    // watcher best-effort
-  }
-
-  // A second app launch (double-clicked audio file) forwarded its files here.
-  try {
-    unlistenOpenFiles = await listen('open-files-pending', () => {
-      store.consumePendingOpenFiles();
-    });
-  } catch {
-    // best-effort
-  }
-
-  // Surface WASAPI-exclusive fallback so the user knows it dropped to shared mode.
-  try {
-    unlistenExclusiveErr = await listen('wasapi-exclusive-error', (e) => {
-      const msg = e && e.payload ? `: ${e.payload}` : '';
-      store.statusMessage = `WASAPI exclusive unavailable — using shared mode${msg}`;
-      // The backend has already disabled exclusive mode; sync the frontend.
-      if (store.wasapiExclusive) {
-        store.wasapiExclusive = false;
-        store.persistState();
-      }
-    });
-  } catch {
-    // best-effort
-  }
-
-  try {
-    unlistenOnlineMetadata = await listen('online-metadata-progress', (e) => {
-      store.handleOnlineMetadataProgress(e.payload);
-    });
-  } catch {
-    // progress reporting is best-effort; the command result still updates UI
-  }
-
-  try {
-    unlistenAudioDevices = await listen('audio-devices-changed', () => {
-      store.handleAudioDevicesChanged();
-    });
-  } catch {
-    // best-effort
-  }
-
-  // The native vinyl window controls the same Rust audio engine directly. Keep
-  // this window's reactive UI aligned after tonearm or scratch gestures there.
-  try {
-    unlistenVinylPlayback = await listen('vinyl-playback-sync', (event) => {
-      const payload = event.payload || {};
-      if (typeof payload.position === 'number' && Number.isFinite(payload.position)) {
-        store.currentTime = Math.max(0, payload.position);
-        store.lastSeekAt = Date.now();
-      }
-      if (payload.playing === true && store.currentSong && store.playbackFinished) {
-        store.playSong(store.currentSong, null, {
-          autoplay: true,
-          startAt: typeof payload.position === 'number' ? payload.position : 0,
-        });
-      }
-    });
-  } catch {
-    // Cross-window sync is best-effort; the backend remains authoritative.
-  }
 });
 
 onUnmounted(() => {
@@ -418,14 +223,6 @@ onUnmounted(() => {
   window.removeEventListener('mouseup', handleMouseUp);
   window.removeEventListener('mousedown', handleMouseDown);
   window.removeEventListener('auxclick', handleAuxClick);
-  if (unlistenDrop) unlistenDrop();
-  if (unlistenDropGrant) unlistenDropGrant();
-  if (unlistenLibraryChanged) unlistenLibraryChanged();
-  if (unlistenExclusiveErr) unlistenExclusiveErr();
-  if (unlistenOpenFiles) unlistenOpenFiles();
-  if (unlistenOnlineMetadata) unlistenOnlineMetadata();
-  if (unlistenAudioDevices) unlistenAudioDevices();
-  if (unlistenVinylPlayback) unlistenVinylPlayback();
 });
 
 function newPlaylist() {

@@ -17,17 +17,18 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useWindowDrag } from '../useWindowDrag';
 import { useRouter } from 'vue-router';
 import { store } from '../store';
-import { loadCover, getCachedCover, hasCachedCover } from '../coverCache';
+import { resolveTrackCover } from '../coverCache';
+import { useSeekControl } from '../useSeekControl';
+import MiniQueue from './MiniQueue.vue';
 import { activeLineIndex, processLyricLines } from '../lyricsCache';
 import { extractColorsForPath, defaultPalette } from '../colorExtract';
 import LyricContent from './LyricContent.vue';
 import LosslessBadge from './LosslessBadge.vue';
-import CoverImage from './CoverImage.vue';
 import MarqueeText from './MarqueeText.vue';
 import { createNyanCatSeekStyle } from '../nyancatTheme';
-import { useQueueReorder } from '../useQueueReorder';
 import { useTrackLyrics } from '../useTrackLyrics';
 import { useLyricAutoScroll } from '../useLyricAutoScroll';
+import { useMiniWindowSize } from '../useMiniWindowSize';
 import { gapDotColor } from '../lyricVisuals';
 import { formatTime } from '../timeFormat';
 
@@ -65,12 +66,8 @@ async function resolveCover(path) {
     coverUrl.value = null;
     return;
   }
-  if (hasCachedCover(path)) {
-    coverUrl.value = getCachedCover(path);
-    return;
-  }
-  const result = await loadCover(path);
-  if (song.value && song.value.path === path) coverUrl.value = result;
+  const result = await resolveTrackCover(path, () => song.value?.path === path);
+  if (result !== undefined) coverUrl.value = result;
 }
 
 // Re-derive the backdrop colors whenever the cover changes; the blobs ease
@@ -124,41 +121,15 @@ const view = computed(() => {
 });
 const isArtwork = computed(() => view.value === 'artwork');
 
-// ---- Window sizing --------------------------------------------------------
+// ---- Window sizing (extracted to useMiniWindowSize) ------------------------
 // Lyrics/artwork use fixed sizes; the compact bar is measured so it fits its
 // content exactly (no stray gap or clipping regardless of fonts/scale). The
 // queue forces the tall lyrics size.
-const MINI_WIDTH = 360;
-const topChromeEl = ref(null);
-const bottomChromeEl = ref(null);
-
-function fitCompact() {
-  if (!store.miniPlayerOpen) return;
-  nextTick(() => {
-    const top = topChromeEl.value ? topChromeEl.value.offsetHeight : 0;
-    const bottom = bottomChromeEl.value ? bottomChromeEl.value.offsetHeight : 0;
-    if (top && bottom) store.applyMiniSize(MINI_WIDTH, top + bottom);
-  });
-}
-
-const windowView = computed(() => (queuePresent.value ? 'lyrics' : view.value));
-watch(
-  windowView,
-  (v) => {
-    if (!store.miniPlayerOpen) return;
-    if (v === 'compact') fitCompact();
-    else store.applyMiniViewSize(v);
-  },
-  { immediate: true }
-);
-// The compact bar's height depends on the lossless badge (per-track), so refit
-// when the song changes while compact.
-watch(
-  () => song.value && song.value.path,
-  () => {
-    if (store.miniPlayerOpen && windowView.value === 'compact') fitCompact();
-  }
-);
+const { topChromeEl, bottomChromeEl } = useMiniWindowSize({
+  getView: () => view.value,
+  getQueuePresent: () => queuePresent.value,
+  getSongPath: () => song.value?.path ?? null,
+});
 
 // ---- Auto-hiding chrome ----------------------------------------------------
 // Bottom controls auto-hide in lyrics + artwork. The TOP bar (album/title) is
@@ -234,27 +205,8 @@ watch(
 );
 
 // ---- Transport / formatting ----------------------------------------------
-const seekValue = ref(0);
-let seekHeld = false;
+const { seekValue, onSeekInput, onSeekCommit } = useSeekControl();
 
-// Keep the seek slider in sync with playback unless the user is dragging it.
-watch(
-  () => store.currentTime,
-  (t) => {
-    if (!seekHeld) seekValue.value = t || 0;
-  },
-  { immediate: true }
-);
-
-const onSeekInput = () => {
-  seekHeld = true;
-  store.lastSeekAt = Date.now();
-  store.currentTime = Number(seekValue.value);
-};
-const onSeekCommit = () => {
-  seekHeld = false;
-  store.seek(Number(seekValue.value));
-};
 const seekToLine = (line) => {
   if (line.time_ms != null) store.seek(line.time_ms / 1000);
 };
@@ -278,26 +230,6 @@ const volumePercentage = computed(() => (store.isMuted ? 0 : store.volume) * 100
 const remaining = computed(() =>
   formatTime(Math.max(0, (store.duration || 0) - (store.currentTime || 0)))
 );
-
-// ---- Queue (mirrors the main QueuePanel: drag-to-reorder, remove, etc.) ----
-const {
-  listContainer: queueListEl,
-  dragIndex,
-  overIndex,
-  keyFor,
-  onQueueLeave,
-  disableQueueTransition,
-  onGripMouseDown,
-} = useQueueReorder(
-  () => store.queue.length,
-  (from, to) => store.moveInQueue(from, to)
-);
-
-const isCurrent = (s) =>
-  store.currentSong &&
-  (store.currentSong.queueId && s.queueId
-    ? store.currentSong.queueId === s.queueId
-    : store.currentSong.path === s.path);
 
 // ---- Navigation / window / view actions -----------------------------------
 const goToArtist = (artistName) => {
@@ -582,140 +514,13 @@ onUnmounted(() => {
         :class="view === 'lyrics' || isArtwork || queuePresent ? 'flex-1' : ''"
         :data-tauri-drag-region="isArtwork && !queueOpen ? '' : null"
       >
-        <!-- Queue (mirrors the main QueuePanel) — slides up as a frosted sheet over
+        <!-- Queue (extracted to MiniQueue.vue) — slides up as a frosted sheet over
              the lyrics/backdrop; positioned so it overlays whatever is behind it. -->
-        <Transition name="mini-queue" @after-leave="onQueueAfterLeave">
-          <div v-if="queueOpen" class="absolute inset-0 z-10 flex flex-col mini-queue-panel">
-            <div class="flex items-center justify-between px-4 py-2.5 shrink-0">
-              <h2 class="text-sm font-bold">Queue</h2>
-              <div class="flex items-center gap-3">
-                <button
-                  v-if="store.queue.length > 1"
-                  @click="store.clearQueue()"
-                  class="text-xs text-[var(--text-secondary)] hover:text-white transition"
-                  title="Clear queue"
-                >
-                  Clear
-                </button>
-                <button
-                  @click="store.toggleAutoplay()"
-                  class="transition"
-                  :class="
-                    store.autoplayMode
-                      ? 'text-[var(--accent-color)]'
-                      : 'text-gray-400 hover:text-white'
-                  "
-                  :title="store.autoplayMode ? 'Autoplay on' : 'Autoplay off'"
-                >
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="18"
-                    height="18"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  >
-                    <path
-                      d="M12 12c-2-2.67-4-4-6-4a4 4 0 1 0 0 8c2 0 4-1.33 6-4Zm0 0c2 2.67 4 4 6 4a4 4 0 0 0 0-8c-2 0-4 1.33-6 4Z"
-                    />
-                  </svg>
-                </button>
-              </div>
-            </div>
-            <div
-              ref="queueListEl"
-              class="relative flex-1 px-2 pt-1 pb-36 overflow-auto mini-scroll"
-            >
-              <div v-if="store.queue.length === 0" class="p-8 text-sm text-center text-gray-600">
-                The queue is empty.
-              </div>
-              <TransitionGroup
-                v-else
-                name="queue"
-                :css="!disableQueueTransition"
-                @leave="onQueueLeave"
-                tag="div"
-                class="space-y-1"
-              >
-                <div
-                  v-for="(qsong, index) in store.queue"
-                  :key="keyFor(qsong)"
-                  :data-queue-idx="index"
-                  @dblclick="store.playQueueIndex(index)"
-                  class="queue-row group flex items-center gap-2 p-1.5 rounded-md hover:bg-white/10 transition-colors"
-                  :class="{
-                    'bg-white/10': isCurrent(qsong),
-                    'opacity-30': index === dragIndex,
-                    'drop-target-above':
-                      overIndex === index && dragIndex !== index && dragIndex > index,
-                    'drop-target-below':
-                      overIndex === index && dragIndex !== index && dragIndex < index,
-                  }"
-                >
-                  <div
-                    class="shrink-0 cursor-grab active:cursor-grabbing text-gray-500 hover:text-gray-200 transition-colors"
-                    @mousedown="onGripMouseDown(index, $event)"
-                    title="Drag to reorder"
-                  >
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      width="12"
-                      height="12"
-                      viewBox="0 0 24 24"
-                      fill="currentColor"
-                      stroke="none"
-                    >
-                      <circle cx="9" cy="5" r="1.5"></circle>
-                      <circle cx="15" cy="5" r="1.5"></circle>
-                      <circle cx="9" cy="12" r="1.5"></circle>
-                      <circle cx="15" cy="12" r="1.5"></circle>
-                      <circle cx="9" cy="19" r="1.5"></circle>
-                      <circle cx="15" cy="19" r="1.5"></circle>
-                    </svg>
-                  </div>
-                  <CoverImage :path="qsong.path" className="h-9 w-9 rounded shrink-0 bg-[#333]" />
-                  <div class="flex-1 min-w-0" @click="store.playQueueIndex(index)">
-                    <div
-                      class="text-[12px] font-medium truncate leading-tight"
-                      :class="isCurrent(qsong) ? 'text-[var(--accent-color)]' : 'text-white'"
-                    >
-                      {{ qsong.title }}
-                    </div>
-                    <div
-                      @click.stop="goToArtist(qsong.artist)"
-                      class="text-[11px] text-[var(--text-secondary)] hover:text-[var(--accent-color)] hover:underline cursor-pointer truncate transition-colors"
-                    >
-                      {{ qsong.artist }}
-                    </div>
-                  </div>
-                  <button
-                    @click.stop="store.removeFromQueue(index)"
-                    class="text-gray-400 transition opacity-0 group-hover:opacity-100 hover:text-white shrink-0"
-                    title="Remove from queue"
-                  >
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      width="15"
-                      height="15"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      stroke-width="2"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                    >
-                      <line x1="18" y1="6" x2="6" y2="18"></line>
-                      <line x1="6" y1="6" x2="18" y2="18"></line>
-                    </svg>
-                  </button>
-                </div>
-              </TransitionGroup>
-            </div>
-          </div>
-        </Transition>
+        <MiniQueue
+          :open="queueOpen"
+          @after-leave="onQueueAfterLeave"
+          @navigate-artist="goToArtist"
+        />
 
         <!-- Lyrics (stays mounted behind the queue; the frosted queue overlays it) -->
         <div

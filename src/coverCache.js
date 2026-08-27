@@ -70,6 +70,20 @@ export async function prewarmCovers(paths, awaitCount = 0) {
   }
 }
 
+// Shared resolve pipeline for the player surfaces (CoverImage, MiniPlayer,
+// FullScreenPlayer): serve from the LRU when warm, otherwise fetch through
+// `loadCover` (deduped) — but only hand the result back while `isCurrent`
+// still reports the requesting track is the live one. Returns:
+//   null      → nothing to show (empty path, or a resolved miss)
+//   string    → usable cover URL
+//   undefined → stale request; caller must leave its state untouched
+export async function resolveTrackCover(path, isCurrent = () => true) {
+  if (!path) return null;
+  if (hasCachedCover(path)) return getCachedCover(path);
+  const result = await loadCover(path);
+  return isCurrent() ? (result ?? null) : undefined;
+}
+
 export async function loadCover(path) {
   if (!path) return null;
   if (cache.has(path)) {

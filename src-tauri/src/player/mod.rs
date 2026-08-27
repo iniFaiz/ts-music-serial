@@ -238,7 +238,7 @@ fn emit_session_update(app: &AppHandle, update: &PlaybackSessionUpdate) {
                     }
                 };
                 if let Err(error) = result {
-                    eprintln!("Failed to persist native playback accounting: {error}");
+                    tracing::warn!("Failed to persist native playback accounting: {error}");
                 }
             }
         }
@@ -254,7 +254,7 @@ fn emit_session_update(app: &AppHandle, update: &PlaybackSessionUpdate) {
                     &value,
                     8 * 1024 * 1024,
                 ) {
-                    eprintln!("Failed to persist native playback session: {error}");
+                    tracing::warn!("Failed to persist native playback session: {error}");
                 }
             }
         }
@@ -367,7 +367,7 @@ async fn load_track(
                     return Ok(info);
                 }
                 Err(e) => {
-                    eprintln!("WASAPI exclusive load failed ({e}); using shared mode.");
+                    tracing::warn!("WASAPI exclusive load failed ({e}); using shared mode.");
                     let _ = app.emit("wasapi-exclusive-error", e);
                     // Disable exclusive so play/pause/status/seek route to
                     // the shared-mode path until the user re-enables it.
@@ -888,7 +888,7 @@ pub(crate) fn restore_persisted_session(player: &AudioPlayer, db: &library_db::D
         .and_then(|value| serde_json::from_value::<PlaybackSessionSnapshot>(value).ok());
     if let Some(snapshot) = restored {
         if let Err(error) = player.session.restore(snapshot) {
-            eprintln!("Failed to restore native playback session: {error}");
+            tracing::warn!("Failed to restore native playback session: {error}");
         }
     }
 }
@@ -1606,17 +1606,20 @@ pub(crate) fn set_output_device(
 // Reference loudness for normalization (ReplayGain 2.0 standard).
 const NORM_TARGET_LUFS: f64 = -18.0;
 
-// Set the normalization factor from a track's gain (dB), an optional peak (to
-// prevent clipping when boosting) and the user pre-amp. Re-applies immediately
-// to the live sink. `enabled = false` resets the factor to 1.0 (no change).
+// Apply the per-track normalization factor from the track's gain (dB) and an
+// optional peak (to prevent clipping when boosting). Enabled/pre-amp are read
+// from backend state — set once via player_set_normalization_settings — so
+// per-track calls carry only track data and can never disagree with the
+// stored user settings. Re-applies immediately to the live sink; a disabled
+// setting resets the factor to 1.0.
 #[tauri::command]
 pub(crate) fn player_set_normalization(
     player: State<AudioPlayer>,
     gain_db: Option<f64>,
-    preamp_db: f64,
     peak: Option<f64>,
-    enabled: bool,
 ) {
+    let enabled = *player.normalization_enabled.lock();
+    let preamp_db = *player.normalization_preamp_db.lock();
     set_normalization_factor(&player, gain_db, preamp_db, peak, enabled);
 }
 

@@ -48,6 +48,13 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 # this adds no new dependency code — it just replaces a
 # spawn_blocking(thread::sleep) that pinned a blocking-pool thread per wait.
 tokio = { version = "1", default-features = false, features = ["time"] }
+# Structured logging: one subscriber fans out to stderr AND a daily-rotating
+# file under app-data/logs so user bug reports can include real diagnostics.
+# The file writer is non-blocking (queue + worker thread) so a slow disk can
+# never stall audio/indexing on a log line.
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "std"] }
+tracing-appender = "0.2"
 rusty-chromaprint = "0.3" #pure-Rust AcoustID-compatible audio fingerprints
 notify = "6" #filesystem watching for library auto-update
 ebur128 = "0.1" #EBU R128 loudness analysis for volume normalization (ReplayGain)

@@ -1,12 +1,12 @@
 <script setup>
 import { ref, watch } from 'vue';
 import {
-  loadCover,
   loadCoverDataUrl,
   evictCover,
   getCachedCover,
   hasCachedCover,
   coverVersion,
+  resolveTrackCover,
 } from '../coverCache';
 
 const props = defineProps({
@@ -30,17 +30,12 @@ async function resolveCover(path) {
     isLoaded.value = false;
     return;
   }
-  if (hasCachedCover(path)) {
-    const cached = getCachedCover(path);
-    imageData.value = cached;
-    isLoaded.value = !!cached;
-    return;
-  }
-  const result = await loadCover(path);
-  // Guard against a race: the path prop may have changed while awaiting.
-  if (props.path === path) {
+  const result = await resolveTrackCover(path, () => props.path === path);
+  // Guard against a race: the path prop may have changed while awaiting
+  // (undefined = stale request — leave current state untouched).
+  if (result !== undefined && props.path === path) {
     imageData.value = result;
-    if (!result) isLoaded.value = false;
+    isLoaded.value = !!result;
   }
 }
 

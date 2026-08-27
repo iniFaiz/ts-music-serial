@@ -2,7 +2,8 @@
 import { ref, computed, watch } from 'vue';
 import { useWindowDrag } from '../useWindowDrag';
 import { store } from '../store';
-import { loadCover, getCachedCover, hasCachedCover } from '../coverCache';
+import { resolveTrackCover } from '../coverCache';
+import { useSeekControl } from '../useSeekControl';
 import { activeLineIndex, processLyricLines } from '../lyricsCache';
 import { useTrackLyrics } from '../useTrackLyrics';
 import { useLyricAutoScroll } from '../useLyricAutoScroll';
@@ -36,12 +37,8 @@ async function resolveCover(path) {
     coverUrl.value = null;
     return;
   }
-  if (hasCachedCover(path)) {
-    coverUrl.value = getCachedCover(path);
-    return;
-  }
-  const result = await loadCover(path);
-  if (song.value && song.value.path === path) coverUrl.value = result;
+  const result = await resolveTrackCover(path, () => song.value?.path === path);
+  if (result !== undefined) coverUrl.value = result;
 }
 
 // Load cover + lyrics when the overlay opens and whenever the track changes
@@ -99,11 +96,9 @@ watch(
 );
 
 // ---- transport ----
-const onSeekInput = (e) => {
-  store.lastSeekAt = Date.now();
-  store.currentTime = Number(e.target.value);
-};
-const onSeekCommit = (e) => store.seek(Number(e.target.value));
+// The fullscreen slider binds :value="store.currentTime" directly, so no
+// local clock sync is needed — the handlers read event.target.value.
+const { onSeekInput, onSeekCommit } = useSeekControl({ syncWithClock: false });
 const seekToLine = (line) => {
   if (line.time_ms != null) store.seek(line.time_ms / 1000);
 };

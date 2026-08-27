@@ -1,7 +1,8 @@
 <script setup>
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { store } from '../store';
 import { useQueueReorder } from '../useQueueReorder';
+import { useVirtualWindow } from '../useVirtualWindow';
 import { useRouter } from 'vue-router';
 import CoverImage from './CoverImage.vue';
 import { navigateWithTransition } from '../viewTransition';
@@ -31,13 +32,26 @@ const {
 // the DOM for hit testing, so the grip is disabled once windowing kicks in —
 // at that size dragging is impractical anyway.
 const QUEUE_VIRT_THRESHOLD = 300;
-const BUFFER_ROWS = 8;
-const rowPitch = ref(58); // remeasured from real rows on first render
-const viewStart = ref(0);
-const viewEnd = ref(40);
-let rafPending = false;
-
+const queueRowsWrap = ref(null);
 const virtualizeQueue = computed(() => store.queue.length > QUEUE_VIRT_THRESHOLD);
+
+const {
+  viewStart,
+  viewEnd,
+  virtualPadStyle,
+  refresh: refreshWindow,
+  attach: attachWindowing,
+  detach: detachWindowing,
+} = useVirtualWindow({
+  rowsWrapper: queueRowsWrap,
+  getScrollContainer: () => listContainer.value,
+  rowSelector: '.queue-row',
+  itemCount: () => store.queue.length,
+  enabled: () => virtualizeQueue.value,
+  initialPitch: 58, // remeasured from real rows on first render
+  initialEnd: 40,
+  fallbackGapPx: 4, // + space-y-1 gap
+});
 
 // Rows to render, each carrying its real index in the full queue.
 const renderQueue = computed(() => {
@@ -53,73 +67,14 @@ const renderQueue = computed(() => {
   return out;
 });
 
-// Pad the scroll content so the rendered slice sits at the right offset and the
-// scrollbar reflects the full queue height (null when not windowing).
-const virtualPadStyle = computed(() => {
-  if (!virtualizeQueue.value) return null;
-  const total = store.queue.length;
-  const start = Math.max(0, Math.min(viewStart.value, total));
-  const end = Math.min(viewEnd.value, total);
-  return {
-    paddingTop: `${start * rowPitch.value}px`,
-    paddingBottom: `${(total - end) * rowPitch.value}px`,
-  };
-});
-
-const measureRowPitch = () => {
-  const el = listContainer.value;
-  if (!el || typeof el.querySelectorAll !== 'function') return;
-  const rows = el.querySelectorAll('.queue-row');
-  if (rows.length >= 2) {
-    const d = rows[1].getBoundingClientRect().top - rows[0].getBoundingClientRect().top;
-    if (d > 10) rowPitch.value = d;
-  } else if (rows.length === 1) {
-    const h = rows[0].getBoundingClientRect().height;
-    if (h > 10) rowPitch.value = h + 4; // + space-y-1 gap
-  }
-};
-
-const updateWindow = () => {
-  const total = store.queue.length;
-  const el = listContainer.value;
-  if (!virtualizeQueue.value || !el) return;
-  // The padded wrapper starts at the container's content origin, so the number
-  // of scrolled-past pixels is simply the container's scrollTop.
-  const pitch = rowPitch.value || 58;
-  const start = Math.max(0, Math.floor(el.scrollTop / pitch) - BUFFER_ROWS);
-  const visible = Math.ceil(el.clientHeight / pitch) + BUFFER_ROWS * 2;
-  viewStart.value = start;
-  viewEnd.value = Math.min(total, start + visible);
-};
-
-const scheduleWindowUpdate = () => {
-  if (rafPending) return;
-  rafPending = true;
-  requestAnimationFrame(() => {
-    rafPending = false;
-    measureRowPitch();
-    updateWindow();
-  });
-};
-
 watch(
   () => [store.queue.length, virtualizeQueue.value, store.queuePanelOpen],
-  () => nextTick(scheduleWindowUpdate)
+  () => refreshWindow()
 );
 
-onMounted(() => {
-  const el = listContainer.value;
-  if (el) el.addEventListener('scroll', scheduleWindowUpdate, { passive: true });
-});
+onMounted(attachWindowing);
 
-onUnmounted(() => {
-  const el = listContainer.value;
-  if (el) el.removeEventListener('scroll', scheduleWindowUpdate);
-  if (rafPending) {
-    cancelAnimationFrame(rafPending);
-    rafPending = false;
-  }
-});
+onUnmounted(detachWindowing);
 
 const isCurrent = (song) =>
   store.currentSong &&
@@ -196,6 +151,7 @@ const navigateToArtist = (artistName) => {
           name="queue"
           :css="!disableQueueTransition"
           @leave="onQueueLeave"
+          ref="queueRowsWrap"
           tag="div"
           class="space-y-1"
           :style="virtualPadStyle"

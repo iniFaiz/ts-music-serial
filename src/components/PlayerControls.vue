@@ -13,13 +13,17 @@ import MarqueeText from './MarqueeText.vue';
 import { createNyanCatSeekStyle } from '../nyancatTheme';
 import LosslessBadge from './LosslessBadge.vue';
 import { formatTime } from '../timeFormat';
+import { useSeekControl } from '../useSeekControl';
 
 const router = useRouter();
 const playerCoverRef = ref(null);
 
 // Playback is handled natively in Rust (rodio + symphonia). This component
-// issues commands and consumes the throttled telemetry stream.
-const seekValue = ref(0);
+// issues commands and consumes the throttled telemetry stream. `seekValue` is
+// driven by the rAF interpolation loop and slider v-model below, so the shared
+// scrub engine runs without its own clock-sync watcher.
+const seek = useSeekControl({ syncWithClock: false });
+const { seekValue } = seek;
 const playbackError = ref(null);
 
 // Precomputed waveform (peaks) for the current track, when the waveform seek bar
@@ -179,14 +183,11 @@ async function applyNormalization(song) {
     peak = typeof song.track_peak === 'number' ? song.track_peak : null;
   }
   try {
-    await invoke('player_set_normalization', {
-      gainDb: gain,
-      preampDb: store.normalizationPreampDb,
-      peak,
-      enabled,
-    });
+    // Enabled/pre-amp live backend-side (player_set_normalization_settings);
+    // per-track calls carry only the track's ReplayGain data.
+    await invoke('player_set_normalization', { gainDb: gain, peak });
   } catch {
-    // ignore â€” normalization is best-effort
+    // ignore — normalization is best-effort
   }
   // No tag gain: compute loudness in the background, then re-apply if still current.
   if (enabled && gain == null) {
@@ -197,12 +198,7 @@ async function applyNormalization(song) {
           store.currentSong.path === song.path &&
           store.normalizationEnabled
         ) {
-          invoke('player_set_normalization', {
-            gainDb: g,
-            preampDb: store.normalizationPreampDb,
-            peak: null,
-            enabled: true,
-          }).catch(() => {});
+          invoke('player_set_normalization', { gainDb: g, peak: null }).catch(() => {});
         }
       })
       .catch(() => {});
@@ -275,16 +271,16 @@ watch(
 );
 
 // While dragging: update the visible time only, and keep the poll from snapping
-// the thumb back to the old position.
-const onSeekInput = () => {
-  store.lastSeekAt = Date.now();
-  store.currentTime = Number(seekValue.value);
-};
+// the thumb back to the old position. The slider v-models `seekValue` (also
+// driven by the rAF interpolation loop above), so the handlers read it without
+// event arguments.
+const onSeekInput = () => seek.onSeekInput();
 
 // On release: issue a single seek command via the shared store action (handles
-// the finished-track reload case and the seek-suppression timestamp).
+// the finished-track reload case and the seek-suppression timestamp), then
+// refresh the Discord presence for the new position.
 const onSeekCommit = () => {
-  store.seek(Number(seekValue.value));
+  seek.onSeekCommit();
   store.syncDiscord();
 };
 

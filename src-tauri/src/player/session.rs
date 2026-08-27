@@ -1552,4 +1552,96 @@ mod tests {
         assert!(session.begin_prepare("c.flac", Some("c")).is_none());
         assert!(session.begin_prepare("b.flac", Some("b")).is_some());
     }
+
+    // End-to-end policy loop: an entire user journey expressed purely as
+    // session intents — load, pause/resume, scrub, natural advance, previous,
+    // queue edits, teardown — asserting snapshot invariants and audio effects
+    // at each step. This is the playback-loop smoke test: if any of these
+    // invariants break, every transport control above the session breaks too.
+    #[test]
+    fn smoke_full_playback_loop_through_session_intents() {
+        let session = PlaybackSession::default();
+        play(
+            &session,
+            vec![
+                entry("a", "a.flac"),
+                entry("b", "b.flac"),
+                entry("c", "c.flac"),
+            ],
+            "a",
+        );
+        let base_revision = session.snapshot().revision;
+
+        // Pause → resume round-trips without changing the current track.
+        let paused = session.set_playing(false);
+        assert!(!paused.snapshot.playing);
+        assert!(matches!(
+            paused.effect,
+            Some(PlaybackEffect::SetPlaying { playing: false })
+        ));
+        let resumed = session.set_playing(true);
+        assert!(resumed.snapshot.playing);
+        assert_eq!(resumed.snapshot.current_entry_id.as_deref(), Some("a"));
+
+        // Progress observation inside the track never loads anything.
+        let mid = session
+            .apply(PlaybackIntent::ObserveProgress {
+                position: 30.0,
+                duration: 100.0,
+                finished: false,
+            })
+            .unwrap();
+        assert_eq!(mid.snapshot.current_entry_id.as_deref(), Some("a"));
+        assert!(mid.effect.is_none());
+
+        // Natural end-of-track (audio engine reports finish → non-user Next)
+        // advances to "b" with a Load effect.
+        let finished = session
+            .apply(PlaybackIntent::Next {
+                user_triggered: false,
+            })
+            .unwrap();
+        assert_eq!(finished.snapshot.current_entry_id.as_deref(), Some("b"));
+        match &finished.effect {
+            Some(PlaybackEffect::Load { entry, .. }) => assert_eq!(entry.id, "b"),
+            other => panic!("expected load effect after finish, got {other:?}"),
+        }
+
+        // Previous near the track start steps back to "a" and reloads it.
+        let back = session
+            .apply(PlaybackIntent::Previous { position: 0.5 })
+            .unwrap();
+        assert_eq!(back.snapshot.current_entry_id.as_deref(), Some("a"));
+        assert!(matches!(back.effect, Some(PlaybackEffect::Load { .. })));
+
+        // Queue edits keep the current entry stable.
+        let moved = session
+            .apply(PlaybackIntent::MoveQueueItem {
+                entry_id: "c".into(),
+                to_index: 1,
+            })
+            .unwrap();
+        assert_eq!(moved.snapshot.queue[1].id, "c");
+        assert_eq!(moved.snapshot.current_entry_id.as_deref(), Some("a"));
+
+        let removed = session
+            .apply(PlaybackIntent::RemoveQueueItem {
+                entry_id: "b".into(),
+            })
+            .unwrap();
+        assert_eq!(removed.snapshot.queue.len(), 2);
+        assert!(!removed.snapshot.queue.iter().any(|e| e.id == "b"));
+
+        // Tear down: Clear empties everything and stops playback with a reason.
+        let cleared = session.apply(PlaybackIntent::Clear).unwrap();
+        assert!(cleared.snapshot.queue.is_empty());
+        assert!(cleared.snapshot.current_entry_id.is_none());
+        assert!(matches!(
+            cleared.effect,
+            Some(PlaybackEffect::Stop { .. })
+        ));
+
+        // Every mutation advanced the revision monotonically.
+        assert!(session.snapshot().revision > base_revision);
+    }
 }

@@ -1,14 +1,14 @@
 <script setup>
-import { computed, ref, watch, nextTick, onMounted, onUnmounted, TransitionGroup } from 'vue';
+import { computed, ref, watch, onMounted, onUnmounted, TransitionGroup } from 'vue';
 import { useRouter } from 'vue-router';
-import { invokeCommand as invoke } from '../generated/ipc';
-import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { store } from '../store';
-import { invalidateCover } from '../coverCache';
-import { requestDestructiveConsent } from '../destructiveConsent';
 import CoverImage from './CoverImage.vue';
 import { navigateWithTransition } from '../viewTransition';
 import { useThresholdReorder } from '../useThresholdReorder';
+import { useVirtualWindow, resolveScrollParent } from '../useVirtualWindow';
+import { useTagEditor } from '../useTagEditor';
+import { useMultiSelect } from '../useMultiSelect';
+import { useRowContextMenu } from '../useRowContextMenu';
 
 const props = defineProps({
   songs: { type: Array, required: true },
@@ -121,21 +121,34 @@ const VIRT_THRESHOLD = 80;
 // and dragging inside a windowed list would need scroll-aware hit testing that
 // FLIP reorder animations can't express.
 const REORDER_VIRT_THRESHOLD = 400;
-const BUFFER_ROWS = 8;
 const rowsWrapper = ref(null);
-const rowPitch = ref(56); // px per row incl. row gap; measured from real rows
-const viewStart = ref(0);
-const viewEnd = ref(60);
-let scrollParentEl = null;
-let scrollRafPending = false;
-
-// Drag stays live only while the whole list is in the DOM.
-const canReorder = computed(
-  () => reorderEligible.value && sortedSongs.value.length <= REORDER_VIRT_THRESHOLD
-);
 const virtualize = computed(() => {
   const count = sortedSongs.value.length;
   return count > (reorderEligible.value ? REORDER_VIRT_THRESHOLD : VIRT_THRESHOLD);
+});
+
+// Shared windowing engine (also used by QueuePanel): renders only the visible
+// slice of rows (+buffer) inside a padded wrapper that preserves scroll
+// geometry. Drag stays live only while the whole list is in the DOM.
+const canReorder = computed(
+  () => reorderEligible.value && sortedSongs.value.length <= REORDER_VIRT_THRESHOLD
+);
+const {
+  viewStart,
+  viewEnd,
+  virtualPadStyle,
+  refresh: refreshWindow,
+  attach: attachWindowing,
+  detach: detachWindowing,
+} = useVirtualWindow({
+  rowsWrapper,
+  getScrollContainer: () => resolveScrollParent(songListContainer.value),
+  rowSelector: '.song-row',
+  itemCount: () => sortedSongs.value.length,
+  enabled: () => virtualize.value,
+  initialPitch: 56, // px per row incl. row gap; measured from real rows
+  initialEnd: 60,
+  fallbackGapPx: 2, // + space-y gap
 });
 
 // Rows to actually render, each carrying its real index in the full list so the
@@ -153,84 +166,6 @@ const renderRows = computed(() => {
   for (let i = start; i < end; i++) out.push({ song: songs[i], index: i });
   return out;
 });
-
-// Pad the wrapper so the rendered slice sits at the correct scroll offset and the
-// scrollbar reflects the full list height (null when not windowing).
-const virtualPadStyle = computed(() => {
-  if (!virtualize.value) return null;
-  const total = sortedSongs.value.length;
-  const start = Math.max(0, Math.min(viewStart.value, total));
-  const end = Math.min(viewEnd.value, total);
-  return {
-    paddingTop: `${start * rowPitch.value}px`,
-    paddingBottom: `${(total - end) * rowPitch.value}px`,
-  };
-});
-
-const findScrollParent = (el) => {
-  let node = el ? el.parentElement : null;
-  while (node) {
-    const oy = getComputedStyle(node).overflowY;
-    if (oy === 'auto' || oy === 'scroll') return node;
-    node = node.parentElement;
-  }
-  return null;
-};
-
-const measureRowPitch = () => {
-  if (!virtualize.value) return;
-  const wrap = rowsWrapper.value;
-  if (!wrap || typeof wrap.querySelectorAll !== 'function') return;
-  const rows = wrap.querySelectorAll('.song-row');
-  if (rows.length >= 2) {
-    const d = rows[1].getBoundingClientRect().top - rows[0].getBoundingClientRect().top;
-    if (d > 10) rowPitch.value = d;
-  } else if (rows.length === 1) {
-    const h = rows[0].getBoundingClientRect().height;
-    if (h > 10) rowPitch.value = h + 2; // + space-y gap
-  }
-};
-
-const updateWindow = () => {
-  if (!virtualize.value) return;
-  const total = sortedSongs.value.length;
-  const wrap = rowsWrapper.value;
-  if (!wrap || typeof wrap.getBoundingClientRect !== 'function') return;
-  if (!scrollParentEl) {
-    // No scrollable ancestor found — render everything (safe fallback).
-    viewStart.value = 0;
-    viewEnd.value = total;
-    return;
-  }
-  const prect = scrollParentEl.getBoundingClientRect();
-  const wrect = wrap.getBoundingClientRect();
-  const pitch = rowPitch.value || 56;
-  const above = Math.max(0, prect.top - wrect.top); // px of rows scrolled past the top
-  const start = Math.max(0, Math.floor(above / pitch) - BUFFER_ROWS);
-  const visible = Math.ceil(scrollParentEl.clientHeight / pitch) + BUFFER_ROWS * 2;
-  viewStart.value = start;
-  viewEnd.value = Math.min(total, start + visible);
-};
-
-const onScrollOrResize = () => {
-  if (scrollRafPending) return;
-  scrollRafPending = true;
-  requestAnimationFrame(() => {
-    scrollRafPending = false;
-    measureRowPitch();
-    updateWindow();
-  });
-};
-
-// Re-window when the list content or the windowing eligibility changes.
-watch(
-  () => [sortedSongs.value.length, virtualize.value],
-  () =>
-    nextTick(() => {
-      measureRowPitch();
-      updateWindow();
-    })
-);
 
 const playSong = (song) => {
   store.playSong(song, sortedSongs.value);
@@ -351,214 +286,6 @@ const hideTooltip = () => {
   tooltip.value.show = false;
 };
 
-// ---- File Information Modal ----
-
-const infoModalOpen = ref(false);
-const infoSong = ref(null);
-const infoStat = ref({ playCount: 0, lastPlayed: 0, skipCount: 0 });
-const copyStatus = ref('Copy Path');
-
-const showFileInfo = async () => {
-  infoSong.value = menu.value.song;
-  infoModalOpen.value = true;
-  closeMenu();
-  // Play stats live in the DB now; fetch them for the opened track.
-  infoStat.value = infoSong.value
-    ? await store.statFor(infoSong.value.path)
-    : { playCount: 0, lastPlayed: 0, skipCount: 0 };
-};
-
-const closeInfoModal = () => {
-  if (editSaving.value) return; // don't lose an in-flight save
-  infoModalOpen.value = false;
-  infoSong.value = null;
-  infoStat.value = { playCount: 0, lastPlayed: 0, skipCount: 0 };
-  copyStatus.value = 'Copy Path';
-  infoEditing.value = false;
-  editError.value = '';
-};
-
-// ---- Tag editor (edit mode of the File Information modal) ----
-// Writes tags back into the audio file (Rust/lofty), re-indexes the DB row and
-// refreshes every UI copy of the track. Editing the playing track is safe —
-// playback decodes from an in-memory copy of the file.
-
-const infoEditing = ref(false);
-const editSaving = ref(false);
-const editError = ref('');
-const editForm = ref({ title: '', artist: '', album: '', genre: '', year: '', track_number: '' });
-const editCoverPath = ref(null); // newly picked image (absolute path)
-const editCoverPreview = ref(null); // data-URL thumbnail of the picked image
-const editRemoveCover = ref(false);
-
-const startEditInfo = () => {
-  const s = infoSong.value;
-  if (!s) return;
-  editForm.value = {
-    title: s.title || '',
-    // Don't seed the library's display fallbacks into the file's actual tags.
-    artist: s.artist === 'Unknown Artist' ? '' : s.artist || '',
-    album: s.album === 'Unknown Album' ? '' : s.album || '',
-    genre: s.genre || '',
-    year: s.year ? String(s.year) : '',
-    track_number: s.track_number ? String(s.track_number) : '',
-  };
-  editCoverPath.value = null;
-  editCoverPreview.value = null;
-  editRemoveCover.value = false;
-  editError.value = '';
-  infoEditing.value = true;
-};
-
-const cancelEditInfo = () => {
-  if (editSaving.value) return;
-  infoEditing.value = false;
-  editError.value = '';
-};
-
-const pickEditCover = async () => {
-  try {
-    const sel = await openDialog({
-      multiple: false,
-      filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif'] }],
-    });
-    if (!sel) return;
-    editCoverPath.value = sel;
-    editRemoveCover.value = false;
-    editCoverPreview.value = await invoke('preview_image', { path: sel }).catch(() => null);
-  } catch {
-    /* dialog dismissed */
-  }
-};
-
-const removeEditCover = () => {
-  editRemoveCover.value = true;
-  editCoverPath.value = null;
-  editCoverPreview.value = null;
-};
-
-const saveEditInfo = async () => {
-  const s = infoSong.value;
-  if (!s || editSaving.value) return;
-  editSaving.value = true;
-  editError.value = '';
-  const yr = parseInt(editForm.value.year, 10);
-  const tn = parseInt(editForm.value.track_number, 10);
-  try {
-    const consentToken = await requestDestructiveConsent('write_track_tags', [s.path]);
-    if (!consentToken) {
-      editError.value = 'Tag update cancelled';
-      return;
-    }
-    const updated = await invoke('write_track_tags', {
-      path: s.path,
-      edits: {
-        title: editForm.value.title,
-        artist: editForm.value.artist,
-        album: editForm.value.album,
-        genre: editForm.value.genre,
-        year: Number.isFinite(yr) && yr > 0 ? yr : null,
-        trackNumber: Number.isFinite(tn) && tn > 0 ? tn : null,
-      },
-      coverPath: editCoverPath.value,
-      removeCover: editRemoveCover.value,
-      consentToken,
-    });
-    if (editCoverPath.value || editRemoveCover.value) invalidateCover(updated.path);
-    store.applyTrackUpdate(updated);
-    infoSong.value = { ...s, ...updated };
-    infoEditing.value = false;
-    store.statusMessage = `Saved tags: ${updated.title}`;
-  } catch (e) {
-    editError.value = String(e);
-  } finally {
-    editSaving.value = false;
-  }
-};
-
-const copyToClipboard = async (text) => {
-  try {
-    await navigator.clipboard.writeText(text);
-    copyStatus.value = 'Copied!';
-    setTimeout(() => {
-      copyStatus.value = 'Copy Path';
-    }, 2000);
-  } catch (err) {
-    console.error('Failed to copy text:', err);
-  }
-};
-
-// ---- Multi-select Selection Mode ----
-
-const selectMode = ref(false);
-const selectedSongs = ref([]);
-const showPlDropdown = ref(false);
-
-const toggleSelectSong = (song) => {
-  const idx = selectedSongs.value.indexOf(song.path);
-  if (idx >= 0) {
-    selectedSongs.value.splice(idx, 1);
-  } else {
-    selectedSongs.value.push(song.path);
-  }
-};
-
-const toggleSelectAll = (event) => {
-  if (event.target.checked) {
-    selectedSongs.value = sortedSongs.value.map((s) => s.path);
-  } else {
-    selectedSongs.value = [];
-  }
-};
-
-const startSelectMode = () => {
-  selectMode.value = true;
-  selectedSongs.value = [menu.value.song.path];
-  closeMenu();
-};
-
-const cancelSelection = () => {
-  selectMode.value = false;
-  selectedSongs.value = [];
-  showPlDropdown.value = false;
-};
-
-const playSelected = () => {
-  const tracks = props.songs.filter((s) => selectedSongs.value.includes(s.path));
-  if (tracks.length > 0) {
-    store.playSong(tracks[0], tracks);
-  }
-  cancelSelection();
-};
-
-const addSelectedToQueue = () => {
-  const tracks = props.songs.filter((s) => selectedSongs.value.includes(s.path));
-  if (tracks.length > 0) {
-    store.addToQueue(tracks);
-  }
-  cancelSelection();
-};
-
-const addSelectedToPlaylist = (playlistId) => {
-  store.runMutation(() => store.addToPlaylist(playlistId, selectedSongs.value));
-  cancelSelection();
-};
-
-const newPlaylistWithSelected = () => {
-  store.openPlaylistModal(selectedSongs.value);
-  cancelSelection();
-};
-
-const removeSelectedFromPlaylist = () => {
-  if (props.playlistId) {
-    const paths = [...selectedSongs.value];
-    store.runMutation(() =>
-      Promise.all(paths.map((path) => store.removeFromPlaylist(props.playlistId, path)))
-    );
-  }
-  cancelSelection();
-};
-
 // ---- Custom Warning Deletion Modal ----
 
 const deleteConfirmModalOpen = ref(false);
@@ -611,158 +338,89 @@ const executeDelete = async (fromDisk) => {
   }
 };
 
-// ---- Row context menu ----
+// ---- Row context menu (extracted to useRowContextMenu) ----
 
-const menu = ref({ open: false, x: 0, y: 0, maxHeight: 400, song: null });
+const {
+  menu,
+  openMenu,
+  closeMenu,
+  playNext,
+  addToQueue,
+  showArtist,
+  showAlbum,
+  showInFolder,
+  toggleLike,
+  addToPlaylist,
+  newPlaylistWithSong,
+  removeFromThisPlaylist,
+  isHoveringMenu,
+  closeMenuOnScroll,
+} = useRowContextMenu({
+  playlistId: () => props.playlistId,
+  findCoverBySongPath,
+});
 
-const openMenu = (song, event) => {
-  event.preventDefault();
-  const winWidth = window.innerWidth;
-  const winHeight = window.innerHeight;
-  const menuWidth = 224;
-  const menuHeight = props.playlistId ? 450 : 400;
+// ---- File Information Modal + tag editor (extracted to useTagEditor) ----
+// Declared after the context-menu section: opening the modal reads
+// `menu.value.song` and closes the menu.
 
-  let x = event.clientX;
-  let y = event.clientY;
+const {
+  infoModalOpen,
+  infoSong,
+  infoStat,
+  copyStatus,
+  showFileInfo,
+  closeInfoModal,
+  infoEditing,
+  editSaving,
+  editError,
+  editForm,
+  editCoverPreview,
+  startEditInfo,
+  cancelEditInfo,
+  pickEditCover,
+  removeEditCover,
+  saveEditInfo,
+  copyToClipboard,
+} = useTagEditor({ menu, closeMenu });
 
-  if (x + menuWidth > winWidth) {
-    x = winWidth - menuWidth - 10;
-  }
-  x = Math.max(10, x);
+// ---- Multi-select Selection Mode (extracted to useMultiSelect) ----
 
-  const spaceBelow = winHeight - y;
-  const spaceAbove = y;
-
-  let maxHeight;
-  let topPosition;
-
-  if (spaceBelow >= spaceAbove) {
-    topPosition = y;
-    maxHeight = spaceBelow - 20;
-  } else {
-    if (spaceAbove >= menuHeight) {
-      topPosition = y - menuHeight;
-      maxHeight = menuHeight;
-    } else {
-      topPosition = 10;
-      maxHeight = y - 20;
-    }
-  }
-
-  maxHeight = Math.max(150, maxHeight);
-  topPosition = Math.max(10, topPosition);
-
-  menu.value = { open: true, x, y: topPosition, maxHeight, song };
-};
-
-const closeMenu = () => {
-  menu.value.open = false;
-};
-
-const playNext = () => {
-  store.playNext(menu.value.song);
-  closeMenu();
-};
-
-const addToQueue = () => {
-  store.addToQueue(menu.value.song);
-  closeMenu();
-};
-
-const showArtist = () => {
-  const song = menu.value.song;
-  if (!song) return;
-  const navigate = () => router.push({ name: 'ArtistDetail', params: { name: song.artist } });
-  const coverEl = findCoverBySongPath(song.path);
-  closeMenu();
-  if (coverEl) {
-    navigateWithTransition(navigate, coverEl, 'shared-cover', 'to-artist-transition');
-  } else {
-    navigate();
-  }
-};
-
-const showAlbum = () => {
-  const song = menu.value.song;
-  if (!song) return;
-  const navigate = () => router.push({ name: 'AlbumDetail', params: { name: song.album } });
-  const coverEl = findCoverBySongPath(song.path);
-  closeMenu();
-  if (coverEl) {
-    navigateWithTransition(navigate, coverEl, 'shared-cover', 'to-album-transition');
-  } else {
-    navigate();
-  }
-};
-
-const showInFolder = async () => {
-  const song = menu.value.song;
-  if (!song) return;
-  closeMenu();
-  try {
-    await invoke('player_show_in_folder', { path: song.path });
-  } catch (err) {
-    console.error('Failed to show in folder:', err);
-  }
-};
-
-const toggleLike = () => {
-  store.runMutation(() => store.toggleFavorite(menu.value.song.path));
-  closeMenu();
-};
-
-const addToPlaylist = (id) => {
-  store.runMutation(() => store.addToPlaylist(id, menu.value.song.path));
-  closeMenu();
-};
-
-const newPlaylistWithSong = () => {
-  store.openPlaylistModal(menu.value.song.path);
-  closeMenu();
-};
-
-const removeFromThisPlaylist = () => {
-  if (props.playlistId) {
-    store.runMutation(() => store.removeFromPlaylist(props.playlistId, menu.value.song.path));
-  }
-  closeMenu();
-};
-
-const isHoveringMenu = ref(false);
-
-const closeMenuOnScroll = () => {
-  if (isHoveringMenu.value) {
-    return;
-  }
-  closeMenu();
-};
+const {
+  selectMode,
+  selectedSongs,
+  showPlDropdown,
+  toggleSelectSong,
+  toggleSelectAll,
+  startSelectMode,
+  cancelSelection,
+  playSelected,
+  addSelectedToQueue,
+  addSelectedToPlaylist,
+  newPlaylistWithSelected,
+  removeSelectedFromPlaylist,
+} = useMultiSelect({
+  songs: () => sortedSongs.value,
+  playlistId: () => props.playlistId,
+  menu,
+  closeMenu,
+});
 
 onMounted(() => {
   window.addEventListener('click', closeMenu);
   window.addEventListener('scroll', closeMenuOnScroll, true);
   window.addEventListener('resize', closeMenu);
 
-  // Virtualization: track the scroll ancestor so we can window large lists.
-  scrollParentEl = findScrollParent(songListContainer.value);
-  if (scrollParentEl) {
-    scrollParentEl.addEventListener('scroll', onScrollOrResize, { passive: true });
-  }
-  window.addEventListener('resize', onScrollOrResize);
-  nextTick(() => {
-    measureRowPitch();
-    updateWindow();
-  });
+  // Virtualization: resolve the scroll ancestor and window large lists.
+  attachWindowing();
+  refreshWindow();
 });
 
 onUnmounted(() => {
   window.removeEventListener('click', closeMenu);
   window.removeEventListener('scroll', closeMenuOnScroll, true);
   window.removeEventListener('resize', closeMenu);
-  if (scrollParentEl) {
-    scrollParentEl.removeEventListener('scroll', onScrollOrResize);
-    scrollParentEl = null;
-  }
-  window.removeEventListener('resize', onScrollOrResize);
+  detachWindowing();
   hideTooltip();
 });
 </script>

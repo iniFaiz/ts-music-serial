@@ -261,7 +261,7 @@ fn negotiate_format(
             None,
         );
         if let Ok(supported) = client.is_supported_exclusive_with_quirks(&fmt) {
-            eprintln!(
+            tracing::info!(
                 "WASAPI exclusive: negotiated {sample_type:?} store={store_bits} valid={valid_bits} blockalign={}",
                 supported.get_blockalign()
             );
@@ -491,7 +491,7 @@ fn render_loop(
         }
     };
 
-    eprintln!(
+    tracing::info!(
         "WASAPI exclusive: device {dev_rate} Hz / {dev_ch} ch, format {sample_type:?}/{store_bits}-bit (source {sample_rate} Hz / {channels} ch / {source_bits:?}-bit)"
     );
 
@@ -645,7 +645,7 @@ fn render_loop(
 
         if let Err(e) = render_client.write_to_device(frames, &data, None) {
             consecutive_write_errors += 1;
-            eprintln!(
+            tracing::warn!(
                 "WASAPI exclusive write error ({}/{}): {e}",
                 consecutive_write_errors, MAX_WRITE_ERRORS
             );

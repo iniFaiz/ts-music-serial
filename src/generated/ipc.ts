@@ -49,7 +49,6 @@ export const COMMAND_NAMES = [
   'db_remove_paths',
   'db_reset',
   'db_roots',
-  'db_search',
   'db_smart_count',
   'db_smart_tracks',
   'db_stat',
@@ -167,7 +166,6 @@ export interface CommandArgs {
   'db_remove_paths': { paths: string[]; consentToken: string };
   'db_reset': { consentToken: string };
   'db_roots': undefined;
-  'db_search': { query: string; limit: number };
   'db_smart_count': { rules: unknown; limit?: number | null };
   'db_smart_tracks': { rules: unknown; sortBy?: string | null; sortOrder?: string | null; limit?: number | null };
   'db_stat': { path: string };
@@ -207,7 +205,7 @@ export interface CommandArgs {
   'player_resume': undefined;
   'player_seek': { position: number };
   'player_set_equalizer': { enabled: boolean; gains: number[]; preampDb: number };
-  'player_set_normalization': { gainDb?: number | null; preampDb: number; peak?: number | null; enabled: boolean };
+  'player_set_normalization': { gainDb?: number | null; peak?: number | null };
   'player_set_normalization_settings': { enabled: boolean; preampDb: number };
   'player_set_spectrum_enabled': { enabled: boolean };
   'player_set_transition': { mode: string; crossfadeSecs: number };
@@ -283,7 +281,6 @@ export interface CommandResult {
   'db_remove_paths': void;
   'db_reset': void;
   'db_roots': string[];
-  'db_search': unknown /* Rust: MusicTrack */[];
   'db_smart_count': number;
   'db_smart_tracks': unknown /* Rust: MusicTrack */[];
   'db_stat': unknown /* Rust: StatRow */;
@@ -406,7 +403,6 @@ export const ipc = {
   dbRemovePaths: (args: CommandArgs['db_remove_paths']) => invokeCommand('db_remove_paths', args),
   dbReset: (args: CommandArgs['db_reset']) => invokeCommand('db_reset', args),
   dbRoots: () => invokeCommand('db_roots', undefined),
-  dbSearch: (args: CommandArgs['db_search']) => invokeCommand('db_search', args),
   dbSmartCount: (args: CommandArgs['db_smart_count']) => invokeCommand('db_smart_count', args),
   dbSmartTracks: (args: CommandArgs['db_smart_tracks']) => invokeCommand('db_smart_tracks', args),
   dbStat: (args: CommandArgs['db_stat']) => invokeCommand('db_stat', args),

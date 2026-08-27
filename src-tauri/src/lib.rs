@@ -23,6 +23,7 @@ mod library_db;
 mod library_index;
 mod library_scan;
 mod limits;
+mod logging;
 mod lyrics;
 mod metadata_tags;
 mod net;
@@ -434,7 +435,7 @@ fn spawn_fs_coalescer(app: AppHandle, rx: mpsc::Receiver<Vec<PathBuf>>) {
                 Ok(summary) => {
                     let _ = app.emit("library-changed", summary);
                 }
-                Err(error) => eprintln!("Incremental library index failed: {error}"),
+                Err(error) => tracing::warn!("Incremental library index failed: {error}"),
             }
         }
     });
@@ -726,7 +727,7 @@ fn open_vinyl_scratch_window(app: AppHandle) -> Result<(), String> {
         .disable_drag_drop_handler()
         .on_page_load(|_, payload| {
             #[cfg(debug_assertions)]
-            eprintln!(
+            tracing::debug!(
                 "[vinyl-scratch] page-load {:?}: {}",
                 payload.event(),
                 payload.url()
@@ -736,8 +737,8 @@ fn open_vinyl_scratch_window(app: AppHandle) -> Result<(), String> {
         .map(|window| {
             #[cfg(debug_assertions)]
             match window.url() {
-                Ok(url) => eprintln!("[vinyl-scratch] created at {url}"),
-                Err(error) => eprintln!("[vinyl-scratch] could not read URL: {error}"),
+                Ok(url) => tracing::debug!("[vinyl-scratch] created at {url}"),
+                Err(error) => tracing::debug!("[vinyl-scratch] could not read URL: {error}"),
             }
         })
         .map_err(|error| format!("Failed to open Vinyl Scratch: {error}"))
@@ -869,6 +870,17 @@ pub fn run() {
 
     builder
         .setup(move |_app| {
+            // Structured logging first, so every later startup step is captured
+            // in both stderr and the rotating app-data file. The guard keeps
+            // the non-blocking writer alive until the process exits.
+            let log_data_dir = _app.path().app_data_dir().ok();
+            let log_guard = logging::init(log_data_dir.as_deref());
+            _app.manage(log_guard);
+            tracing::info!(
+                "ts-music {} starting",
+                env!("CARGO_PKG_VERSION")
+            );
+
             let cache = cache_manager::CacheManager::new(_app.handle())?;
             let cover_directory = cache.directory(cache_manager::CacheKind::Covers);
             _app.manage(cache.clone());
@@ -929,7 +941,7 @@ pub fn run() {
 
             #[cfg(debug_assertions)]
             if std::env::var_os("TS_MUSIC_OPEN_VINYL_ON_START").is_some() {
-                eprintln!("[vinyl-scratch] debug auto-open requested");
+                tracing::debug!("[vinyl-scratch] debug auto-open requested");
                 open_vinyl_scratch_window(_app.handle().clone())?;
             }
 
@@ -996,7 +1008,6 @@ pub fn run() {
             db::db_reset,
             db::db_roots,
             db::tracks::db_tracks_page,
-            db::tracks::db_search,
             db::tracks::db_global_search,
             db::tracks::db_tracks_by_paths,
             db::tracks::db_track,

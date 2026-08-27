@@ -175,7 +175,7 @@ pub(crate) fn logged_rows<T>(
     rows.into_iter().filter_map(move |row| match row {
         Ok(value) => Some(value),
         Err(error) => {
-            eprintln!("[db] {context}: skipping undecodable row: {error}");
+            tracing::warn!("[db] {context}: skipping undecodable row: {error}");
             None
         }
     })

@@ -135,25 +135,6 @@ pub fn db_tracks_page(
     })
 }
 
-#[tauri::command(async)]
-pub fn db_search(db: State<Db>, query: String, limit: i64) -> Result<Vec<MusicTrack>, String> {
-    limits::validate_text(&query, "Search query", 512)?;
-    if !(1..=100).contains(&limit) {
-        return Err("Search limit must be between 1 and 100".to_string());
-    }
-    let conn = db.read();
-    match fts_query(&query) {
-        None => Ok(Vec::new()),
-        Some(q) => {
-            let sql = format!(
-                "SELECT {TRACK_COLS_T} FROM tracks t JOIN tracks_search f ON f.rowid = t.id
-                 WHERE tracks_search MATCH ?1 ORDER BY rank LIMIT ?2"
-            );
-            collect_tracks(&conn, &sql, params![q, limit])
-        }
-    }
-}
-
 #[derive(Serialize)]
 pub struct GlobalSearchResults {
     request_id: u64,
