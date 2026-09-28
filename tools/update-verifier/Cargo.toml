@@ -6,4 +6,4 @@ publish = false
 
 [dependencies]
 base64 = "0.23"
-minisign-verify = "0.2.5"
+minisign-verify = "0.3.0"
