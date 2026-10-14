@@ -56,7 +56,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "std"] }
 tracing-appender = "0.2"
 rusty-chromaprint = "0.3" #pure-Rust AcoustID-compatible audio fingerprints
-notify = "6" #filesystem watching for library auto-update
+notify = "8" #filesystem watching for library auto-update
 ebur128 = "0.1" #EBU R128 loudness analysis for volume normalization (ReplayGain)
 # NetEase eapi request signing (AES-128-ECB + MD5) to fetch word-by-word (yrc)
 # and romanized (romalrc) lyrics, which its plain web API does not expose.
